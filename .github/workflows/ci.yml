@@ -24,6 +24,6 @@ jobs:
           go tool cover -func=coverage.out | grep total | awk '{gsub(/%/,""); if ($3+0 < 80) {print "::error::coverage " $3 "% is below 80% threshold"; exit 1}}'
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: latest
+          version: v2.11.3

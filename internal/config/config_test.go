@@ -34,7 +34,9 @@ func TestLoad_fromEnv(t *testing.T) {
 }
 
 func TestGetEnv_fallback(t *testing.T) {
-	os.Unsetenv("NONEXISTENT_VAR")
+	if err := os.Unsetenv("NONEXISTENT_VAR"); err != nil {
+		t.Fatal(err)
+	}
 	if got := getEnv("NONEXISTENT_VAR", "default"); got != "default" {
 		t.Errorf("got %q, want %q", got, "default")
 	}
