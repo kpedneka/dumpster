@@ -17,4 +17,4 @@ run:
 	docker compose up --build
 
 migrate:
-	@echo "no migrations yet — placeholder for goose/atlas"
+	goose -dir migrations postgres "host=$(DB_HOST) port=$(DB_PORT) dbname=$(DB_NAME) user=$(DB_USER) password=$(DB_PASSWORD) sslmode=$(DB_SSLMODE)" up
