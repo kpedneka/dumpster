@@ -7,9 +7,6 @@ linters:
     - gosimple
     - ineffassign
 
-linters-settings:
-  govet:
-    check-shadowing: true
 
 issues:
   exclude-use-default: false
