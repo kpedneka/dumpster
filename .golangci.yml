@@ -7,5 +7,3 @@ linters:
     - staticcheck
     - ineffassign
 
-issues:
-  exclude-use-default: false
