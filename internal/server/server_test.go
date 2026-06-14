@@ -10,7 +10,7 @@ func TestHealthz(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
 
-	NewRouter().ServeHTTP(w, req)
+	NewRouter(Deps{}).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status: got %d, want %d", w.Code, http.StatusOK)

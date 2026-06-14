@@ -45,6 +45,31 @@ func TestKB_CRUD(t *testing.T) {
 	}
 }
 
+func TestKB_Rename(t *testing.T) {
+	repo := memory.New()
+	ctx := context.Background()
+	userID := uuid.New()
+
+	created, _ := repo.Create(ctx, userID, "original")
+
+	renamed, err := repo.Rename(ctx, userID, created.ID, "updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Name != "updated" {
+		t.Fatalf("name: got %q, want %q", renamed.Name, "updated")
+	}
+	if renamed.UpdatedAt.Before(created.CreatedAt) {
+		t.Fatal("updated_at should be >= created_at")
+	}
+
+	// Cross-tenant rename should fail.
+	other := uuid.New()
+	if _, err := repo.Rename(ctx, other, created.ID, "hijack"); err == nil {
+		t.Fatal("other user should not be able to rename")
+	}
+}
+
 func TestKB_TenantIsolation(t *testing.T) {
 	repo := memory.New()
 	ctx := context.Background()

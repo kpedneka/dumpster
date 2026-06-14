@@ -77,6 +77,22 @@ func (s *Store) List(ctx context.Context, userID uuid.UUID) ([]*kb.KnowledgeBase
 	return results, nil
 }
 
+func (s *Store) Rename(ctx context.Context, userID, id uuid.UUID, name string) (*kb.KnowledgeBase, error) {
+	var result kb.KnowledgeBase
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`UPDATE knowledge_bases SET name = $1, updated_at = NOW()
+			 WHERE id = $2 AND user_id = $3
+			 RETURNING id, user_id, name, created_at, updated_at`,
+			name, id, userID,
+		).Scan(&result.ID, &result.UserID, &result.Name, &result.CreatedAt, &result.UpdatedAt)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("kb: rename %v: %w", id, err)
+	}
+	return &result, nil
+}
+
 func (s *Store) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,

@@ -51,6 +51,18 @@ func (r *Repository) List(_ context.Context, userID uuid.UUID) ([]*kb.KnowledgeB
 	return out, nil
 }
 
+func (r *Repository) Rename(_ context.Context, userID, id uuid.UUID, name string) (*kb.KnowledgeBase, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.rows[id]
+	if !ok || k.UserID != userID {
+		return nil, fmt.Errorf("kb: not found")
+	}
+	k.Name = name
+	k.UpdatedAt = time.Now()
+	return k, nil
+}
+
 func (r *Repository) Delete(_ context.Context, userID, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
