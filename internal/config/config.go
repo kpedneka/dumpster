@@ -10,9 +10,14 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 	DBSSL      string
-	MinioEndpoint  string
-	MinioAccessKey string
-	MinioSecretKey string
+	// Object storage — endpoint-configurable so the same adapter serves
+	// MinIO locally and Cloudflare R2 in the cloud.
+	S3Endpoint     string
+	S3Region       string
+	S3Bucket       string
+	S3AccessKey    string
+	S3SecretKey    string
+	S3UsePathStyle bool
 	// Auth
 	JWTSecret      string
 	JWTExpiryHours string
@@ -32,9 +37,12 @@ func Load() *Config {
 		DBUser:         getEnv("DB_USER", "dumpster"),
 		DBPassword:     getEnv("DB_PASSWORD", "dumpster"),
 		DBSSL:          getEnv("DB_SSLMODE", "disable"),
-		MinioEndpoint:  getEnv("MINIO_ENDPOINT", "localhost:9000"),
-		MinioAccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
-		MinioSecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin"),
+		S3Endpoint:     getEnv("S3_ENDPOINT", "http://localhost:9000"),
+		S3Region:       getEnv("S3_REGION", "auto"),
+		S3Bucket:       getEnv("S3_BUCKET", "dumpster"),
+		S3AccessKey:    getEnv("S3_ACCESS_KEY", "minioadmin"),
+		S3SecretKey:    getEnv("S3_SECRET_KEY", "minioadmin"),
+		S3UsePathStyle: getEnv("S3_USE_PATH_STYLE", "true") == "true",
 		JWTSecret:      getEnv("JWT_SECRET", "change-me-in-production"),
 		JWTExpiryHours: getEnv("JWT_EXPIRY_HOURS", "24"),
 		AnthropicAPIKey:  getEnv("ANTHROPIC_API_KEY", ""),
