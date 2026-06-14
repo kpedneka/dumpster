@@ -3,11 +3,13 @@ package auth
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // User is the identity record stored in the database.
 type User struct {
-	ID           int64
+	ID           uuid.UUID
 	Email        string
 	PasswordHash string
 	CreatedAt    time.Time
@@ -17,5 +19,5 @@ type User struct {
 type UserStore interface {
 	Create(ctx context.Context, email, passwordHash string) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
-	GetByID(ctx context.Context, id int64) (*User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*User, error)
 }

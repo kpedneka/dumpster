@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	"github.com/kunalpednekar/dumpster/internal/document"
@@ -38,7 +39,7 @@ func (s *Store) Create(ctx context.Context, d *document.Document) (*document.Doc
 	return &result, nil
 }
 
-func (s *Store) Get(ctx context.Context, userID, id int64) (*document.Document, error) {
+func (s *Store) Get(ctx context.Context, userID, id uuid.UUID) (*document.Document, error) {
 	var result document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
@@ -52,12 +53,12 @@ func (s *Store) Get(ctx context.Context, userID, id int64) (*document.Document, 
 		)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("document: get %d: %w", id, err)
+		return nil, fmt.Errorf("document: get %v: %w", id, err)
 	}
 	return &result, nil
 }
 
-func (s *Store) ListByKB(ctx context.Context, userID, kbID int64) ([]*document.Document, error) {
+func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*document.Document, error) {
 	var results []*document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
@@ -83,12 +84,12 @@ func (s *Store) ListByKB(ctx context.Context, userID, kbID int64) ([]*document.D
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("document: list by kb %d: %w", kbID, err)
+		return nil, fmt.Errorf("document: list by kb %v: %w", kbID, err)
 	}
 	return results, nil
 }
 
-func (s *Store) UpdateStatus(ctx context.Context, userID, id int64, status document.Status) error {
+func (s *Store) UpdateStatus(ctx context.Context, userID, id uuid.UUID, status document.Status) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE documents SET status = $1, updated_at = NOW()
@@ -104,12 +105,12 @@ func (s *Store) UpdateStatus(ctx context.Context, userID, id int64, status docum
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("document: update status %d: %w", id, err)
+		return fmt.Errorf("document: update status %v: %w", id, err)
 	}
 	return nil
 }
 
-func (s *Store) Delete(ctx context.Context, userID, id int64) error {
+func (s *Store) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`DELETE FROM documents WHERE id = $1 AND user_id = $2`,
@@ -124,7 +125,7 @@ func (s *Store) Delete(ctx context.Context, userID, id int64) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("document: delete %d: %w", id, err)
+		return fmt.Errorf("document: delete %v: %w", id, err)
 	}
 	return nil
 }

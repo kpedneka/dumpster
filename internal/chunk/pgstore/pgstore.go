@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/db"
@@ -44,15 +45,15 @@ func (s *Store) BulkCreate(ctx context.Context, chunks []*chunk.Chunk) error {
 	return nil
 }
 
-func (s *Store) ListByDocument(ctx context.Context, userID, documentID int64) ([]*chunk.Chunk, error) {
+func (s *Store) ListByDocument(ctx context.Context, userID, documentID uuid.UUID) ([]*chunk.Chunk, error) {
 	return s.list(ctx, userID, "document_id", documentID)
 }
 
-func (s *Store) ListByKB(ctx context.Context, userID, kbID int64) ([]*chunk.Chunk, error) {
+func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*chunk.Chunk, error) {
 	return s.list(ctx, userID, "kb_id", kbID)
 }
 
-func (s *Store) list(ctx context.Context, userID int64, col string, val int64) ([]*chunk.Chunk, error) {
+func (s *Store) list(ctx context.Context, userID uuid.UUID, col string, val uuid.UUID) ([]*chunk.Chunk, error) {
 	var results []*chunk.Chunk
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		q := fmt.Sprintf(
@@ -76,12 +77,12 @@ func (s *Store) list(ctx context.Context, userID int64, col string, val int64) (
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, fmt.Errorf("chunk: list by %s=%d: %w", col, val, err)
+		return nil, fmt.Errorf("chunk: list by %s=%v: %w", col, val, err)
 	}
 	return results, nil
 }
 
-func (s *Store) DeleteByDocument(ctx context.Context, userID, documentID int64) error {
+func (s *Store) DeleteByDocument(ctx context.Context, userID, documentID uuid.UUID) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`DELETE FROM chunks WHERE document_id = $1 AND user_id = $2`,
@@ -90,7 +91,7 @@ func (s *Store) DeleteByDocument(ctx context.Context, userID, documentID int64) 
 		return err
 	})
 	if err != nil {
-		return fmt.Errorf("chunk: delete by document %d: %w", documentID, err)
+		return fmt.Errorf("chunk: delete by document %v: %w", documentID, err)
 	}
 	return nil
 }

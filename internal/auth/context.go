@@ -1,19 +1,23 @@
 package auth
 
-import "context"
+import (
+	"context"
+
+	"github.com/google/uuid"
+)
 
 type contextKey string
 
 const userIDKey contextKey = "userID"
 
-// WithUserID stores the authenticated user's ID in the context.
-func WithUserID(ctx context.Context, id int64) context.Context {
+// WithUserID stores the authenticated user's UUID in the context.
+func WithUserID(ctx context.Context, id uuid.UUID) context.Context {
 	return context.WithValue(ctx, userIDKey, id)
 }
 
-// UserIDFromContext retrieves the authenticated user's ID.
-// Returns 0 and false if not set.
-func UserIDFromContext(ctx context.Context) (int64, bool) {
-	id, ok := ctx.Value(userIDKey).(int64)
+// UserIDFromContext retrieves the authenticated user's UUID.
+// Returns uuid.Nil and false if not set.
+func UserIDFromContext(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(userIDKey).(uuid.UUID)
 	return id, ok
 }

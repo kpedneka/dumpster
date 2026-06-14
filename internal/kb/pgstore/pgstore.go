@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	"github.com/kunalpednekar/dumpster/internal/kb"
@@ -18,7 +19,7 @@ func New(runner db.TxRunner) kb.Repository {
 	return &Store{runner: runner}
 }
 
-func (s *Store) Create(ctx context.Context, userID int64, name string) (*kb.KnowledgeBase, error) {
+func (s *Store) Create(ctx context.Context, userID uuid.UUID, name string) (*kb.KnowledgeBase, error) {
 	var result kb.KnowledgeBase
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
@@ -34,7 +35,7 @@ func (s *Store) Create(ctx context.Context, userID int64, name string) (*kb.Know
 	return &result, nil
 }
 
-func (s *Store) Get(ctx context.Context, userID, id int64) (*kb.KnowledgeBase, error) {
+func (s *Store) Get(ctx context.Context, userID, id uuid.UUID) (*kb.KnowledgeBase, error) {
 	var result kb.KnowledgeBase
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
@@ -44,12 +45,12 @@ func (s *Store) Get(ctx context.Context, userID, id int64) (*kb.KnowledgeBase, e
 		).Scan(&result.ID, &result.UserID, &result.Name, &result.CreatedAt, &result.UpdatedAt)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("kb: get %d: %w", id, err)
+		return nil, fmt.Errorf("kb: get %v: %w", id, err)
 	}
 	return &result, nil
 }
 
-func (s *Store) List(ctx context.Context, userID int64) ([]*kb.KnowledgeBase, error) {
+func (s *Store) List(ctx context.Context, userID uuid.UUID) ([]*kb.KnowledgeBase, error) {
 	var results []*kb.KnowledgeBase
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
@@ -76,7 +77,7 @@ func (s *Store) List(ctx context.Context, userID int64) ([]*kb.KnowledgeBase, er
 	return results, nil
 }
 
-func (s *Store) Delete(ctx context.Context, userID, id int64) error {
+func (s *Store) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`DELETE FROM knowledge_bases WHERE id = $1 AND user_id = $2`,
@@ -91,7 +92,7 @@ func (s *Store) Delete(ctx context.Context, userID, id int64) error {
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("kb: delete %d: %w", id, err)
+		return fmt.Errorf("kb: delete %v: %w", id, err)
 	}
 	return nil
 }

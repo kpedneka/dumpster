@@ -5,32 +5,29 @@ import (
 	"context"
 	"sync"
 
+	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 )
 
 type Repository struct {
 	mu   sync.RWMutex
 	rows []*chunk.Chunk
-	next int64
 }
 
-func New() *Repository {
-	return &Repository{next: 1}
-}
+func New() *Repository { return &Repository{} }
 
 func (r *Repository) BulkCreate(_ context.Context, chunks []*chunk.Chunk) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, c := range chunks {
 		cp := *c
-		cp.ID = r.next
-		r.next++
+		cp.ID = uuid.New()
 		r.rows = append(r.rows, &cp)
 	}
 	return nil
 }
 
-func (r *Repository) ListByDocument(_ context.Context, userID, documentID int64) ([]*chunk.Chunk, error) {
+func (r *Repository) ListByDocument(_ context.Context, userID, documentID uuid.UUID) ([]*chunk.Chunk, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []*chunk.Chunk
@@ -42,7 +39,7 @@ func (r *Repository) ListByDocument(_ context.Context, userID, documentID int64)
 	return out, nil
 }
 
-func (r *Repository) ListByKB(_ context.Context, userID, kbID int64) ([]*chunk.Chunk, error) {
+func (r *Repository) ListByKB(_ context.Context, userID, kbID uuid.UUID) ([]*chunk.Chunk, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []*chunk.Chunk
@@ -54,7 +51,7 @@ func (r *Repository) ListByKB(_ context.Context, userID, kbID int64) ([]*chunk.C
 	return out, nil
 }
 
-func (r *Repository) DeleteByDocument(_ context.Context, userID, documentID int64) error {
+func (r *Repository) DeleteByDocument(_ context.Context, userID, documentID uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	filtered := r.rows[:0]
@@ -67,5 +64,4 @@ func (r *Repository) DeleteByDocument(_ context.Context, userID, documentID int6
 	return nil
 }
 
-// Compile-time check.
 var _ chunk.Repository = (*Repository)(nil)

@@ -7,17 +7,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/document"
 )
 
 type Repository struct {
 	mu   sync.RWMutex
-	rows map[int64]*document.Document
-	next int64
+	rows map[uuid.UUID]*document.Document
 }
 
 func New() *Repository {
-	return &Repository{rows: make(map[int64]*document.Document), next: 1}
+	return &Repository{rows: make(map[uuid.UUID]*document.Document)}
 }
 
 func (r *Repository) Create(_ context.Context, d *document.Document) (*document.Document, error) {
@@ -25,15 +25,14 @@ func (r *Repository) Create(_ context.Context, d *document.Document) (*document.
 	defer r.mu.Unlock()
 	now := time.Now()
 	cp := *d
-	cp.ID = r.next
+	cp.ID = uuid.New()
 	cp.CreatedAt = now
 	cp.UpdatedAt = now
-	r.rows[r.next] = &cp
-	r.next++
+	r.rows[cp.ID] = &cp
 	return &cp, nil
 }
 
-func (r *Repository) Get(_ context.Context, userID, id int64) (*document.Document, error) {
+func (r *Repository) Get(_ context.Context, userID, id uuid.UUID) (*document.Document, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	d, ok := r.rows[id]
@@ -43,7 +42,7 @@ func (r *Repository) Get(_ context.Context, userID, id int64) (*document.Documen
 	return d, nil
 }
 
-func (r *Repository) ListByKB(_ context.Context, userID, kbID int64) ([]*document.Document, error) {
+func (r *Repository) ListByKB(_ context.Context, userID, kbID uuid.UUID) ([]*document.Document, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []*document.Document
@@ -55,7 +54,7 @@ func (r *Repository) ListByKB(_ context.Context, userID, kbID int64) ([]*documen
 	return out, nil
 }
 
-func (r *Repository) UpdateStatus(_ context.Context, userID, id int64, status document.Status) error {
+func (r *Repository) UpdateStatus(_ context.Context, userID, id uuid.UUID, status document.Status) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d, ok := r.rows[id]
@@ -67,7 +66,7 @@ func (r *Repository) UpdateStatus(_ context.Context, userID, id int64, status do
 	return nil
 }
 
-func (r *Repository) Delete(_ context.Context, userID, id int64) error {
+func (r *Repository) Delete(_ context.Context, userID, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	d, ok := r.rows[id]
@@ -78,5 +77,4 @@ func (r *Repository) Delete(_ context.Context, userID, id int64) error {
 	return nil
 }
 
-// Compile-time check.
 var _ document.Repository = (*Repository)(nil)

@@ -5,16 +5,18 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
+// Claims embeds the authenticated user's UUID as a string in the JWT sub field.
 type Claims struct {
-	UserID int64 `json:"uid"`
+	UserID string `json:"uid"` // UUID string representation
 	jwt.RegisteredClaims
 }
 
-func IssueToken(userID int64, secret string, ttl time.Duration) (string, error) {
+func IssueToken(userID uuid.UUID, secret string, ttl time.Duration) (string, error) {
 	claims := Claims{
-		UserID: userID,
+		UserID: userID.String(),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(ttl)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
