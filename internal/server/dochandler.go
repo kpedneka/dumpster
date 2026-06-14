@@ -73,7 +73,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing file field")
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	contentType, supported := contentTypeFor(header.Filename)
 	if !supported {

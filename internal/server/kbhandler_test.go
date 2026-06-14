@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -72,9 +73,9 @@ func TestKBList(t *testing.T) {
 	userID := uuid.New()
 
 	// Create two KBs for the user and one for another user to confirm isolation.
-	kbRepo.Create(nil, userID, "alpha")    //nolint:errcheck
-	kbRepo.Create(nil, userID, "beta")     //nolint:errcheck
-	kbRepo.Create(nil, uuid.New(), "other") //nolint:errcheck
+	_, _ = kbRepo.Create(context.TODO(), userID, "alpha")
+	_, _ = kbRepo.Create(context.TODO(), userID, "beta")
+	_, _ = kbRepo.Create(context.TODO(), uuid.New(), "other")
 
 	req := authedRequest(t, http.MethodGet, "/kbs", nil, userID)
 	w := httptest.NewRecorder()
@@ -98,7 +99,7 @@ func TestKBGet(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	created, _ := kbRepo.Create(nil, userID, "test kb")
+	created, _ := kbRepo.Create(context.TODO(), userID, "test kb")
 
 	req := authedRequest(t, http.MethodGet, "/kbs/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
@@ -109,7 +110,9 @@ func TestKBGet(t *testing.T) {
 	}
 
 	var got kb.KnowledgeBase
-	json.NewDecoder(w.Body).Decode(&got) //nolint:errcheck
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got.ID != created.ID {
 		t.Errorf("id mismatch")
 	}
@@ -134,7 +137,7 @@ func TestKBRename(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	created, _ := kbRepo.Create(nil, userID, "old name")
+	created, _ := kbRepo.Create(context.TODO(), userID, "old name")
 
 	req := authedRequest(t, http.MethodPatch, "/kbs/"+created.ID.String(),
 		strings.NewReader(`{"name":"new name"}`), userID)
@@ -147,7 +150,9 @@ func TestKBRename(t *testing.T) {
 	}
 
 	var got kb.KnowledgeBase
-	json.NewDecoder(w.Body).Decode(&got) //nolint:errcheck
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got.Name != "new name" {
 		t.Errorf("name: got %q, want %q", got.Name, "new name")
 	}
@@ -158,7 +163,7 @@ func TestKBDelete(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	created, _ := kbRepo.Create(nil, userID, "to delete")
+	created, _ := kbRepo.Create(context.TODO(), userID, "to delete")
 
 	req := authedRequest(t, http.MethodDelete, "/kbs/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
@@ -174,7 +179,7 @@ func TestKBTenantIsolation(t *testing.T) {
 	router := NewRouter(deps)
 	user1, user2 := uuid.New(), uuid.New()
 
-	kb1, _ := kbRepo.Create(nil, user1, "user1 kb")
+	kb1, _ := kbRepo.Create(context.TODO(), user1, "user1 kb")
 
 	// user2 should get 404 trying to access user1's KB
 	req := authedRequest(t, http.MethodGet, "/kbs/"+kb1.ID.String(), nil, user2)
