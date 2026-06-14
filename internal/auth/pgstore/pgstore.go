@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kunalpednekar/dumpster/internal/auth"
 )
@@ -43,7 +44,7 @@ func (s *Store) GetByEmail(ctx context.Context, email string) (*auth.User, error
 	return &u, nil
 }
 
-func (s *Store) GetByID(ctx context.Context, id int64) (*auth.User, error) {
+func (s *Store) GetByID(ctx context.Context, id uuid.UUID) (*auth.User, error) {
 	var u auth.User
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, email, password_hash, created_at FROM users WHERE id = $1`,
@@ -55,5 +56,4 @@ func (s *Store) GetByID(ctx context.Context, id int64) (*auth.User, error) {
 	return &u, nil
 }
 
-// Compile-time check.
 var _ auth.UserStore = (*Store)(nil)

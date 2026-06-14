@@ -15,6 +15,11 @@
 - **Dependency inversion:** depend on interfaces, not concrete implementations, so units are testable in isolation. No vendor SDK imports outside the dedicated adapter package.
 - **Queue/storage/LLM are behind interfaces** — swapping an implementation (e.g. Postgres-queue → Kafka) must be a contained change.
 
+## Code Documentation & Formatting Rules
+
+- Never reference project management milestones such as M0 in code comments. Instead, reference the objective of that milestone.
+- Add documentation to all public functions, structs, etc.
+
 ## Commits & branches
 
 - One short-lived feature branch per card; merge via PR into `main` after review + green CI.

@@ -3,6 +3,8 @@ package document
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Status represents the processing lifecycle of a Document.
@@ -17,9 +19,9 @@ const (
 
 // Document is a file stored in object storage and queued for indexing.
 type Document struct {
-	ID          int64
-	KBID        int64
-	UserID      int64
+	ID          uuid.UUID
+	KBID        uuid.UUID
+	UserID      uuid.UUID
 	Filename    string
 	S3Key       string
 	ContentType string
@@ -32,8 +34,8 @@ type Document struct {
 // Every method is tenant-scoped.
 type Repository interface {
 	Create(ctx context.Context, d *Document) (*Document, error)
-	Get(ctx context.Context, userID, id int64) (*Document, error)
-	ListByKB(ctx context.Context, userID, kbID int64) ([]*Document, error)
-	UpdateStatus(ctx context.Context, userID, id int64, status Status) error
-	Delete(ctx context.Context, userID, id int64) error
+	Get(ctx context.Context, userID, id uuid.UUID) (*Document, error)
+	ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*Document, error)
+	UpdateStatus(ctx context.Context, userID, id uuid.UUID, status Status) error
+	Delete(ctx context.Context, userID, id uuid.UUID) error
 }

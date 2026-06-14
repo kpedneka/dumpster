@@ -3,12 +3,14 @@ package kb
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // KnowledgeBase is a named collection of documents belonging to one user.
 type KnowledgeBase struct {
-	ID        int64
-	UserID    int64
+	ID        uuid.UUID
+	UserID    uuid.UUID
 	Name      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -17,8 +19,8 @@ type KnowledgeBase struct {
 // Repository is the persistence boundary for KnowledgeBase records.
 // Every method is tenant-scoped: userID is always a filter, never optional.
 type Repository interface {
-	Create(ctx context.Context, userID int64, name string) (*KnowledgeBase, error)
-	Get(ctx context.Context, userID, id int64) (*KnowledgeBase, error)
-	List(ctx context.Context, userID int64) ([]*KnowledgeBase, error)
-	Delete(ctx context.Context, userID, id int64) error
+	Create(ctx context.Context, userID uuid.UUID, name string) (*KnowledgeBase, error)
+	Get(ctx context.Context, userID, id uuid.UUID) (*KnowledgeBase, error)
+	List(ctx context.Context, userID uuid.UUID) ([]*KnowledgeBase, error)
+	Delete(ctx context.Context, userID, id uuid.UUID) error
 }

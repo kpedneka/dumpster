@@ -7,30 +7,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 )
 
 type Repository struct {
 	mu   sync.RWMutex
-	rows map[int64]*kb.KnowledgeBase
-	next int64
+	rows map[uuid.UUID]*kb.KnowledgeBase
 }
 
 func New() *Repository {
-	return &Repository{rows: make(map[int64]*kb.KnowledgeBase), next: 1}
+	return &Repository{rows: make(map[uuid.UUID]*kb.KnowledgeBase)}
 }
 
-func (r *Repository) Create(_ context.Context, userID int64, name string) (*kb.KnowledgeBase, error) {
+func (r *Repository) Create(_ context.Context, userID uuid.UUID, name string) (*kb.KnowledgeBase, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
-	k := &kb.KnowledgeBase{ID: r.next, UserID: userID, Name: name, CreatedAt: now, UpdatedAt: now}
-	r.rows[r.next] = k
-	r.next++
+	k := &kb.KnowledgeBase{ID: uuid.New(), UserID: userID, Name: name, CreatedAt: now, UpdatedAt: now}
+	r.rows[k.ID] = k
 	return k, nil
 }
 
-func (r *Repository) Get(_ context.Context, userID, id int64) (*kb.KnowledgeBase, error) {
+func (r *Repository) Get(_ context.Context, userID, id uuid.UUID) (*kb.KnowledgeBase, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	k, ok := r.rows[id]
@@ -40,7 +39,7 @@ func (r *Repository) Get(_ context.Context, userID, id int64) (*kb.KnowledgeBase
 	return k, nil
 }
 
-func (r *Repository) List(_ context.Context, userID int64) ([]*kb.KnowledgeBase, error) {
+func (r *Repository) List(_ context.Context, userID uuid.UUID) ([]*kb.KnowledgeBase, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var out []*kb.KnowledgeBase
@@ -52,7 +51,7 @@ func (r *Repository) List(_ context.Context, userID int64) ([]*kb.KnowledgeBase,
 	return out, nil
 }
 
-func (r *Repository) Delete(_ context.Context, userID, id int64) error {
+func (r *Repository) Delete(_ context.Context, userID, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k, ok := r.rows[id]
@@ -63,5 +62,4 @@ func (r *Repository) Delete(_ context.Context, userID, id int64) error {
 	return nil
 }
 
-// Compile-time check.
 var _ kb.Repository = (*Repository)(nil)
