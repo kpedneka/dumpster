@@ -76,7 +76,11 @@ func (h *DocumentHandler) process(ctx context.Context, doc *document.Document) e
 	if err != nil {
 		return fmt.Errorf("dochandler: read object %s: %w", doc.S3Key, err)
 	}
-	defer rc.Close()
+	defer func() {
+		if cerr := rc.Close(); cerr != nil {
+			log.Printf("dochandler: close object %s: %v", doc.S3Key, cerr)
+		}
+	}()
 
 	data, err := io.ReadAll(rc)
 	if err != nil {
