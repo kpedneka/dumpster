@@ -3,27 +3,47 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
+	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	"github.com/kunalpednekar/dumpster/internal/llm"
+	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 )
 
-// DocumentHandler transitions document status through the processing lifecycle.
-// The actual chunk/embed logic is a no-op placeholder injected in the chunking
-// & embedding milestone; this handler owns the state machine and plumbing.
+// DocumentHandler transitions document status through the processing lifecycle,
+// splitting the raw file into chunks, embedding them, and persisting the index.
 type DocumentHandler struct {
-	docs document.Repository
+	docs     document.Repository
+	objects  objectstore.ObjectStore
+	chunks   chunk.Repository
+	splitter chunk.Splitter
+	embedder llm.Embedder
 }
 
-// NewDocumentHandler creates a DocumentHandler backed by docs.
-func NewDocumentHandler(docs document.Repository) *DocumentHandler {
-	return &DocumentHandler{docs: docs}
+// NewDocumentHandler creates a DocumentHandler wired to the given dependencies.
+func NewDocumentHandler(
+	docs document.Repository,
+	objects objectstore.ObjectStore,
+	chunks chunk.Repository,
+	splitter chunk.Splitter,
+	embedder llm.Embedder,
+) *DocumentHandler {
+	return &DocumentHandler{
+		docs:     docs,
+		objects:  objects,
+		chunks:   chunks,
+		splitter: splitter,
+		embedder: embedder,
+	}
 }
 
-// Handle transitions the document from pending → processing → indexed.
-// If the document is already indexed the call is a no-op (idempotent).
+// Handle runs the full ingestion pipeline for one document job:
+// pending → processing → (read, split, embed, persist) → indexed.
+// A document that is already indexed is skipped (idempotent).
 func (h *DocumentHandler) Handle(ctx context.Context, job *queue.Job) error {
 	ctx = auth.WithUserID(ctx, job.UserID)
 
@@ -40,10 +60,58 @@ func (h *DocumentHandler) Handle(ctx context.Context, job *queue.Job) error {
 		return fmt.Errorf("dochandler: mark processing: %w", err)
 	}
 
-	// Chunk and embedding logic is added in the chunking & embedding milestone.
+	if err := h.process(ctx, doc); err != nil {
+		return err
+	}
 
 	if err := h.docs.UpdateStatus(ctx, job.UserID, job.DocumentID, document.StatusIndexed); err != nil {
 		return fmt.Errorf("dochandler: mark indexed: %w", err)
+	}
+
+	return nil
+}
+
+func (h *DocumentHandler) process(ctx context.Context, doc *document.Document) error {
+	rc, err := h.objects.Get(ctx, doc.S3Key)
+	if err != nil {
+		return fmt.Errorf("dochandler: read object %s: %w", doc.S3Key, err)
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("dochandler: read content: %w", err)
+	}
+
+	splits := h.splitter.Split(string(data))
+	if len(splits) == 0 {
+		return nil
+	}
+
+	// Delete any existing chunks from a previous (partial) attempt.
+	if err := h.chunks.DeleteByDocument(ctx, doc.UserID, doc.ID); err != nil {
+		return fmt.Errorf("dochandler: clear existing chunks: %w", err)
+	}
+
+	texts := make([]string, len(splits))
+	for i, s := range splits {
+		texts[i] = s.Text
+	}
+
+	vecs, err := h.embedder.Embed(ctx, texts)
+	if err != nil {
+		return fmt.Errorf("dochandler: embed: %w", err)
+	}
+
+	for i, s := range splits {
+		s.DocumentID = doc.ID
+		s.KBID = doc.KBID
+		s.UserID = doc.UserID
+		s.Embedding = vecs[i]
+	}
+
+	if err := h.chunks.BulkCreate(ctx, splits); err != nil {
+		return fmt.Errorf("dochandler: persist chunks: %w", err)
 	}
 
 	return nil
