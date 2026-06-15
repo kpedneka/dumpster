@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
+	"os"
 
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
@@ -14,14 +14,33 @@ import (
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	"github.com/kunalpednekar/dumpster/internal/server"
+	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
 func main() {
 	cfg := config.Load()
+	logger := telemetry.NewLogger(os.Stdout, "api")
+
+	_, metricsHandler, err := telemetry.Setup(context.Background())
+	if err != nil {
+		logger.Error("telemetry setup failed", "err", err)
+		os.Exit(1)
+	}
+
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metricsHandler)
+	go func() {
+		addr := fmt.Sprintf(":%s", cfg.MetricsPort)
+		logger.Info("metrics endpoint starting", "addr", addr+"/metrics")
+		if err := http.ListenAndServe(addr, metricsMux); err != nil {
+			logger.Error("metrics server error", "err", err)
+		}
+	}()
 
 	pool, err := db.Connect(context.Background(), cfg)
 	if err != nil {
-		log.Fatalf("db: %v", err)
+		logger.Error("db connect failed", "err", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
 
@@ -47,8 +66,9 @@ func main() {
 	router := server.NewRouter(deps)
 
 	addr := fmt.Sprintf(":%s", cfg.HTTPPort)
-	log.Printf("starting api on %s", addr)
+	logger.Info("api starting", "addr", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
-		log.Fatalf("server error: %v", err)
+		logger.Error("server error", "err", err)
+		os.Exit(1)
 	}
 }

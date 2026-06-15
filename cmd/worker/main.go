@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,18 +11,26 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
+	"github.com/kunalpednekar/dumpster/internal/telemetry"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
 func main() {
 	cfg := config.Load()
+	logger := telemetry.NewLogger(os.Stdout, "worker")
+
+	if _, _, err := telemetry.Setup(context.Background()); err != nil {
+		logger.Error("telemetry setup failed", "err", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	pool, err := db.Connect(ctx, cfg)
 	if err != nil {
-		log.Fatalf("db: %v", err)
+		logger.Error("db connect failed", "err", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
 
@@ -32,8 +39,8 @@ func main() {
 	h := worker.NewDocumentHandler(docs)
 
 	w := worker.New(q, h, worker.Config{})
-	log.Printf("worker: starting")
+	logger.Info("worker starting", "db_host", cfg.DBHost, "db_name", cfg.DBName)
 	if err := w.Run(ctx); err != nil {
-		log.Printf("worker: stopped: %v", err)
+		logger.Info("worker stopped", "reason", err)
 	}
 }
