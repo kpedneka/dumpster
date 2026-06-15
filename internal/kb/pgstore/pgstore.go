@@ -3,6 +3,7 @@ package pgstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -45,6 +46,9 @@ func (s *Store) Get(ctx context.Context, userID, id uuid.UUID) (*kb.KnowledgeBas
 		).Scan(&result.ID, &result.UserID, &result.Name, &result.CreatedAt, &result.UpdatedAt)
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, kb.ErrNotFound
+		}
 		return nil, fmt.Errorf("kb: get %v: %w", id, err)
 	}
 	return &result, nil
@@ -88,6 +92,9 @@ func (s *Store) Rename(ctx context.Context, userID, id uuid.UUID, name string) (
 		).Scan(&result.ID, &result.UserID, &result.Name, &result.CreatedAt, &result.UpdatedAt)
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, kb.ErrNotFound
+		}
 		return nil, fmt.Errorf("kb: rename %v: %w", id, err)
 	}
 	return &result, nil
@@ -103,14 +110,14 @@ func (s *Store) Delete(ctx context.Context, userID, id uuid.UUID) error {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("not found")
+			return kb.ErrNotFound
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, kb.ErrNotFound) {
 		return fmt.Errorf("kb: delete %v: %w", id, err)
 	}
-	return nil
+	return err
 }
 
 var _ kb.Repository = (*Store)(nil)

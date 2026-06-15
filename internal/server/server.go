@@ -13,11 +13,12 @@ import (
 
 // Deps holds all dependencies required by the HTTP handlers.
 type Deps struct {
-	KBs       kb.Repository
-	Docs      document.Repository
-	Objects   objectstore.ObjectStore
-	Publisher queue.Publisher
-	JWTSecret string
+	KBs            kb.Repository
+	Docs           document.Repository
+	Objects        objectstore.ObjectStore
+	Publisher      queue.Publisher
+	JWTSecret      string
+	MaxUploadBytes int64 // maximum multipart upload size in bytes; 0 → 32 MiB
 }
 
 // NewRouter constructs the application HTTP router.
@@ -29,7 +30,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.MaxUploadBytes)
 
 	mux.Handle("/", auth.Middleware(deps.JWTSecret, authed))
 

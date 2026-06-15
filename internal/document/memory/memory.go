@@ -3,7 +3,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -37,7 +36,7 @@ func (r *Repository) Get(_ context.Context, userID, id uuid.UUID) (*document.Doc
 	defer r.mu.RUnlock()
 	d, ok := r.rows[id]
 	if !ok || d.UserID != userID {
-		return nil, fmt.Errorf("document: not found")
+		return nil, document.ErrNotFound
 	}
 	return d, nil
 }
@@ -59,7 +58,7 @@ func (r *Repository) UpdateStatus(_ context.Context, userID, id uuid.UUID, statu
 	defer r.mu.Unlock()
 	d, ok := r.rows[id]
 	if !ok || d.UserID != userID {
-		return fmt.Errorf("document: not found")
+		return document.ErrNotFound
 	}
 	d.Status = status
 	d.UpdatedAt = time.Now()
@@ -71,7 +70,7 @@ func (r *Repository) Delete(_ context.Context, userID, id uuid.UUID) error {
 	defer r.mu.Unlock()
 	d, ok := r.rows[id]
 	if !ok || d.UserID != userID {
-		return fmt.Errorf("document: not found")
+		return document.ErrNotFound
 	}
 	delete(r.rows, id)
 	return nil

@@ -1,9 +1,8 @@
 package server
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -14,6 +13,8 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 )
+
+const defaultMaxUploadBytes int64 = 32 << 20 // 32 MiB
 
 // allowedContentTypes maps accepted file extensions to their MIME type.
 var allowedContentTypes = map[string]string{
@@ -26,6 +27,7 @@ type docHandler struct {
 	docRepo   document.Repository
 	objects   objectstore.ObjectStore
 	publisher queue.Publisher
+	maxUpload int64
 }
 
 func registerDocRoutes(
@@ -34,8 +36,18 @@ func registerDocRoutes(
 	docRepo document.Repository,
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
+	maxUploadBytes int64,
 ) {
-	h := &docHandler{kbRepo: kbRepo, docRepo: docRepo, objects: objects, publisher: publisher}
+	if maxUploadBytes <= 0 {
+		maxUploadBytes = defaultMaxUploadBytes
+	}
+	h := &docHandler{
+		kbRepo:    kbRepo,
+		docRepo:   docRepo,
+		objects:   objects,
+		publisher: publisher,
+		maxUpload: maxUploadBytes,
+	}
 	mux.HandleFunc("POST /kbs/{kbID}/documents", h.upload)
 	mux.HandleFunc("GET /kbs/{kbID}/documents", h.list)
 	mux.HandleFunc("GET /kbs/{kbID}/documents/{docID}", h.get)
@@ -59,11 +71,19 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.kbRepo.Get(r.Context(), userID, kbID); err != nil {
-		writeError(w, http.StatusNotFound, "knowledge base not found")
+		writeKBError(w, err)
 		return
 	}
 
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	// Enforce a hard cap on the total request body before parsing. This
+	// prevents disk exhaustion and the subsequent io.ReadAll heap spike.
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxUpload)
+	if err := r.ParseMultipartForm(h.maxUpload); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file exceeds %d byte limit", h.maxUpload))
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid multipart form")
 		return
 	}
@@ -75,21 +95,24 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = file.Close() }()
 
-	contentType, supported := contentTypeFor(header.Filename)
+	// Strip directory components from the filename to prevent path traversal
+	// in the S3 key (e.g. "../../etc/passwd" → "passwd").
+	filename := path.Base(header.Filename)
+	if filename == "." || filename == "" {
+		writeError(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
+
+	contentType, supported := contentTypeFor(filename)
 	if !supported {
 		writeError(w, http.StatusUnprocessableEntity, "unsupported file type; accepted: .txt, .md")
 		return
 	}
 
-	buf, err := io.ReadAll(file)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to read file")
-		return
-	}
+	s3Key := fmt.Sprintf("documents/%s/%s/%s/%s", userID, kbID, uuid.New(), filename)
 
-	s3Key := fmt.Sprintf("documents/%s/%s/%s/%s", userID, kbID, uuid.New(), header.Filename)
-
-	if err := h.objects.Put(r.Context(), s3Key, bytes.NewReader(buf), int64(len(buf)), contentType); err != nil {
+	// Stream directly from the multipart part — no io.ReadAll buffering needed.
+	if err := h.objects.Put(r.Context(), s3Key, file, header.Size, contentType); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to store file")
 		return
 	}
@@ -97,7 +120,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 	doc, err := h.docRepo.Create(r.Context(), &document.Document{
 		KBID:        kbID,
 		UserID:      userID,
-		Filename:    header.Filename,
+		Filename:    filename,
 		S3Key:       s3Key,
 		ContentType: contentType,
 		Status:      document.StatusPending,
@@ -107,7 +130,13 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{DocumentID: doc.ID})
+	if err := h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{DocumentID: doc.ID}); err != nil {
+		// Mark failed so the caller knows processing will not happen. The S3
+		// object and DB row are retained — the reconciliation job can retry.
+		_ = h.docRepo.UpdateStatus(r.Context(), userID, doc.ID, document.StatusFailed)
+		writeError(w, http.StatusInternalServerError, "failed to enqueue document for processing")
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, doc)
 }
@@ -124,7 +153,7 @@ func (h *docHandler) list(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.kbRepo.Get(r.Context(), userID, kbID); err != nil {
-		writeError(w, http.StatusNotFound, "knowledge base not found")
+		writeKBError(w, err)
 		return
 	}
 
@@ -146,6 +175,11 @@ func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	kbID, ok := parseUUID(w, r.PathValue("kbID"))
+	if !ok {
+		return
+	}
+
 	docID, ok := parseUUID(w, r.PathValue("docID"))
 	if !ok {
 		return
@@ -153,6 +187,13 @@ func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.docRepo.Get(r.Context(), userID, docID)
 	if err != nil {
+		writeDocError(w, err)
+		return
+	}
+
+	// Verify the document belongs to the KB named in the URL so that a user
+	// cannot access documents across their own KBs by guessing IDs.
+	if doc.KBID != kbID {
 		writeError(w, http.StatusNotFound, "document not found")
 		return
 	}
@@ -170,6 +211,11 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	kbID, ok := parseUUID(w, r.PathValue("kbID"))
+	if !ok {
+		return
+	}
+
 	docID, ok := parseUUID(w, r.PathValue("docID"))
 	if !ok {
 		return
@@ -177,6 +223,11 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.docRepo.Get(r.Context(), userID, docID)
 	if err != nil {
+		writeDocError(w, err)
+		return
+	}
+
+	if doc.KBID != kbID {
 		writeError(w, http.StatusNotFound, "document not found")
 		return
 	}
@@ -200,4 +251,13 @@ func contentTypeFor(filename string) (string, bool) {
 	ext := strings.ToLower(path.Ext(filename))
 	ct, ok := allowedContentTypes[ext]
 	return ct, ok
+}
+
+// writeDocError translates a document.Repository error to the appropriate HTTP status.
+func writeDocError(w http.ResponseWriter, err error) {
+	if errors.Is(err, document.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "document not found")
+	} else {
+		writeError(w, http.StatusInternalServerError, "internal error")
+	}
 }

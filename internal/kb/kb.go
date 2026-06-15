@@ -2,10 +2,15 @@ package kb
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrNotFound is returned by Repository methods when the requested record does
+// not exist or belongs to a different tenant.
+var ErrNotFound = errors.New("kb: not found")
 
 // KnowledgeBase is a named collection of documents belonging to one user.
 type KnowledgeBase struct {

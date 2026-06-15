@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -76,7 +77,7 @@ func (h *kbHandler) get(w http.ResponseWriter, r *http.Request) {
 
 	k, err := h.repo.Get(r.Context(), userID, id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "knowledge base not found")
+		writeKBError(w, err)
 		return
 	}
 
@@ -104,7 +105,7 @@ func (h *kbHandler) rename(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := h.repo.Rename(r.Context(), userID, id, body.Name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "knowledge base not found")
+		writeKBError(w, err)
 		return
 	}
 
@@ -123,7 +124,7 @@ func (h *kbHandler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.repo.Delete(r.Context(), userID, id); err != nil {
-		writeError(w, http.StatusNotFound, "knowledge base not found")
+		writeKBError(w, err)
 		return
 	}
 
@@ -160,4 +161,13 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 // writeError writes a JSON error response.
 func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+// writeKBError translates a kb.Repository error to the appropriate HTTP status.
+func writeKBError(w http.ResponseWriter, err error) {
+	if errors.Is(err, kb.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "knowledge base not found")
+	} else {
+		writeError(w, http.StatusInternalServerError, "internal error")
+	}
 }

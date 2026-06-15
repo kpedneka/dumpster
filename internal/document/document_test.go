@@ -2,6 +2,7 @@ package document_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -76,6 +77,29 @@ func TestDocument_TenantIsolation(t *testing.T) {
 	list, _ := repo.ListByKB(ctx, user2, kbID)
 	if len(list) != 0 {
 		t.Fatalf("user2 ListByKB should be empty, got %d", len(list))
+	}
+}
+
+func TestDocument_ErrNotFound(t *testing.T) {
+	repo := memory.New()
+	ctx := context.Background()
+	userID := uuid.New()
+	missing := uuid.New()
+
+	for _, tc := range []struct {
+		name string
+		fn   func() error
+	}{
+		{"Get", func() error { _, err := repo.Get(ctx, userID, missing); return err }},
+		{"UpdateStatus", func() error { return repo.UpdateStatus(ctx, userID, missing, document.StatusFailed) }},
+		{"Delete", func() error { return repo.Delete(ctx, userID, missing) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn()
+			if !errors.Is(err, document.ErrNotFound) {
+				t.Errorf("got %v, want errors.Is(err, document.ErrNotFound)", err)
+			}
+		})
 	}
 }
 

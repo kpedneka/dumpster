@@ -2,6 +2,7 @@ package kb_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -42,6 +43,29 @@ func TestKB_CRUD(t *testing.T) {
 	}
 	if _, err := repo.Get(ctx, userID, created.ID); err == nil {
 		t.Fatal("expected error after delete")
+	}
+}
+
+func TestKB_ErrNotFound(t *testing.T) {
+	repo := memory.New()
+	ctx := context.Background()
+	userID := uuid.New()
+	missing := uuid.New()
+
+	for _, tc := range []struct {
+		name string
+		fn   func() error
+	}{
+		{"Get", func() error { _, err := repo.Get(ctx, userID, missing); return err }},
+		{"Rename", func() error { _, err := repo.Rename(ctx, userID, missing, "x"); return err }},
+		{"Delete", func() error { return repo.Delete(ctx, userID, missing) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn()
+			if !errors.Is(err, kb.ErrNotFound) {
+				t.Errorf("got %v, want errors.Is(err, kb.ErrNotFound)", err)
+			}
+		})
 	}
 }
 

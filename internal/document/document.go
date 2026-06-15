@@ -2,10 +2,15 @@ package document
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrNotFound is returned by Repository methods when the requested record does
+// not exist or belongs to a different tenant.
+var ErrNotFound = errors.New("document: not found")
 
 // Status represents the processing lifecycle of a Document.
 type Status string
