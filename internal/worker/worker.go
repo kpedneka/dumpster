@@ -44,6 +44,9 @@ func New(consumer queue.Consumer, handler Handler, cfg Config) *Worker {
 // Run starts the worker loop. It blocks until ctx is cancelled, then returns
 // ctx.Err(). On ErrNoJobs the worker sleeps PollInterval before retrying.
 func (w *Worker) Run(ctx context.Context) error {
+	ticker := time.NewTicker(w.cfg.PollInterval)
+	defer ticker.Stop()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -54,7 +57,7 @@ func (w *Worker) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(w.cfg.PollInterval):
+			case <-ticker.C:
 			}
 			continue
 		}
