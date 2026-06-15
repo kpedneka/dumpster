@@ -102,6 +102,9 @@ func (h *DocumentHandler) process(ctx context.Context, doc *document.Document) e
 	if err != nil {
 		return fmt.Errorf("dochandler: embed: %w", err)
 	}
+	if len(vecs) != len(splits) {
+		return fmt.Errorf("dochandler: embedder returned %d vectors for %d chunks", len(vecs), len(splits))
+	}
 
 	for i, s := range splits {
 		s.DocumentID = doc.ID
