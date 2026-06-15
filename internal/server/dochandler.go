@@ -130,7 +130,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{DocumentID: doc.ID}); err != nil {
+	if err := h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{DocumentID: doc.ID, UserID: userID}); err != nil {
 		// Mark failed so the caller knows processing will not happen. The S3
 		// object and DB row are retained — the reconciliation job can retry.
 		_ = h.docRepo.UpdateStatus(r.Context(), userID, doc.ID, document.StatusFailed)

@@ -88,6 +88,9 @@ func TestDocUpload(t *testing.T) {
 	if events[0].DocumentID != doc.ID {
 		t.Errorf("event document_id mismatch")
 	}
+	if events[0].UserID != userID {
+		t.Errorf("event user_id mismatch")
+	}
 }
 
 func TestDocUpload_MarkdownFile(t *testing.T) {
