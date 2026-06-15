@@ -24,10 +24,12 @@ primary_region = "iad"
   S3_USE_PATH_STYLE = "false"
 
 # HTTP service binds only to the api process group.
+# min_machines_running=1 keeps one API machine warm at all times.
 [http_service]
-  internal_port = 8080
-  force_https   = true
-  processes     = ["api"]
+  internal_port        = 8080
+  force_https          = true
+  processes            = ["api"]
+  min_machines_running = 1
 
   [[http_service.checks]]
     grace_period  = "5s"
@@ -38,24 +40,20 @@ primary_region = "iad"
 
 # api: at least one machine always running; can scale up under load.
 [[vm]]
+  count     = 1
   size      = "shared-cpu-1x"
   memory    = "256mb"
   processes = ["api"]
 
-  [vm.min_machines_running]
-    count     = 1
-    processes = ["api"]
-
-# worker: persistent process (never scale-to-zero — the SKIP LOCKED poll loop
-# must stay alive). One machine is sufficient for MVP; add more as queue depth grows.
+# worker: persistent process — must never scale to zero because the SKIP LOCKED
+# poll loop is a long-lived process, not a per-request handler.
+# count=1 sets the initial machine count; to enforce a floor after deploy run:
+#   fly scale count 1 --process-group worker --app dumpster
 [[vm]]
+  count     = 1
   size      = "shared-cpu-1x"
   memory    = "512mb"
   processes = ["worker"]
-
-  [vm.min_machines_running]
-    count     = 1
-    processes = ["worker"]
 
   # Worker uses the direct Neon connection (no pooler) to support SKIP LOCKED
   # and SET LOCAL RLS calls across longer transactions.

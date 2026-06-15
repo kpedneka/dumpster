@@ -34,23 +34,26 @@ func dsnPooled(cfg *config.Config) string {
 // Prepared-statement caching is disabled so the pool is compatible with
 // Neon's PgBouncer in transaction mode.
 func Connect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
-	return connect(ctx, dsnPooled(cfg))
+	return connect(ctx, dsnPooled(cfg), true)
 }
 
 // ConnectDirect opens a pgx pool using the direct (non-pooled) connection
 // string. Required for the worker's SKIP LOCKED loop and SET LOCAL RLS calls
 // which need session-stable connections that pooler transaction mode cannot
-// provide.
+// provide. Prepared statements are enabled (extended protocol) on direct
+// connections since they bypass PgBouncer.
 func ConnectDirect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
-	return connect(ctx, dsn(cfg))
+	return connect(ctx, dsn(cfg), false)
 }
 
-func connect(ctx context.Context, connStr string) (*pgxpool.Pool, error) {
+func connect(ctx context.Context, connStr string, simpleProtocol bool) (*pgxpool.Pool, error) {
 	pcfg, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	pcfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	if simpleProtocol {
+		pcfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
