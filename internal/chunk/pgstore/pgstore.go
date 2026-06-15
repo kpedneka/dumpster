@@ -1,10 +1,11 @@
 // Package pgstore provides a Postgres-backed chunk.Repository.
-// Embedding values are inserted/scanned once pgvector type registration is wired up during chunking & embedding.
 package pgstore
 
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -28,10 +29,10 @@ func (s *Store) BulkCreate(ctx context.Context, chunks []*chunk.Chunk) error {
 		for _, c := range chunks {
 			_, err := tx.Exec(ctx,
 				`INSERT INTO chunks
-				 (document_id, kb_id, user_id, ordinal, text, token_count, char_start, char_end)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+				 (document_id, kb_id, user_id, ordinal, text, token_count, embedding, char_start, char_end)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9)`,
 				c.DocumentID, c.KBID, c.UserID, c.Ordinal,
-				c.Text, c.TokenCount, c.CharStart, c.CharEnd,
+				c.Text, c.TokenCount, vectorParam(c.Embedding), c.CharStart, c.CharEnd,
 			)
 			if err != nil {
 				return err
@@ -43,6 +44,24 @@ func (s *Store) BulkCreate(ctx context.Context, chunks []*chunk.Chunk) error {
 		return fmt.Errorf("chunk: bulk create: %w", err)
 	}
 	return nil
+}
+
+// vectorParam formats a []float32 as a pgvector text literal "[f1,f2,...]".
+// Returns nil (SQL NULL) when the slice is empty.
+func vectorParam(v []float32) any {
+	if len(v) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, f := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatFloat(float64(f), 'f', -1, 32))
+	}
+	b.WriteByte(']')
+	return b.String()
 }
 
 func (s *Store) ListByDocument(ctx context.Context, userID, documentID uuid.UUID) ([]*chunk.Chunk, error) {
