@@ -10,6 +10,14 @@ type Config struct {
 	DBUser     string
 	DBPassword string
 	DBSSL      string
+	// DatabaseURL is a full Postgres connection string (e.g. from Neon).
+	// When set it takes precedence over the individual DB_* fields.
+	// Use the direct (non-pooled) endpoint for the worker and migrations.
+	DatabaseURL string
+	// DatabaseURLPooled is the PgBouncer connection string for the API.
+	// When set it takes precedence over DatabaseURL for pooled access.
+	// Use the Neon pooler endpoint (host has -pooler suffix) for the API.
+	DatabaseURLPooled string
 	// Object storage — endpoint-configurable so the same adapter serves
 	// MinIO locally and Cloudflare R2 in the cloud.
 	S3Endpoint     string
@@ -38,7 +46,9 @@ func Load() *Config {
 		DBName:         getEnv("DB_NAME", "dumpster"),
 		DBUser:         getEnv("DB_USER", "dumpster"),
 		DBPassword:     getEnv("DB_PASSWORD", "dumpster"),
-		DBSSL:          getEnv("DB_SSLMODE", "disable"),
+		DBSSL:             getEnv("DB_SSLMODE", "disable"),
+		DatabaseURL:       getEnv("DATABASE_URL", ""),
+		DatabaseURLPooled: getEnv("DATABASE_URL_POOLED", ""),
 		MetricsPort:    getEnv("METRICS_PORT", "9090"),
 		S3Endpoint:     getEnv("S3_ENDPOINT", "http://localhost:9000"),
 		S3Region:       getEnv("S3_REGION", "auto"),

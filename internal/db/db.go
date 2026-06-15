@@ -9,22 +9,51 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/config"
 )
 
+// dsn returns the direct (non-pooled) connection string.
+// DATABASE_URL takes precedence over individual DB_* env vars.
 func dsn(cfg *config.Config) string {
+	if cfg.DatabaseURL != "" {
+		return cfg.DatabaseURL
+	}
 	return fmt.Sprintf(
 		"host=%s port=%s dbname=%s user=%s password=%s sslmode=%s",
 		cfg.DBHost, cfg.DBPort, cfg.DBName, cfg.DBUser, cfg.DBPassword, cfg.DBSSL,
 	)
 }
 
-// Connect opens a pgx pool for application queries.
+// dsnPooled returns the PgBouncer connection string for the API.
+// DATABASE_URL_POOLED takes precedence, then falls back to dsn.
+func dsnPooled(cfg *config.Config) string {
+	if cfg.DatabaseURLPooled != "" {
+		return cfg.DatabaseURLPooled
+	}
+	return dsn(cfg)
+}
+
+// Connect opens a pgx pool using the pooled (PgBouncer) connection string.
 // Prepared-statement caching is disabled so the pool is compatible with
 // Neon's PgBouncer in transaction mode.
 func Connect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
-	pcfg, err := pgxpool.ParseConfig(dsn(cfg))
+	return connect(ctx, dsnPooled(cfg), true)
+}
+
+// ConnectDirect opens a pgx pool using the direct (non-pooled) connection
+// string. Required for the worker's SKIP LOCKED loop and SET LOCAL RLS calls
+// which need session-stable connections that pooler transaction mode cannot
+// provide. Prepared statements are enabled (extended protocol) on direct
+// connections since they bypass PgBouncer.
+func ConnectDirect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
+	return connect(ctx, dsn(cfg), false)
+}
+
+func connect(ctx context.Context, connStr string, simpleProtocol bool) (*pgxpool.Pool, error) {
+	pcfg, err := pgxpool.ParseConfig(connStr)
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	pcfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	if simpleProtocol {
+		pcfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
@@ -35,16 +64,6 @@ func Connect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("db: ping: %w", err)
 	}
 	return pool, nil
-}
-
-// ConnectDirect opens a single non-pooled connection for migrations and
-// long-held worker transactions (SKIP LOCKED). Must be closed by the caller.
-func ConnectDirect(ctx context.Context, cfg *config.Config) (*pgx.Conn, error) {
-	conn, err := pgx.Connect(ctx, dsn(cfg))
-	if err != nil {
-		return nil, fmt.Errorf("db: direct connect: %w", err)
-	}
-	return conn, nil
 }
 
 // TxRunner abstracts transaction lifecycle so that the RLS layer can inject
