@@ -37,11 +37,21 @@ func (s *Store) Retrieve(ctx context.Context, kbID uuid.UUID, query string, k in
 		return nil, errors.New("retrieval: unauthenticated: no user identity in context")
 	}
 
+	if k <= 0 {
+		return nil, fmt.Errorf("retrieval: k must be positive")
+	}
+
 	vecs, err := s.embedder.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, fmt.Errorf("retrieval: embed query: %w", err)
 	}
+	if len(vecs) == 0 {
+		return nil, fmt.Errorf("retrieval: embedder returned no vectors")
+	}
 	queryVec := vecs[0]
+	if len(queryVec) == 0 {
+		return nil, fmt.Errorf("retrieval: embedder returned zero-length embedding")
+	}
 
 	var vectorRanked, keywordRanked []retrieval.ScoredChunk
 
@@ -80,14 +90,16 @@ func vectorSearch(ctx context.Context, tx pgx.Tx, kbID, userID uuid.UUID, queryV
 }
 
 // keywordSearch returns up to k chunks matching query via full-text search,
-// ordered by ts_rank descending.
+// ordered by ts_rank descending. The tsquery is evaluated once via a lateral
+// join to avoid double evaluation across the WHERE and ORDER BY clauses.
 func keywordSearch(ctx context.Context, tx pgx.Tx, kbID, userID uuid.UUID, query string, k int) ([]retrieval.ScoredChunk, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, document_id, kb_id, user_id, ordinal, text, token_count, char_start, char_end
-		 FROM chunks
-		 WHERE kb_id = $1 AND user_id = $2
-		   AND text_search @@ websearch_to_tsquery('english', $3)
-		 ORDER BY ts_rank(text_search, websearch_to_tsquery('english', $3)) DESC
+		`SELECT c.id, c.document_id, c.kb_id, c.user_id, c.ordinal, c.text, c.token_count, c.char_start, c.char_end
+		 FROM (SELECT websearch_to_tsquery('english', $3) AS q) AS p,
+		      chunks c
+		 WHERE c.kb_id = $1 AND c.user_id = $2
+		   AND c.text_search @@ p.q
+		 ORDER BY ts_rank(c.text_search, p.q) DESC
 		 LIMIT $4`,
 		kbID, userID, query, k,
 	)

@@ -38,7 +38,8 @@ func seed(t *testing.T, repo *chunkmem.Repository, kbID, userID uuid.UUID, texts
 	if err := repo.BulkCreate(ctx, chunks); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// BulkCreate assigns IDs; return the seeded slice (IDs are set in-place by memory store)
+	// Note: BulkCreate copies each struct internally and assigns the UUID to the copy,
+	// not to the original pointer. Returned chunks have ID == uuid.Nil.
 	return chunks
 }
 
@@ -207,5 +208,100 @@ func TestRetrieve_Unauthenticated(t *testing.T) {
 	_, err := r.Retrieve(context.Background(), uuid.New(), "query", 10)
 	if err == nil {
 		t.Error("want error for unauthenticated context")
+	}
+}
+
+func TestRetrieve_InvalidK(t *testing.T) {
+	ctx, _ := userCtx()
+	r := memory.New(chunkmem.New(), mock.NewEmbedder(dims))
+
+	_, err := r.Retrieve(ctx, uuid.New(), "query", 0)
+	if err == nil {
+		t.Error("want error for k=0")
+	}
+	_, err = r.Retrieve(ctx, uuid.New(), "query", -1)
+	if err == nil {
+		t.Error("want error for k=-1")
+	}
+}
+
+func TestRetrieve_EmbedderReturnsNoVectors(t *testing.T) {
+	ctx, _ := userCtx()
+	embedder := mock.NewEmbedder(dims)
+	embedder.EmbedFn = func(_ context.Context, _ []string) ([][]float32, error) {
+		return [][]float32{}, nil
+	}
+	r := memory.New(chunkmem.New(), embedder)
+
+	_, err := r.Retrieve(ctx, uuid.New(), "query", 10)
+	if err == nil {
+		t.Error("want error when embedder returns empty slice")
+	}
+}
+
+func TestRetrieve_EmbedderReturnsZeroLengthEmbedding(t *testing.T) {
+	ctx, _ := userCtx()
+	embedder := mock.NewEmbedder(dims)
+	embedder.EmbedFn = func(_ context.Context, _ []string) ([][]float32, error) {
+		return [][]float32{{}}, nil // non-empty outer, zero-length inner
+	}
+	r := memory.New(chunkmem.New(), embedder)
+
+	_, err := r.Retrieve(ctx, uuid.New(), "query", 10)
+	if err == nil {
+		t.Error("want error when embedder returns zero-length embedding")
+	}
+}
+
+func TestRetrieve_ZeroQueryVectorSkipsVector(t *testing.T) {
+	// Zero-norm query vector: cosineSim returns 0 for all chunks (normA==0).
+	// Chunks with embeddings should be reached by vectorSearch but score 0,
+	// while keyword matches still surface correctly.
+	ctx, uid := userCtx()
+	kbID := uuid.New()
+	repo := chunkmem.New()
+
+	seed(t, repo, kbID, uid, []string{"zero norm test"}, [][]float32{{1, 0, 0, 0}})
+
+	embedder := mock.NewEmbedder(dims)
+	embedder.EmbedFn = func(_ context.Context, _ []string) ([][]float32, error) {
+		return [][]float32{{0, 0, 0, 0}}, nil // all-zero query vector
+	}
+
+	r := memory.New(repo, embedder)
+	results, err := r.Retrieve(ctx, kbID, "zero norm test", 10)
+	if err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	// keyword leg should still surface the match
+	if len(results) == 0 {
+		t.Error("want at least one result from keyword leg")
+	}
+}
+
+func TestRetrieve_DimensionMismatch(t *testing.T) {
+	ctx, uid := userCtx()
+	kbID := uuid.New()
+	repo := chunkmem.New()
+
+	// Store chunk with 2-dim embedding; query will have 4-dim embedding.
+	// The mismatched chunk should be silently skipped (not panic).
+	seed(t, repo, kbID, uid, []string{"mismatch chunk"}, [][]float32{{1, 0}})
+
+	embedder := mock.NewEmbedder(dims)
+	embedder.EmbedFn = func(_ context.Context, _ []string) ([][]float32, error) {
+		return [][]float32{{1, 0, 0, 0}}, nil // 4-dim query
+	}
+
+	r := memory.New(repo, embedder)
+	results, err := r.Retrieve(ctx, kbID, "query", 10)
+	if err != nil {
+		t.Fatalf("want no error for dimension mismatch, got: %v", err)
+	}
+	// The mismatched chunk should be skipped by the vector leg; no panic.
+	for _, res := range results {
+		if res.Embedding != nil && len(res.Embedding) != dims {
+			t.Errorf("dimension-mismatched chunk leaked into results")
+		}
 	}
 }

@@ -43,11 +43,21 @@ func (r *Retriever) Retrieve(ctx context.Context, kbID uuid.UUID, query string, 
 		return nil, err
 	}
 
+	if k <= 0 {
+		return nil, errors.New("retrieval: k must be positive")
+	}
+
 	vecs, err := r.embedder.Embed(ctx, []string{query})
 	if err != nil {
 		return nil, err
 	}
+	if len(vecs) == 0 {
+		return nil, errors.New("retrieval: embedder returned no vectors")
+	}
 	queryVec := vecs[0]
+	if len(queryVec) == 0 {
+		return nil, errors.New("retrieval: embedder returned zero-length embedding")
+	}
 
 	vectorRanked := vectorSearch(all, queryVec)
 	keywordRanked := keywordSearch(all, query)
@@ -64,7 +74,7 @@ func vectorSearch(all []*chunk.Chunk, queryVec []float32) []retrieval.ScoredChun
 	}
 	var candidates []entry
 	for _, c := range all {
-		if len(c.Embedding) == 0 || len(queryVec) == 0 {
+		if len(c.Embedding) == 0 || len(queryVec) == 0 || len(c.Embedding) != len(queryVec) {
 			continue
 		}
 		candidates = append(candidates, entry{c, cosineSim(queryVec, c.Embedding)})

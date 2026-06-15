@@ -21,6 +21,7 @@ type ScoredChunk struct {
 // scoped to a single knowledge base and tenant.
 type Retriever interface {
 	// Retrieve returns at most k ScoredChunks ordered by descending fused score.
+	// k must be positive; implementations return an error for k <= 0.
 	// The context must carry the authenticated user identity.
 	Retrieve(ctx context.Context, kbID uuid.UUID, query string, k int) ([]ScoredChunk, error)
 }
