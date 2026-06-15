@@ -2,10 +2,15 @@ package document
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrNotFound is returned by Repository methods when the requested record does
+// not exist or belongs to a different tenant.
+var ErrNotFound = errors.New("document: not found")
 
 // Status represents the processing lifecycle of a Document.
 type Status string
@@ -19,15 +24,15 @@ const (
 
 // Document is a file stored in object storage and queued for indexing.
 type Document struct {
-	ID          uuid.UUID
-	KBID        uuid.UUID
-	UserID      uuid.UUID
-	Filename    string
-	S3Key       string
-	ContentType string
-	Status      Status
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID          uuid.UUID `json:"id"`
+	KBID        uuid.UUID `json:"kb_id"`
+	UserID      uuid.UUID `json:"user_id"`
+	Filename    string    `json:"filename"`
+	S3Key       string    `json:"s3_key"`
+	ContentType string    `json:"content_type"`
+	Status      Status    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Repository is the persistence boundary for Document records.

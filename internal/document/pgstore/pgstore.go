@@ -3,6 +3,7 @@ package pgstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -53,6 +54,9 @@ func (s *Store) Get(ctx context.Context, userID, id uuid.UUID) (*document.Docume
 		)
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, document.ErrNotFound
+		}
 		return nil, fmt.Errorf("document: get %v: %w", id, err)
 	}
 	return &result, nil
@@ -100,14 +104,14 @@ func (s *Store) UpdateStatus(ctx context.Context, userID, id uuid.UUID, status d
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("not found")
+			return document.ErrNotFound
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, document.ErrNotFound) {
 		return fmt.Errorf("document: update status %v: %w", id, err)
 	}
-	return nil
+	return err
 }
 
 func (s *Store) Delete(ctx context.Context, userID, id uuid.UUID) error {
@@ -120,14 +124,14 @@ func (s *Store) Delete(ctx context.Context, userID, id uuid.UUID) error {
 			return err
 		}
 		if tag.RowsAffected() == 0 {
-			return fmt.Errorf("not found")
+			return document.ErrNotFound
 		}
 		return nil
 	})
-	if err != nil {
+	if err != nil && !errors.Is(err, document.ErrNotFound) {
 		return fmt.Errorf("document: delete %v: %w", id, err)
 	}
-	return nil
+	return err
 }
 
 var _ document.Repository = (*Store)(nil)

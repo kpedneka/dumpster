@@ -3,7 +3,6 @@ package memory
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -34,7 +33,7 @@ func (r *Repository) Get(_ context.Context, userID, id uuid.UUID) (*kb.Knowledge
 	defer r.mu.RUnlock()
 	k, ok := r.rows[id]
 	if !ok || k.UserID != userID {
-		return nil, fmt.Errorf("kb: not found")
+		return nil, kb.ErrNotFound
 	}
 	return k, nil
 }
@@ -51,12 +50,24 @@ func (r *Repository) List(_ context.Context, userID uuid.UUID) ([]*kb.KnowledgeB
 	return out, nil
 }
 
+func (r *Repository) Rename(_ context.Context, userID, id uuid.UUID, name string) (*kb.KnowledgeBase, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.rows[id]
+	if !ok || k.UserID != userID {
+		return nil, kb.ErrNotFound
+	}
+	k.Name = name
+	k.UpdatedAt = time.Now()
+	return k, nil
+}
+
 func (r *Repository) Delete(_ context.Context, userID, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	k, ok := r.rows[id]
 	if !ok || k.UserID != userID {
-		return fmt.Errorf("kb: not found")
+		return kb.ErrNotFound
 	}
 	delete(r.rows, id)
 	return nil

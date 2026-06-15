@@ -2,6 +2,7 @@ package kb_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -42,6 +43,54 @@ func TestKB_CRUD(t *testing.T) {
 	}
 	if _, err := repo.Get(ctx, userID, created.ID); err == nil {
 		t.Fatal("expected error after delete")
+	}
+}
+
+func TestKB_ErrNotFound(t *testing.T) {
+	repo := memory.New()
+	ctx := context.Background()
+	userID := uuid.New()
+	missing := uuid.New()
+
+	for _, tc := range []struct {
+		name string
+		fn   func() error
+	}{
+		{"Get", func() error { _, err := repo.Get(ctx, userID, missing); return err }},
+		{"Rename", func() error { _, err := repo.Rename(ctx, userID, missing, "x"); return err }},
+		{"Delete", func() error { return repo.Delete(ctx, userID, missing) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.fn()
+			if !errors.Is(err, kb.ErrNotFound) {
+				t.Errorf("got %v, want errors.Is(err, kb.ErrNotFound)", err)
+			}
+		})
+	}
+}
+
+func TestKB_Rename(t *testing.T) {
+	repo := memory.New()
+	ctx := context.Background()
+	userID := uuid.New()
+
+	created, _ := repo.Create(ctx, userID, "original")
+
+	renamed, err := repo.Rename(ctx, userID, created.ID, "updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Name != "updated" {
+		t.Fatalf("name: got %q, want %q", renamed.Name, "updated")
+	}
+	if renamed.UpdatedAt.Before(created.CreatedAt) {
+		t.Fatal("updated_at should be >= created_at")
+	}
+
+	// Cross-tenant rename should fail.
+	other := uuid.New()
+	if _, err := repo.Rename(ctx, other, created.ID, "hijack"); err == nil {
+		t.Fatal("other user should not be able to rename")
 	}
 }
 
