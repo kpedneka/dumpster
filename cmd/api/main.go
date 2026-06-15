@@ -11,7 +11,7 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
-	"github.com/kunalpednekar/dumpster/internal/queue/noop"
+	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	"github.com/kunalpednekar/dumpster/internal/server"
 )
@@ -40,7 +40,7 @@ func main() {
 		KBs:       kbpg.New(txRunner),
 		Docs:      docpg.New(txRunner),
 		Objects:   obj,
-		Publisher: noop.New(),
+		Publisher: qpg.New(pool),
 		JWTSecret: cfg.JWTSecret,
 	}
 

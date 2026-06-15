@@ -17,7 +17,7 @@ func New() *Publisher { return &Publisher{} }
 
 // PublishDocumentUploaded logs the event instead of enqueuing it.
 func (p *Publisher) PublishDocumentUploaded(_ context.Context, evt queue.DocumentUploaded) error {
-	log.Printf("queue: DocumentUploaded{document_id=%s}", evt.DocumentID)
+	log.Printf("queue: DocumentUploaded{document_id=%s user_id=%s}", evt.DocumentID, evt.UserID)
 	return nil
 }
 
