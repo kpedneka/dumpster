@@ -1,0 +1,63 @@
+app = "dumpster"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  # Use the combined runtime target so one image serves both process groups.
+  target = "runtime"
+
+# Two process groups share one image; the command selects which binary runs.
+[processes]
+  api    = "/bin/api"
+  worker = "/bin/worker"
+
+# Shared non-secret env vars. Secrets (DATABASE_URL, JWT_SECRET, OPENAI_API_KEY,
+# S3_ACCESS_KEY, S3_SECRET_KEY, ANTHROPIC_API_KEY) must be set via
+# `fly secrets set --app dumpster KEY=value`.
+[env]
+  HTTP_PORT    = "8080"
+  METRICS_PORT = "9090"
+  S3_REGION    = "auto"
+  S3_BUCKET    = "dumpster"
+  # Cloudflare R2 S3-compatible endpoint (account-specific, set as secret).
+  # S3_ENDPOINT = "https://<account-id>.r2.cloudflarestorage.com"
+  S3_USE_PATH_STYLE = "false"
+
+# HTTP service binds only to the api process group.
+[http_service]
+  internal_port = 8080
+  force_https   = true
+  processes     = ["api"]
+
+  [[http_service.checks]]
+    grace_period  = "5s"
+    interval      = "15s"
+    method        = "GET"
+    path          = "/healthz"
+    timeout       = "2s"
+
+# api: at least one machine always running; can scale up under load.
+[[vm]]
+  size      = "shared-cpu-1x"
+  memory    = "256mb"
+  processes = ["api"]
+
+  [vm.min_machines_running]
+    count     = 1
+    processes = ["api"]
+
+# worker: persistent process (never scale-to-zero — the SKIP LOCKED poll loop
+# must stay alive). One machine is sufficient for MVP; add more as queue depth grows.
+[[vm]]
+  size      = "shared-cpu-1x"
+  memory    = "512mb"
+  processes = ["worker"]
+
+  [vm.min_machines_running]
+    count     = 1
+    processes = ["worker"]
+
+  # Worker uses the direct Neon connection (no pooler) to support SKIP LOCKED
+  # and SET LOCAL RLS calls across longer transactions.
+  # Set DATABASE_URL (direct) and DATABASE_URL_POOLED (pooler) as secrets:
+  #   fly secrets set DATABASE_URL="postgresql://..." DATABASE_URL_POOLED="postgresql://...pooler..."

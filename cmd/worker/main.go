@@ -27,7 +27,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Connect(ctx, cfg)
+	pool, err := db.ConnectDirect(ctx, cfg)
 	if err != nil {
 		logger.Error("db connect failed", "err", err)
 		os.Exit(1)
