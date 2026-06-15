@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
@@ -43,7 +44,7 @@ func TestSetup_MetricsScrapeable(t *testing.T) {
 	}
 
 	inst.SearchLatency.Record(context.Background(), 42.5,
-		attribute.String("status", "ok"),
+		metric.WithAttributes(attribute.String("status", "ok")),
 	)
 
 	req := httptest.NewRequest("GET", "/metrics", nil)

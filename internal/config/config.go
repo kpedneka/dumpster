@@ -18,6 +18,8 @@ type Config struct {
 	S3AccessKey    string
 	S3SecretKey    string
 	S3UsePathStyle bool
+	// Observability
+	MetricsPort string
 	// Auth
 	JWTSecret      string
 	JWTExpiryHours string
@@ -37,6 +39,7 @@ func Load() *Config {
 		DBUser:         getEnv("DB_USER", "dumpster"),
 		DBPassword:     getEnv("DB_PASSWORD", "dumpster"),
 		DBSSL:          getEnv("DB_SSLMODE", "disable"),
+		MetricsPort:    getEnv("METRICS_PORT", "9090"),
 		S3Endpoint:     getEnv("S3_ENDPOINT", "http://localhost:9000"),
 		S3Region:       getEnv("S3_REGION", "auto"),
 		S3Bucket:       getEnv("S3_BUCKET", "dumpster"),
