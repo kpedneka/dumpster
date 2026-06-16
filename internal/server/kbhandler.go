@@ -52,16 +52,15 @@ func (h *kbHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit, after := parsePagination(r)
+
 	kbs, err := h.repo.List(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list knowledge bases")
 		return
 	}
 
-	if kbs == nil {
-		kbs = []*kb.KnowledgeBase{}
-	}
-	writeJSON(w, http.StatusOK, kbs)
+	writeJSON(w, http.StatusOK, paginateKBs(kbs, limit, after))
 }
 
 func (h *kbHandler) get(w http.ResponseWriter, r *http.Request) {

@@ -329,12 +329,12 @@ func TestDocList(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", w.Code)
 	}
 
-	var docs []*document.Document
-	if err := json.NewDecoder(w.Body).Decode(&docs); err != nil {
+	var page DocumentPage
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 2 {
-		t.Errorf("count: got %d, want 2", len(docs))
+	if len(page.Items) != 2 {
+		t.Errorf("count: got %d, want 2", len(page.Items))
 	}
 }
 

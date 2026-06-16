@@ -157,16 +157,15 @@ func (h *docHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit, after := parsePagination(r)
+
 	docs, err := h.docRepo.ListByKB(r.Context(), userID, kbID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list documents")
 		return
 	}
 
-	if docs == nil {
-		docs = []*document.Document{}
-	}
-	writeJSON(w, http.StatusOK, docs)
+	writeJSON(w, http.StatusOK, paginateDocs(docs, limit, after))
 }
 
 func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {

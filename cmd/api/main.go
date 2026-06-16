@@ -10,9 +10,13 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
+	"github.com/kunalpednekar/dumpster/internal/llm/openai"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
+	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
+	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/server"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
@@ -55,11 +59,18 @@ func main() {
 		UsePathStyle: cfg.S3UsePathStyle,
 	})
 
+	embedder := openai.New(cfg.OpenAIAPIKey, cfg.OpenAIEmbedModel)
+	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	retriever := retrievalpg.New(txRunner, embedder)
+	answerer := search.NewAnswerer(generator)
+	searcher := search.New(retriever, answerer)
+
 	deps := server.Deps{
 		KBs:       kbpg.New(txRunner),
 		Docs:      docpg.New(txRunner),
 		Objects:   obj,
 		Publisher: qpg.New(pool),
+		Searcher:  searcher,
 		JWTSecret: cfg.JWTSecret,
 	}
 
