@@ -33,7 +33,7 @@ func (s *memUserStore) Create(_ context.Context, email, passwordHash string) (*a
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.byEmail[email]; exists {
-		return nil, fmt.Errorf("email already registered")
+		return nil, auth.ErrDuplicateEmail
 	}
 	u := &auth.User{
 		ID:           uuid.New(),

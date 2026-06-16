@@ -9,6 +9,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/auth"
 )
 
+
 type authHandler struct {
 	users     auth.UserStore
 	jwtSecret string
@@ -56,7 +57,11 @@ func (h *authHandler) register(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.users.Create(r.Context(), req.Email, hash)
 	if err != nil {
-		writeError(w, http.StatusConflict, "email already registered")
+		if errors.Is(err, auth.ErrDuplicateEmail) {
+			writeError(w, http.StatusConflict, "email already registered")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to create user")
+		}
 		return
 	}
 
@@ -107,5 +112,3 @@ func (h *authHandler) login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// errDuplicateEmail is a sentinel for duplicate-email errors from UserStore implementations.
-var errDuplicateEmail = errors.New("email already registered")

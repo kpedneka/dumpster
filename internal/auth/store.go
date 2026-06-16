@@ -1,4 +1,6 @@
 package auth
 
-// UserStore implementations live in sub-packages (e.g. pgstore) to keep
-// this domain package free of infrastructure dependencies.
+import "errors"
+
+// ErrDuplicateEmail is returned by UserStore.Create when the email is already taken.
+var ErrDuplicateEmail = errors.New("email already registered")

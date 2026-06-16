@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Database, MoreHorizontal, Plus, Trash2 } from 'lucide-react'
 import { api } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -29,17 +29,24 @@ export function KBsPage() {
   const queryClient = useQueryClient()
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
-  const [cursor, setCursor] = useState<string | undefined>(undefined)
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['kbs', 'list', cursor],
-    queryFn: async () => {
+  const {
+    data: infiniteData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['kbs', 'list'],
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }) => {
       const { data, error } = await api.GET('/kbs', {
-        params: { query: { limit: 20, ...(cursor ? { after: cursor } : {}) } },
+        params: { query: { limit: 20, ...(pageParam ? { after: pageParam } : {}) } },
       })
       if (error) throw error
-      return data
+      return data!
     },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
   })
 
   const createMutation = useMutation({
@@ -74,7 +81,7 @@ export function KBsPage() {
     if (newName.trim()) createMutation.mutate(newName.trim())
   }
 
-  const kbs: KB[] = data?.items ?? []
+  const kbs: KB[] = infiniteData?.pages.flatMap((p) => p.items) ?? []
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
@@ -133,11 +140,11 @@ export function KBsPage() {
         </div>
       )}
 
-      {data?.next_cursor && (
+      {hasNextPage && (
         <div className="mt-6 flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => setCursor(data.next_cursor ?? undefined)}>
+          <Button variant="outline" size="sm" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
             <MoreHorizontal className="mr-1.5 h-4 w-4" />
-            Load more
+            {isFetchingNextPage ? 'Loading…' : 'Load more'}
           </Button>
         </div>
       )}
