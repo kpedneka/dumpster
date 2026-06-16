@@ -72,8 +72,13 @@ func parseResponse(resp string, chunks []retrieval.ScoredChunk) Result {
 		return Result{Summary: notFoundSummary}
 	}
 
-	const citationsMarker = "CITATIONS:"
-	idx := strings.LastIndex(strings.ToUpper(resp), citationsMarker)
+	// Search case-insensitively by lowercasing both sides. ToLower is safe to
+	// use for byte-offset computation because lowercasing CITATIONS: (ASCII)
+	// is a no-op, and ToLower never increases byte length, preserving offsets
+	// into the original string. ToUpper can shrink multi-byte Unicode
+	// characters (e.g. ı → I), making idx point to the wrong position.
+	const citationsMarker = "citations:"
+	idx := strings.LastIndex(strings.ToLower(resp), citationsMarker)
 	if idx == -1 {
 		return Result{Summary: strings.TrimSpace(resp)}
 	}

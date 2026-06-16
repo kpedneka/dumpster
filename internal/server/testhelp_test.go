@@ -15,6 +15,8 @@ import (
 	kbmem "github.com/kunalpednekar/dumpster/internal/kb/memory"
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
+	"github.com/kunalpednekar/dumpster/internal/search"
+	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 )
 
 const testSecret = "test-secret-key"
@@ -26,6 +28,7 @@ func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.St
 		Docs:      docRepo,
 		Objects:   obj,
 		Publisher: pub,
+		Searcher:  searchmock.NewSearcher(search.Result{}),
 		JWTSecret: testSecret,
 	}
 }

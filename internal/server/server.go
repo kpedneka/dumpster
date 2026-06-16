@@ -9,6 +9,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/search"
 )
 
 // Deps holds all dependencies required by the HTTP handlers.
@@ -17,20 +18,25 @@ type Deps struct {
 	Docs           document.Repository
 	Objects        objectstore.ObjectStore
 	Publisher      queue.Publisher
+	Searcher       search.Searcher
 	JWTSecret      string
 	MaxUploadBytes int64 // maximum multipart upload size in bytes; 0 → 32 MiB
 }
 
 // NewRouter constructs the application HTTP router.
-// The /healthz route is public; all other routes require a valid Bearer JWT.
+// The /healthz and GET /openapi.yaml routes are public; all other routes require a valid Bearer JWT.
 func NewRouter(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", healthz)
+	mux.HandleFunc("GET /openapi.yaml", serveOpenAPI)
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
 	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.MaxUploadBytes)
+	if deps.Searcher != nil {
+		registerSearchRoutes(authed, deps.KBs, deps.Searcher)
+	}
 
 	mux.Handle("/", auth.Middleware(deps.JWTSecret, authed))
 

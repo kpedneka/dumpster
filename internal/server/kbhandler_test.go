@@ -87,12 +87,12 @@ func TestKBList(t *testing.T) {
 		t.Fatalf("status: got %d, want 200", w.Code)
 	}
 
-	var got []*kb.KnowledgeBase
+	var got KBPage
 	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 {
-		t.Errorf("count: got %d, want 2", len(got))
+	if len(got.Items) != 2 {
+		t.Errorf("count: got %d, want 2", len(got.Items))
 	}
 }
 
