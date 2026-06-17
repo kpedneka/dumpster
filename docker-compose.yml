@@ -1,34 +1,14 @@
 version: "3.9"
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_DB: dumpster
-      POSTGRES_USER: dumpster
-      POSTGRES_PASSWORD: dumpster
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dumpster"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   api:
     build:
       context: .
       target: api
     environment:
       HTTP_PORT: "8080"
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: dumpster
-      DB_USER: dumpster
-      DB_PASSWORD: dumpster
-      DB_SSLMODE: disable
+      DATABASE_URL: "${DATABASE_URL}"
+      DATABASE_URL_POOLED: "${DATABASE_URL_POOLED:-${DATABASE_URL}}"
       S3_ENDPOINT: "${S3_ENDPOINT}"
       S3_REGION: "${S3_REGION:-auto}"
       S3_BUCKET: "${S3_BUCKET}"
@@ -41,21 +21,13 @@ services:
       ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
     ports:
       - "8080:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   worker:
     build:
       context: .
       target: worker
     environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: dumpster
-      DB_USER: dumpster
-      DB_PASSWORD: dumpster
-      DB_SSLMODE: disable
+      DATABASE_URL: "${DATABASE_URL}"
       S3_ENDPOINT: "${S3_ENDPOINT}"
       S3_REGION: "${S3_REGION:-auto}"
       S3_BUCKET: "${S3_BUCKET}"
@@ -64,9 +36,3 @@ services:
       S3_USE_PATH_STYLE: "${S3_USE_PATH_STYLE:-false}"
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
       OPENAI_EMBED_MODEL: "${OPENAI_EMBED_MODEL:-text-embedding-3-small}"
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-volumes:
-  postgres_data:
