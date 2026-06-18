@@ -1,24 +1,19 @@
 version: "3.9"
 
+# Credentials and connection strings are loaded from .env then .env.local
+# (.env.local values override .env for the same key).
+# Neither file is required — missing files are skipped.
+
 services:
   api:
     build:
       context: .
       target: api
-    environment:
-      HTTP_PORT: "8080"
-      DATABASE_URL: "${DATABASE_URL}"
-      DATABASE_URL_POOLED: "${DATABASE_URL_POOLED:-${DATABASE_URL}}"
-      S3_ENDPOINT: "${S3_ENDPOINT}"
-      S3_REGION: "${S3_REGION:-auto}"
-      S3_BUCKET: "${S3_BUCKET}"
-      S3_ACCESS_KEY: "${S3_ACCESS_KEY}"
-      S3_SECRET_KEY: "${S3_SECRET_KEY}"
-      S3_USE_PATH_STYLE: "${S3_USE_PATH_STYLE:-false}"
-      JWT_SECRET: "${JWT_SECRET}"
-      JWT_EXPIRY_HOURS: "${JWT_EXPIRY_HOURS:-24}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
-      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-claude-sonnet-4-6}"
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
     ports:
       - "8080:8080"
 
@@ -26,13 +21,8 @@ services:
     build:
       context: .
       target: worker
-    environment:
-      DATABASE_URL: "${DATABASE_URL}"
-      S3_ENDPOINT: "${S3_ENDPOINT}"
-      S3_REGION: "${S3_REGION:-auto}"
-      S3_BUCKET: "${S3_BUCKET}"
-      S3_ACCESS_KEY: "${S3_ACCESS_KEY}"
-      S3_SECRET_KEY: "${S3_SECRET_KEY}"
-      S3_USE_PATH_STYLE: "${S3_USE_PATH_STYLE:-false}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY}"
-      OPENAI_EMBED_MODEL: "${OPENAI_EMBED_MODEL:-text-embedding-3-small}"
+    env_file:
+      - path: .env
+        required: false
+      - path: .env.local
+        required: false
