@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strings"
@@ -113,6 +114,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 
 	// Stream directly from the multipart part — no io.ReadAll buffering needed.
 	if err := h.objects.Put(r.Context(), s3Key, file, header.Size, contentType); err != nil {
+		slog.Error("s3 put failed", "key", s3Key, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to store file")
 		return
 	}

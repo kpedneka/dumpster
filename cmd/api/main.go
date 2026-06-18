@@ -53,6 +53,13 @@ func main() {
 
 	txRunner := rls.New(pool)
 
+	logger.Info("object storage config",
+		"endpoint", cfg.S3Endpoint,
+		"bucket", cfg.S3Bucket,
+		"region", cfg.S3Region,
+		"path_style", cfg.S3UsePathStyle,
+		"key_set", cfg.S3AccessKey != "",
+	)
 	obj := s3store.New(s3store.Config{
 		Endpoint:     cfg.S3Endpoint,
 		Region:       cfg.S3Region,
