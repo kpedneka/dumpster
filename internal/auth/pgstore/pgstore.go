@@ -3,9 +3,11 @@ package pgstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kunalpednekar/dumpster/internal/auth"
 )
@@ -27,6 +29,10 @@ func (s *Store) Create(ctx context.Context, email, passwordHash string) (*auth.U
 		email, passwordHash,
 	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, auth.ErrDuplicateEmail
+		}
 		return nil, fmt.Errorf("pgstore: create user: %w", err)
 	}
 	return &u, nil

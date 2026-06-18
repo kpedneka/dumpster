@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/document"
@@ -19,17 +20,28 @@ type Deps struct {
 	Objects        objectstore.ObjectStore
 	Publisher      queue.Publisher
 	Searcher       search.Searcher
+	Users          auth.UserStore
 	JWTSecret      string
-	MaxUploadBytes int64 // maximum multipart upload size in bytes; 0 → 32 MiB
+	JWTTTL         time.Duration // 0 defaults to 24 h
+	MaxUploadBytes int64         // 0 defaults to 32 MiB
 }
 
 // NewRouter constructs the application HTTP router.
-// The /healthz and GET /openapi.yaml routes are public; all other routes require a valid Bearer JWT.
+// POST /auth/register and POST /auth/login are public; all other routes require a valid Bearer JWT.
 func NewRouter(deps Deps) http.Handler {
+	ttl := deps.JWTTTL
+	if ttl == 0 {
+		ttl = 24 * time.Hour
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /openapi.yaml", serveOpenAPI)
+
+	if deps.Users != nil {
+		registerAuthRoutes(mux, deps.Users, deps.JWTSecret, ttl)
+	}
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
