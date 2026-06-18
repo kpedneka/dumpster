@@ -3,7 +3,7 @@ import type { components } from './schema.d.ts'
 
 type Document = components['schemas']['Document']
 
-const BASE_URL = import.meta.env.DEV ? '/api' : '/'
+const BASE_URL = import.meta.env.DEV ? '/api' : ''
 
 /**
  * Uploads a file to a knowledge base using multipart/form-data.
@@ -15,7 +15,7 @@ export async function uploadDocument(kbId: string, file: File): Promise<Document
   formData.append('file', file)
 
   const token = getToken()
-  const res = await fetch(`${BASE_URL}kbs/${kbId}/documents`, {
+  const res = await fetch(`${BASE_URL}/kbs/${kbId}/documents`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: formData,
