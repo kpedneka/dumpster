@@ -31,4 +31,5 @@ function Badge({ className, variant, ...props }: BadgeProps) {
   return <div className={cn(badgeVariants({ variant }), className)} {...props} />
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- shadcn/ui convention: component + its variant fn share a file
 export { Badge, badgeVariants }

@@ -6,4 +6,7 @@ linters:
     - errcheck
     - staticcheck
     - ineffassign
+  exclusions:
+    paths:
+      - web
 
