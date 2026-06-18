@@ -21,9 +21,11 @@ test:
 	go test ./...
 	go test -coverpkg=$(UNIT_COVERPKG) -coverprofile=coverage.out -covermode=atomic $(UNIT_TESTPKG)
 	@go tool cover -func=coverage.out | grep total | awk '{gsub(/%/,""); if ($$3+0 < $(COVERAGE_THRESHOLD)) {print "coverage " $$3 "% is below threshold $(COVERAGE_THRESHOLD)%"; exit 1}}'
+	cd web && npm test
 
 lint:
 	golangci-lint run ./...
+	cd web && npm run lint
 
 run:
 	docker compose up --build

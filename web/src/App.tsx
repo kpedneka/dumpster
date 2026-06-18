@@ -5,6 +5,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { KBsPage } from '@/pages/KBsPage'
 import { KBDetailPage } from '@/pages/KBDetailPage'
+import { SearchPage } from '@/pages/SearchPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth()
@@ -26,6 +27,7 @@ export default function App() {
         <Route index element={<Navigate to="/kbs" replace />} />
         <Route path="/kbs" element={<KBsPage />} />
         <Route path="/kbs/:kbId" element={<KBDetailPage />} />
+        <Route path="/kbs/:kbId/search" element={<SearchPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/kbs" replace />} />
     </Routes>

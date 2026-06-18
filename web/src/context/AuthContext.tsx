@@ -49,11 +49,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   )
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- hook colocated with its provider, standard context pattern
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext)
   if (!ctx) throw new Error('useAuth must be used inside AuthProvider')
   return ctx
 }
 
-// Trigger a re-read of the token from storage (used by the API client interceptor).
+// eslint-disable-next-line react-refresh/only-export-components -- re-export for consumers that only need the token, not the full context
 export { getToken }

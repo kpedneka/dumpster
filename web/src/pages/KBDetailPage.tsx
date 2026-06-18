@@ -5,6 +5,7 @@ import { useDropzone } from 'react-dropzone'
 import { FileText, Trash2, Upload } from 'lucide-react'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
+import { KBTabs } from '@/components/KBTabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -93,6 +94,7 @@ export function KBDetailPage() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <h1 className="mb-6 text-2xl font-bold">{kb?.name ?? '—'}</h1>
+      <KBTabs kbId={kbId!} />
 
       {/* Upload zone */}
       <div
