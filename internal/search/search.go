@@ -14,6 +14,12 @@ import (
 // Every citation resolves to a real chunk: slicing the original document at
 // CharStart:CharEnd reproduces the text the model relied on.
 type Citation struct {
+	// Number is the 1-indexed [N] marker this citation corresponds to in the
+	// summary text. The Citations slice is built from whichever numbers the
+	// model actually listed in its CITATIONS footer — it is not guaranteed to
+	// be dense or in marker order, so callers must match a marker to a
+	// citation by Number, never by slice position.
+	Number     int
 	DocumentID uuid.UUID
 	ChunkID    uuid.UUID
 	CharStart  int

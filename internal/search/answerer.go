@@ -96,6 +96,7 @@ func parseResponse(resp string, chunks []retrieval.ScoredChunk) Result {
 		seen[n] = true
 		sc := chunks[n-1]
 		citations = append(citations, Citation{
+			Number:     n,
 			DocumentID: sc.DocumentID,
 			ChunkID:    sc.ID,
 			CharStart:  sc.CharStart,

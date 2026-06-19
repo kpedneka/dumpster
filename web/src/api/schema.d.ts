@@ -761,6 +761,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{kbId}/documents/{docId}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kbId: string;
+                docId: string;
+            };
+            cookie?: never;
+        };
+        /** Get the raw text content of a document */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kbId: string;
+                    docId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Raw document text */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/plain": string;
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -794,6 +854,8 @@ export interface components {
             updated_at: string;
         };
         Citation: {
+            /** @description The 1-indexed [N] marker this citation corresponds to in the summary text. Match markers to citations by this field, not by array position — the list is sparse whenever the model didn't cite every numbered source chunk. */
+            number: number;
             /** Format: uuid */
             document_id: string;
             /** Format: uuid */

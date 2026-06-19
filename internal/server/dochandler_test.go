@@ -367,6 +367,121 @@ func TestDocGet(t *testing.T) {
 	}
 }
 
+func TestDocContent(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	s3Key := "documents/test/content.txt"
+	want := "the quick brown fox jumps over the lazy dog"
+	if err := obj.Put(context.TODO(), s3Key, strings.NewReader(want), int64(len(want)), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	created, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "content.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, http.MethodGet,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String()+"/content", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+	if got := w.Body.String(); got != want {
+		t.Errorf("body: got %q, want %q", got, want)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("content-type: got %q, want %q", ct, "text/plain; charset=utf-8")
+	}
+}
+
+func TestDocContent_WrongKB(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb1, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	kb2, _ := kbRepo.Create(context.TODO(), userID, "kb2")
+
+	s3Key := "documents/test/wrong-kb.txt"
+	if err := obj.Put(context.TODO(), s3Key, strings.NewReader("data"), 4, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb1.ID, UserID: userID, Filename: "f.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, http.MethodGet,
+		"/kbs/"+kb2.ID.String()+"/documents/"+doc.ID.String()+"/content", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-KB content: got %d, want 404", w.Code)
+	}
+}
+
+func TestDocContent_NotFound(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+
+	req := authedRequest(t, http.MethodGet,
+		"/kbs/"+kb.ID.String()+"/documents/"+uuid.New().String()+"/content", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status: got %d, want 404", w.Code)
+	}
+}
+
+func TestDocContent_Unauthorized(t *testing.T) {
+	deps, _, _, _, _ := defaultDeps()
+	router := NewRouter(deps)
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/kbs/"+uuid.New().String()+"/documents/"+uuid.New().String()+"/content", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status: got %d, want 401", w.Code)
+	}
+}
+
+func TestDocContent_TenantIsolation(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	router := NewRouter(deps)
+	user1, user2 := uuid.New(), uuid.New()
+
+	kb1, _ := kbRepo.Create(context.TODO(), user1, "kb1")
+	s3Key := "documents/u1/content.txt"
+	if err := obj.Put(context.TODO(), s3Key, strings.NewReader("secret"), 6, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb1.ID, UserID: user1, Filename: "content.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, http.MethodGet,
+		"/kbs/"+kb1.ID.String()+"/documents/"+doc.ID.String()+"/content", nil, user2)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("cross-tenant content: got %d, want 404", w.Code)
+	}
+}
+
 func TestDocDelete(t *testing.T) {
 	deps, kbRepo, docRepo, obj, _ := defaultDeps()
 	router := NewRouter(deps)

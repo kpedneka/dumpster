@@ -143,6 +143,39 @@ func TestAnswerer_CitationsReferenceValidChunks(t *testing.T) {
 	}
 }
 
+// TestAnswerer_CitationNumberMatchesMarker verifies that when the model's
+// CITATIONS footer omits an earlier marker number, the remaining citation's
+// Number still reflects which [N] marker it corresponds to — callers must
+// not assume Citations[i] corresponds to marker [i+1].
+func TestAnswerer_CitationNumberMatchesMarker(t *testing.T) {
+	doc1 := uuid.New()
+	doc2 := uuid.New()
+	chunks := []retrieval.ScoredChunk{
+		makeChunk(doc1, "Alpha content about databases.", 0, 30),
+		makeChunk(doc2, "Beta content about caches.", 31, 56),
+	}
+
+	// The model's prose references marker [2], but the footer only lists "2" —
+	// chunk 1 is never cited, so Citations has a single entry at index 0.
+	gen := mock.NewGenerator("Caches are different [2].\nCITATIONS: 2")
+	a := search.NewAnswerer(gen)
+
+	result, err := a.Answer(authedCtx(), uuid.New(), "what about caches?", chunks)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Citations) != 1 {
+		t.Fatalf("expected 1 citation, got %d", len(result.Citations))
+	}
+	c := result.Citations[0]
+	if c.Number != 2 {
+		t.Errorf("citation Number: got %d, want 2 (must not be slice position 1)", c.Number)
+	}
+	if c.DocumentID != doc2 {
+		t.Errorf("citation DocumentID: got %v, want doc2 (%v)", c.DocumentID, doc2)
+	}
+}
+
 // TestAnswerer_OutOfRangeCitationsIgnored verifies that citations referencing
 // non-existent chunk indices are silently dropped.
 func TestAnswerer_OutOfRangeCitationsIgnored(t *testing.T) {
