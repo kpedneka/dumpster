@@ -1,8 +1,8 @@
-import { useCallback } from 'react'
-import { useParams } from 'react-router-dom'
+import { useCallback, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDropzone } from 'react-dropzone'
-import { FileText, Trash2, Upload } from 'lucide-react'
+import { FileText, MoreHorizontal, Trash2, Upload } from 'lucide-react'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
 import { KBTabs } from '@/components/KBTabs'
@@ -16,10 +16,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { toast } from '@/hooks/use-toast'
+import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { cn } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
-import { useState } from 'react'
 
 type Document = components['schemas']['Document']
 type DocStatus = Document['status']
@@ -35,7 +41,9 @@ const STATUS_LABEL: Record<DocStatus, string> = {
 
 export function KBDetailPage() {
   const { kbId } = useParams<{ kbId: string }>()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   const { data: kb } = useQuery({
     queryKey: ['kbs', kbId],
@@ -66,13 +74,17 @@ export function KBDetailPage() {
 
   const docs: Document[] = docPage?.items ?? []
 
+  const deleteKBMutation = useDeleteKB({ onSuccess: () => navigate('/kbs') })
+
   const uploadMutation = useMutation({
     mutationFn: (file: File) => uploadDocument(kbId!, file),
     onSuccess: (doc) => {
+      // No success toast here — the document list below already shows live
+      // per-file status, and a toast per file in a multi-file drop can
+      // silently exceed the toast tray's cap (see use-toast.ts TOAST_LIMIT).
       queryClient.setQueryData<typeof docPage>(['docs', kbId], (prev) =>
         prev ? { ...prev, items: [doc, ...prev.items] } : { items: [doc] },
       )
-      toast({ title: `"${doc.filename}" uploaded — indexing…` })
     },
     onError: (err) =>
       toast({ variant: 'destructive', title: 'Upload failed', description: String(err) }),
@@ -93,8 +105,52 @@ export function KBDetailPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
-      <h1 className="mb-6 text-2xl font-bold">{kb?.name ?? '—'}</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">{kb?.name ?? '—'}</h1>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              <MoreHorizontal className="h-4 w-4" />
+              <span className="sr-only">Knowledge base options</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              className="text-destructive focus:text-destructive"
+              onSelect={() => setDeleteOpen(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete knowledge base
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
       <KBTabs kbId={kbId!} />
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete knowledge base?</DialogTitle>
+            <DialogDescription>
+              <strong>{kb?.name}</strong> and all its documents will be permanently deleted.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setDeleteOpen(false)
+                deleteKBMutation.mutate(kbId!)
+              }}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Upload zone */}
       <div
