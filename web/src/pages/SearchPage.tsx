@@ -4,21 +4,27 @@ import { useQuery } from '@tanstack/react-query'
 import { Search as SearchIcon } from 'lucide-react'
 import { api } from '@/api/client'
 import { KBTabs } from '@/components/KBTabs'
+import { CitationMarker } from '@/components/CitationMarker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import type { components } from '@/api/schema.d.ts'
+
+type Citation = components['schemas']['Citation']
 
 const CITATION_MARKER = /(\[\d+\])/g
 
-function renderCitedSummary(summary: string) {
-  return summary.split(CITATION_MARKER).map((part, i) =>
-    CITATION_MARKER.test(part) ? (
-      <sup key={i} className="ml-0.5 rounded bg-accent px-1 py-0.5 text-xs font-medium text-accent-foreground">
-        {part}
-      </sup>
-    ) : (
-      <Fragment key={i}>{part}</Fragment>
-    ),
-  )
+// Marker [N] in the LLM's summary text must be matched to a citation by its
+// `number` field, not by array position — citations is sparse whenever the
+// model didn't cite every numbered chunk (see internal/search/search.go: Citation.Number).
+function renderCitedSummary(summary: string, citations: Citation[], kbId: string) {
+  return summary.split(CITATION_MARKER).map((part, i) => {
+    const match = part.match(/^\[(\d+)\]$/)
+    if (!match) return <Fragment key={i}>{part}</Fragment>
+    const markerNumber = Number(match[1])
+    const citation = citations.find((c) => c.number === markerNumber)
+    if (!citation) return <Fragment key={i}>{part}</Fragment>
+    return <CitationMarker key={i} citation={citation} kbId={kbId} />
+  })
 }
 
 function describeError(error: unknown): string {
@@ -102,7 +108,7 @@ export function SearchPage() {
           <p className="py-16 text-center text-sm text-muted-foreground">No results found.</p>
         ) : (
           <div className="rounded-lg border bg-card p-4 text-sm leading-relaxed shadow-sm">
-            {renderCitedSummary(result.summary)}
+            {renderCitedSummary(result.summary, result.citations, kbId!)}
           </div>
         )
       )}

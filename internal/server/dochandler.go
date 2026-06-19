@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"path"
@@ -52,6 +53,7 @@ func registerDocRoutes(
 	mux.HandleFunc("POST /kbs/{kbID}/documents", h.upload)
 	mux.HandleFunc("GET /kbs/{kbID}/documents", h.list)
 	mux.HandleFunc("GET /kbs/{kbID}/documents/{docID}", h.get)
+	mux.HandleFunc("GET /kbs/{kbID}/documents/{docID}/content", h.content)
 	mux.HandleFunc("DELETE /kbs/{kbID}/documents/{docID}", h.delete)
 }
 
@@ -200,6 +202,49 @@ func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, doc)
+}
+
+// content streams the raw text of a document from object storage. Only
+// .txt/.md files are ever accepted at upload, so the body is always safe to
+// serve as text/plain.
+func (h *docHandler) content(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	kbID, ok := parseUUID(w, r.PathValue("kbID"))
+	if !ok {
+		return
+	}
+
+	docID, ok := parseUUID(w, r.PathValue("docID"))
+	if !ok {
+		return
+	}
+
+	doc, err := h.docRepo.Get(r.Context(), userID, docID)
+	if err != nil {
+		writeDocError(w, err)
+		return
+	}
+
+	if doc.KBID != kbID {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	rc, err := h.objects.Get(r.Context(), doc.S3Key)
+	if err != nil {
+		slog.Error("s3 get failed", "key", doc.S3Key, "err", err)
+		writeError(w, http.StatusInternalServerError, "failed to load document content")
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, rc)
 }
 
 // delete removes the S3 object first, then the database row.

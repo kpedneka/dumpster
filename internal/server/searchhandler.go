@@ -63,8 +63,12 @@ type SearchResponse struct {
 	Citations []CitationResponse `json:"citations"`
 }
 
-// CitationResponse is the JSON shape of a single citation.
+// CitationResponse is the JSON shape of a single citation. Number is the
+// 1-indexed [N] marker this citation corresponds to in Summary — clients
+// must match a marker to a citation by Number, not by array position, since
+// this slice is sparse whenever the model didn't cite every numbered chunk.
 type CitationResponse struct {
+	Number     int    `json:"number"`
 	DocumentID string `json:"document_id"`
 	ChunkID    string `json:"chunk_id"`
 	CharStart  int    `json:"char_start"`
@@ -75,6 +79,7 @@ func toSearchResponse(r search.Result) SearchResponse {
 	citations := make([]CitationResponse, len(r.Citations))
 	for i, c := range r.Citations {
 		citations[i] = CitationResponse{
+			Number:     c.Number,
 			DocumentID: c.DocumentID.String(),
 			ChunkID:    c.ChunkID.String(),
 			CharStart:  c.CharStart,

@@ -23,7 +23,7 @@ func TestSearch(t *testing.T) {
 	deps.Searcher = searchmock.NewSearcher(search.Result{
 		Summary: "the answer",
 		Citations: []search.Citation{
-			{DocumentID: docID, ChunkID: chunkID, CharStart: 0, CharEnd: 42},
+			{Number: 1, DocumentID: docID, ChunkID: chunkID, CharStart: 0, CharEnd: 42},
 		},
 	})
 	router := NewRouter(deps)
@@ -47,6 +47,9 @@ func TestSearch(t *testing.T) {
 	}
 	if len(got.Citations) != 1 {
 		t.Fatalf("citations: got %d, want 1", len(got.Citations))
+	}
+	if got.Citations[0].Number != 1 {
+		t.Errorf("citation number: got %d, want 1", got.Citations[0].Number)
 	}
 	if got.Citations[0].DocumentID != docID.String() {
 		t.Errorf("citation document_id mismatch")
