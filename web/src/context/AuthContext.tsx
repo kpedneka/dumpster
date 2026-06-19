@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { clearSession, getToken, getUser, saveSession, type AuthUser } from '@/lib/auth'
 import { api } from '@/api/client'
+import { clearSearchState } from '@/lib/search-state'
 
 interface AuthContextValue {
   user: AuthUser | null
@@ -14,6 +16,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(getUser)
+  const queryClient = useQueryClient()
 
   const login = useCallback(async (email: string, password: string) => {
     const { data, error } = await api.POST('/auth/login', {
@@ -39,8 +42,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(() => {
     clearSession()
+    // A same-tab account switch must never render the previous tenant's
+    // cached KBs/documents/search results before the next user's data loads.
+    queryClient.clear()
+    clearSearchState()
     setUser(null)
-  }, [])
+  }, [queryClient])
 
   return (
     <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, register, logout }}>
