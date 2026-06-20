@@ -6,11 +6,15 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/entity"
 	"github.com/kunalpednekar/dumpster/internal/entity/memory"
+	"github.com/kunalpednekar/dumpster/internal/entity/mock"
 )
 
+// Compile-time checks that the test doubles satisfy the domain interfaces.
 var _ entity.Repository = (*memory.Repository)(nil)
+var _ entity.Extractor = (*mock.Extractor)(nil)
 
 func makeEntities(userID, kbID, documentID, chunkID uuid.UUID, n int) []*entity.Entity {
 	out := make([]*entity.Entity, n)
@@ -100,5 +104,37 @@ func TestEntity_BulkCreate_Empty(t *testing.T) {
 	repo := memory.New()
 	if err := repo.BulkCreate(context.Background(), nil); err != nil {
 		t.Fatalf("BulkCreate(nil) should be a no-op, got error: %v", err)
+	}
+}
+
+// TestEntity_ExtractorToRepository exercises the Extractor → Repository
+// seam end to end using the mock Extractor and memory Repository test
+// doubles, mirroring how internal/worker.EntityHandler wires the two.
+func TestEntity_ExtractorToRepository(t *testing.T) {
+	ctx := context.Background()
+	userID, kbID, docID, chunkID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+
+	extractor := mock.NewFixed([]*entity.Entity{
+		{DocumentID: docID, KBID: kbID, ChunkID: chunkID, UserID: userID, Type: "person", Text: "Ada Lovelace", Start: 0, End: 12, Score: 0.95},
+		{DocumentID: docID, KBID: kbID, ChunkID: chunkID, UserID: userID, Type: "organization", Text: "Analytical Engine Co.", Start: 20, End: 40, Score: 0.8},
+	})
+
+	chunks := []*chunk.Chunk{{ID: chunkID, DocumentID: docID, KBID: kbID, UserID: userID, Text: "Ada Lovelace worked at Analytical Engine Co."}}
+	found, err := extractor.Extract(ctx, chunks, []entity.Type{"person", "organization"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := memory.New()
+	if err := repo.BulkCreate(ctx, found); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := repo.ListByDocument(ctx, userID, docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("ListByDocument: got %d, want 2", len(list))
 	}
 }
