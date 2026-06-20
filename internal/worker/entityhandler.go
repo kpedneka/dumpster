@@ -1,9 +1,9 @@
 package worker
 
 import (
-	"fmt"
-
 	"context"
+	"fmt"
+	"log"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
@@ -108,11 +108,13 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 	return nil
 }
 
-// OnFailed is a no-op: entity extraction failures do not affect the
-// document's chunking/embedding status, since this is an independent job
-// stage. The job will simply remain unextracted until retried.
+// OnFailed logs that extraction was permanently dead-lettered for the
+// document. It deliberately does not touch document.Status: entity
+// extraction failures do not affect the document's chunking/embedding
+// status, since this is an independent job stage. The document simply
+// remains without entities until a new extraction job is queued.
 func (h *EntityHandler) OnFailed(_ context.Context, job *queue.Job) {
-	_ = job
+	log.Printf("entityhandler: entity extraction permanently failed for document %s", job.DocumentID)
 }
 
 var _ Handler = (*EntityHandler)(nil)
