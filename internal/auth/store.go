@@ -2,5 +2,6 @@ package auth
 
 import "errors"
 
-// ErrDuplicateEmail is returned by UserStore.Create when the email is already taken.
-var ErrDuplicateEmail = errors.New("email already registered")
+// ErrUserNotFound is returned by LocalUserStore lookups when no local user
+// record matches the given identity.
+var ErrUserNotFound = errors.New("user not found")
