@@ -10,6 +10,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// JobType discriminates between the distinct stages of the ingestion
+// pipeline that share the same queue/job-stage seam. Each stage has its own
+// Handler (see internal/worker) so it can be re-run independently of the
+// others — e.g. re-running entity extraction after a type-set change must
+// not re-chunk or re-embed a document.
+type JobType string
+
+const (
+	// JobTypeDocumentIndexing splits a document into chunks and embeds them.
+	JobTypeDocumentIndexing JobType = "document_indexing"
+	// JobTypeEntityExtraction runs local entity extraction over a document's
+	// existing chunks. It depends on document indexing having already
+	// produced chunk rows, but does not itself touch chunks or embeddings.
+	JobTypeEntityExtraction JobType = "entity_extraction"
+)
+
 // DocumentUploaded is published once a document's bytes land in object storage
 // and a documents row has been created at status "pending".
 type DocumentUploaded struct {
@@ -17,9 +33,18 @@ type DocumentUploaded struct {
 	UserID     uuid.UUID
 }
 
-// Job is a unit of work dequeued for processing.
+// EntityExtractionRequested is published to (re-)run local entity extraction
+// over a document's existing chunks, independent of chunking/embedding.
+type EntityExtractionRequested struct {
+	DocumentID uuid.UUID
+	UserID     uuid.UUID
+}
+
+// Job is a unit of work dequeued for processing. Type determines which
+// registered Handler the worker dispatches it to.
 type Job struct {
 	ID          uuid.UUID
+	Type        JobType
 	DocumentID  uuid.UUID
 	UserID      uuid.UUID
 	Attempts    int
@@ -32,6 +57,10 @@ var ErrNoJobs = errors.New("queue: no jobs available")
 // Publisher dispatches document lifecycle events for background processing.
 type Publisher interface {
 	PublishDocumentUploaded(ctx context.Context, evt DocumentUploaded) error
+	// PublishEntityExtraction enqueues a distinct entity-extraction job for
+	// an already-ingested document, independently of (re-)chunking or
+	// (re-)embedding.
+	PublishEntityExtraction(ctx context.Context, evt EntityExtractionRequested) error
 }
 
 // Consumer pulls jobs from the queue for processing.

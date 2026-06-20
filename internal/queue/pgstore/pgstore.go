@@ -25,18 +25,38 @@ func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// PublishDocumentUploaded inserts a pending job for the given document.
-// If a pending or processing job already exists for that document the insert
-// is silently skipped, making enqueue idempotent.
+// PublishDocumentUploaded inserts a pending document-indexing job for the
+// given document. If a pending or processing job of that type already
+// exists for the document the insert is silently skipped, making enqueue
+// idempotent.
 func (s *Store) PublishDocumentUploaded(ctx context.Context, evt queue.DocumentUploaded) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO jobs (document_id, user_id)
-		 VALUES ($1, $2)
+		`INSERT INTO jobs (document_id, user_id, job_type)
+		 VALUES ($1, $2, $3)
 		 ON CONFLICT DO NOTHING`,
-		evt.DocumentID, evt.UserID,
+		evt.DocumentID, evt.UserID, string(queue.JobTypeDocumentIndexing),
 	)
 	if err != nil {
 		return fmt.Errorf("queue: enqueue document %s: %w", evt.DocumentID, err)
+	}
+	return nil
+}
+
+// PublishEntityExtraction inserts a pending entity-extraction job for the
+// given document. This is a distinct job type from document indexing so it
+// can be queued and re-run independently — e.g. after the entity type-set
+// config changes — without re-chunking or re-embedding. If a pending or
+// processing entity-extraction job already exists for the document the
+// insert is silently skipped, making enqueue idempotent.
+func (s *Store) PublishEntityExtraction(ctx context.Context, evt queue.EntityExtractionRequested) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO jobs (document_id, user_id, job_type)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
+		evt.DocumentID, evt.UserID, string(queue.JobTypeEntityExtraction),
+	)
+	if err != nil {
+		return fmt.Errorf("queue: enqueue entity extraction for document %s: %w", evt.DocumentID, err)
 	}
 	return nil
 }
@@ -51,20 +71,22 @@ func (s *Store) Dequeue(ctx context.Context) (*queue.Job, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var j queue.Job
+	var jobType string
 	err = tx.QueryRow(ctx,
-		`SELECT id, document_id, user_id, attempts, max_attempts
+		`SELECT id, document_id, user_id, job_type, attempts, max_attempts
 		 FROM jobs
 		 WHERE status = 'pending' AND run_at <= NOW()
 		 ORDER BY created_at
 		 LIMIT 1
 		 FOR UPDATE SKIP LOCKED`,
-	).Scan(&j.ID, &j.DocumentID, &j.UserID, &j.Attempts, &j.MaxAttempts)
+	).Scan(&j.ID, &j.DocumentID, &j.UserID, &jobType, &j.Attempts, &j.MaxAttempts)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, queue.ErrNoJobs
 		}
 		return nil, fmt.Errorf("queue: dequeue select: %w", err)
 	}
+	j.Type = queue.JobType(jobType)
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE jobs SET status = 'processing', updated_at = NOW() WHERE id = $1`,

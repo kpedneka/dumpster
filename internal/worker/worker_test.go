@@ -129,3 +129,48 @@ func TestWorker_ShutdownOnContextCancel(t *testing.T) {
 		t.Errorf("Run: got %v, want context.Canceled", err)
 	}
 }
+
+func TestWorker_DispatchesByJobType(t *testing.T) {
+	indexJob := &queue.Job{ID: uuid.New(), Type: queue.JobTypeDocumentIndexing, DocumentID: uuid.New(), UserID: uuid.New()}
+	entityJob := &queue.Job{ID: uuid.New(), Type: queue.JobTypeEntityExtraction, DocumentID: uuid.New(), UserID: uuid.New()}
+	consumer := &stubConsumer{jobs: []*queue.Job{indexJob, entityJob}}
+
+	indexHandler := &stubHandler{}
+	entityHandler := &stubHandler{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	w := worker.New(consumer, indexHandler, worker.Config{PollInterval: 10 * time.Millisecond})
+	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
+	_ = w.Run(ctx)
+
+	if len(indexHandler.handledJobs) != 1 || indexHandler.handledJobs[0].ID != indexJob.ID {
+		t.Errorf("indexHandler handled %v, want [%s]", indexHandler.handledJobs, indexJob.ID)
+	}
+	if len(entityHandler.handledJobs) != 1 || entityHandler.handledJobs[0].ID != entityJob.ID {
+		t.Errorf("entityHandler handled %v, want [%s]", entityHandler.handledJobs, entityJob.ID)
+	}
+	if len(consumer.ackedIDs) != 2 {
+		t.Errorf("acked: got %d, want 2", len(consumer.ackedIDs))
+	}
+}
+
+func TestWorker_NacksJobWithUnregisteredType(t *testing.T) {
+	job := &queue.Job{ID: uuid.New(), Type: "unknown_type", DocumentID: uuid.New(), UserID: uuid.New()}
+	consumer := &stubConsumer{jobs: []*queue.Job{job}}
+	handler := &stubHandler{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	w := worker.New(consumer, handler, worker.Config{PollInterval: 10 * time.Millisecond})
+	_ = w.Run(ctx)
+
+	if len(handler.handledJobs) != 0 {
+		t.Errorf("Handle should not be called for an unregistered job type")
+	}
+	if len(consumer.nackedIDs) != 1 || consumer.nackedIDs[0] != job.ID {
+		t.Errorf("expected Nack(%s) for unregistered job type, got %v", job.ID, consumer.nackedIDs)
+	}
+}
