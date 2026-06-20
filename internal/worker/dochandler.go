@@ -22,6 +22,11 @@ type DocumentHandler struct {
 	chunks   chunk.Repository
 	splitter chunk.Splitter
 	embedder llm.Embedder
+	// publisher, when non-nil, is used to enqueue a distinct entity-
+	// extraction job once a document is successfully indexed. It is
+	// optional so existing callers/tests that only care about chunking and
+	// embedding keep working unmodified.
+	publisher queue.Publisher
 }
 
 // NewDocumentHandler creates a DocumentHandler wired to the given dependencies.
@@ -39,6 +44,16 @@ func NewDocumentHandler(
 		splitter: splitter,
 		embedder: embedder,
 	}
+}
+
+// WithEntityExtractionPublisher wires publisher into h so that, after a
+// document is successfully indexed, a distinct entity-extraction job is
+// queued for it behind the existing queue/job-stage seam. This keeps entity
+// extraction inline in the ingestion flow without coupling DocumentHandler
+// to how extraction itself works.
+func (h *DocumentHandler) WithEntityExtractionPublisher(publisher queue.Publisher) *DocumentHandler {
+	h.publisher = publisher
+	return h
 }
 
 // Handle runs the full ingestion pipeline for one document job:
@@ -66,6 +81,21 @@ func (h *DocumentHandler) Handle(ctx context.Context, job *queue.Job) error {
 
 	if err := h.docs.UpdateStatus(ctx, job.UserID, job.DocumentID, document.StatusIndexed); err != nil {
 		return fmt.Errorf("dochandler: mark indexed: %w", err)
+	}
+
+	// Queue the entity-extraction stage as a distinct job, inline in the
+	// ingestion flow but behind the existing queue/job-stage seam: it can
+	// be retried or re-run independently of (re-)chunking and (re-)embedding.
+	// A publish failure here is logged, not fatal — chunking/embedding has
+	// already succeeded and must not be rolled back because the follow-on
+	// stage failed to enqueue.
+	if h.publisher != nil {
+		if err := h.publisher.PublishEntityExtraction(ctx, queue.EntityExtractionRequested{
+			DocumentID: job.DocumentID,
+			UserID:     job.UserID,
+		}); err != nil {
+			log.Printf("dochandler: failed to queue entity extraction for document %s: %v", job.DocumentID, err)
+		}
 	}
 
 	return nil
