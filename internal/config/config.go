@@ -2,9 +2,24 @@ package config
 
 import (
 	"os"
+	"strings"
 
 	env "github.com/joho/godotenv"
 )
+
+// defaultEntityTypes is the closed-but-broad, domain-agnostic entity type
+// set used when ENTITY_TYPES is not set. It is deliberately not the only
+// possible set: operators add or remove types by changing config, not code,
+// and no migration is required to do so.
+var defaultEntityTypes = []string{
+	"person",
+	"organization",
+	"location",
+	"concept",
+	"event",
+	"work_of_art",
+	"date_time",
+}
 
 type Config struct {
 	HTTPPort   string
@@ -40,6 +55,17 @@ type Config struct {
 	AnthropicModel   string
 	OpenAIAPIKey     string
 	OpenAIEmbedModel string
+	// Entity extraction
+	// EntityTypes is the closed-but-broad, domain-agnostic set of entity
+	// types the extractor is allowed to emit. It is config, not code: add
+	// or remove a type by changing ENTITY_TYPES, no migration required.
+	EntityTypes []string
+	// EntityExtractorScript is the path to the Python script the gliner
+	// adapter invokes via os/exec to run local spaCy+GLiNER extraction.
+	EntityExtractorScript string
+	// EntityExtractorPython is the Python interpreter used to run
+	// EntityExtractorScript.
+	EntityExtractorPython string
 }
 
 func Load() *Config {
@@ -69,6 +95,10 @@ func Load() *Config {
 		AnthropicModel:    getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
 		OpenAIAPIKey:      getEnv("OPENAI_API_KEY", ""),
 		OpenAIEmbedModel:  getEnv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
+
+		EntityTypes:           getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
+		EntityExtractorScript: getEnv("ENTITY_EXTRACTOR_SCRIPT", "scripts/extract_entities.py"),
+		EntityExtractorPython: getEnv("ENTITY_EXTRACTOR_PYTHON", "python3"),
 	}
 }
 
@@ -77,4 +107,24 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getEntityTypes reads a comma-separated list of entity types from the
+// named env var, trimming whitespace and dropping empty entries. Falls back
+// to fallback when the env var is unset or empty after trimming.
+func getEntityTypes(key string, fallback []string) []string {
+	raw := os.Getenv(key)
+	if strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if t := strings.TrimSpace(part); t != "" {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }
