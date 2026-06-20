@@ -13,10 +13,12 @@ export const api = createClient<paths>({
   },
 })
 
-// Attach the Authorization header before every request.
+// Attach the Authorization header before every request. The token comes
+// from the active Clerk session (see lib/auth.ts) and is fetched fresh on
+// every request — Clerk caches/refreshes it internally, so this is cheap.
 api.use({
-  onRequest({ request }) {
-    const token = getToken()
+  async onRequest({ request }) {
+    const token = await getToken()
     if (token) {
       request.headers.set('Authorization', `Bearer ${token}`)
     }

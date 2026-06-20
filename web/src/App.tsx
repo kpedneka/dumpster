@@ -8,7 +8,11 @@ import { KBDetailPage } from '@/pages/KBDetailPage'
 import { SearchPage } from '@/pages/SearchPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, isLoaded } = useAuth()
+  // Wait for Clerk to resolve the initial session before deciding whether
+  // to redirect, so a signed-in user isn't bounced to /login during the
+  // brief window before the session loads.
+  if (!isLoaded) return null
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />
 }
 
