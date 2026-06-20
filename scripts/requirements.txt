@@ -1,0 +1,4 @@
+# Dependencies for scripts/extract_entities.py, the local entity-extraction
+# sidecar invoked by internal/entity/gliner via subprocess.
+spacy>=3.7,<4
+gliner>=0.2,<1
