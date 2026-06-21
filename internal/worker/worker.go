@@ -1,5 +1,6 @@
 // Package worker implements the background job runner that processes queued
-// document upload events.
+// document ingestion-pipeline events (chunking/embedding, entity
+// extraction, ...), each handled by its own Handler keyed by queue.JobType.
 package worker
 
 import (
@@ -26,19 +27,36 @@ type Config struct {
 	PollInterval time.Duration
 }
 
-// Worker pulls jobs from a Consumer and dispatches them to a Handler.
+// Worker pulls jobs from a Consumer and dispatches them to the Handler
+// registered for the job's Type. This keeps each pipeline stage (document
+// indexing, entity extraction, ...) independently re-runnable behind a
+// single queue/job-stage seam, without one stage's handler having to know
+// about the others.
 type Worker struct {
 	consumer queue.Consumer
-	handler  Handler
+	handlers map[queue.JobType]Handler
 	cfg      Config
 }
 
-// New creates a Worker that reads from consumer and dispatches to handler.
+// New creates a Worker that reads from consumer and dispatches every job to
+// handler. The handler is registered both under queue.JobTypeDocumentIndexing
+// and as the fallback for jobs with an empty Type (e.g. rows enqueued before
+// job typing existed), so existing single-handler callers keep working
+// unmodified. Use RegisterHandler to add handlers for additional job types.
 func New(consumer queue.Consumer, handler Handler, cfg Config) *Worker {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = time.Second
 	}
-	return &Worker{consumer: consumer, handler: handler, cfg: cfg}
+	w := &Worker{consumer: consumer, handlers: make(map[queue.JobType]Handler), cfg: cfg}
+	w.handlers[queue.JobTypeDocumentIndexing] = handler
+	w.handlers[queue.JobType("")] = handler
+	return w
+}
+
+// RegisterHandler wires handler to process jobs of the given type. It
+// overrides any handler previously registered for that type.
+func (w *Worker) RegisterHandler(jobType queue.JobType, handler Handler) {
+	w.handlers[jobType] = handler
 }
 
 // Run starts the worker loop. It blocks until ctx is cancelled, then returns
@@ -74,7 +92,16 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) process(ctx context.Context, job *queue.Job) {
-	if err := w.handler.Handle(ctx, job); err != nil {
+	handler, ok := w.handlers[job.Type]
+	if !ok {
+		log.Printf("worker: no handler registered for job %s type %q; nacking", job.ID, job.Type)
+		if _, nackErr := w.consumer.Nack(ctx, job.ID, errors.New("worker: no handler for job type "+string(job.Type))); nackErr != nil {
+			log.Printf("worker: nack %s: %v", job.ID, nackErr)
+		}
+		return
+	}
+
+	if err := handler.Handle(ctx, job); err != nil {
 		log.Printf("worker: job %s failed (attempt %d/%d): %v", job.ID, job.Attempts+1, job.MaxAttempts, err)
 		deadLettered, nackErr := w.consumer.Nack(ctx, job.ID, err)
 		if nackErr != nil {
@@ -83,7 +110,7 @@ func (w *Worker) process(ctx context.Context, job *queue.Job) {
 		}
 		if deadLettered {
 			log.Printf("worker: job %s dead-lettered after %d attempts", job.ID, job.MaxAttempts)
-			w.handler.OnFailed(ctx, job)
+			handler.OnFailed(ctx, job)
 		}
 		return
 	}

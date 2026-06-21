@@ -17,6 +17,14 @@ func TestPublishDocumentUploaded(t *testing.T) {
 	}
 }
 
+func TestPublishEntityExtraction(t *testing.T) {
+	p := noop.New()
+	err := p.PublishEntityExtraction(context.Background(), queue.EntityExtractionRequested{DocumentID: uuid.New()})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestImplementsPublisher(t *testing.T) {
 	var _ queue.Publisher = noop.New()
 }

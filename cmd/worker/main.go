@@ -11,8 +11,11 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/entity/gliner"
+	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
+	"github.com/kunalpednekar/dumpster/internal/queue"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
@@ -52,13 +55,25 @@ func main() {
 	q := qpg.New(pool)
 	docs := docpg.New(txRunner)
 	chunks := chunkpg.New(txRunner)
+	entities := entitypg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
 	embedder := openai.New(cfg.OpenAIAPIKey, cfg.OpenAIEmbedModel)
+	extractor := gliner.New(gliner.Config{
+		PythonPath: cfg.EntityExtractorPython,
+		ScriptPath: cfg.EntityExtractorScript,
+	})
 
-	h := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder)
-	w := worker.New(q, h, worker.Config{})
+	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
+		WithEntityExtractionPublisher(q)
+	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, cfg.EntityTypes)
 
-	logger.Info("worker starting", "db_host", cfg.DBHost, "db_name", cfg.DBName)
+	w := worker.New(q, docHandler, worker.Config{})
+	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
+
+	logger.Info("worker starting",
+		"db_host", cfg.DBHost, "db_name", cfg.DBName,
+		"entity_types", cfg.EntityTypes,
+	)
 	if err := w.Run(ctx); err != nil {
 		logger.Info("worker stopped", "reason", err)
 	}

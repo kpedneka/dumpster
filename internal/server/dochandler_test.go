@@ -42,6 +42,10 @@ func (p *failPublisher) PublishDocumentUploaded(_ context.Context, _ queue.Docum
 	return errors.New("queue unavailable")
 }
 
+func (p *failPublisher) PublishEntityExtraction(_ context.Context, _ queue.EntityExtractionRequested) error {
+	return errors.New("queue unavailable")
+}
+
 func TestDocUpload(t *testing.T) {
 	deps, kbRepo, _, obj, pub := defaultDeps()
 	router := NewRouter(deps)
