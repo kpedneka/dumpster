@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Credentials and connection strings are loaded from .env then .env.local
 # (.env.local values override .env for the same key).
 # Neither file is required — missing files are skipped.
