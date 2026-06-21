@@ -13,6 +13,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/llm/mock"
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	queuemem "github.com/kunalpednekar/dumpster/internal/queue/memory"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 )
@@ -204,4 +205,45 @@ func makeText(n int) string {
 		b[i] = byte('a' + i%26)
 	}
 	return string(b)
+}
+
+func TestDocumentHandler_Handle_PublishesEntityExtractionOnIndexed(t *testing.T) {
+	docs := docmem.New()
+	objects := objmock.New()
+	chunks := chunkmem.New()
+	publisher := queuemem.New()
+
+	content := makeText(50)
+	job, userID := makeDocJob(t, docs, objects, document.StatusPending, content)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), mock.NewEmbedder(testDims)).
+		WithEntityExtractionPublisher(publisher)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	events := publisher.EntityExtractionEvents()
+	if len(events) != 1 {
+		t.Fatalf("entity extraction events: got %d, want 1", len(events))
+	}
+	if events[0].DocumentID != job.DocumentID || events[0].UserID != userID {
+		t.Errorf("unexpected event: %+v", events[0])
+	}
+}
+
+func TestDocumentHandler_Handle_NilPublisher_NoPanic(t *testing.T) {
+	docs := docmem.New()
+	objects := objmock.New()
+	chunks := chunkmem.New()
+
+	content := makeText(20)
+	job, userID := makeDocJob(t, docs, objects, document.StatusPending, content)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// No WithEntityExtractionPublisher call: publisher stays nil.
+	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), mock.NewEmbedder(testDims))
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
 }

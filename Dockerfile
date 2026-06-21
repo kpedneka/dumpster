@@ -17,5 +17,21 @@ COPY --from=builder /bin/worker /bin/worker
 FROM runtime AS api
 ENTRYPOINT ["/bin/api"]
 
-FROM runtime AS worker
+# worker also needs a local Python environment: it shells out to
+# scripts/extract_entities.py (internal/entity/gliner) to run spaCy+GLiNER
+# entity extraction locally, the entire point being to avoid a per-document
+# LLM call. This is the only place the Python ML stack is installed.
+#
+# Built from python:3.11-slim (Debian/glibc), not the Alpine runtime image:
+# PyTorch (a GLiNER dependency) does not publish musl/Alpine wheels, so
+# installing it there forces pip to compile from source or fail outright.
+FROM python:3.11-slim AS worker
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /bin/worker /bin/worker
+COPY scripts/requirements.txt /app/scripts/requirements.txt
+RUN pip install --no-cache-dir -r /app/scripts/requirements.txt
+COPY scripts/extract_entities.py /app/scripts/extract_entities.py
+ENV ENTITY_EXTRACTOR_PYTHON=python3
+ENV ENTITY_EXTRACTOR_SCRIPT=/app/scripts/extract_entities.py
 ENTRYPOINT ["/bin/worker"]

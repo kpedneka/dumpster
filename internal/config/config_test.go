@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -16,6 +17,41 @@ func TestLoad_defaults(t *testing.T) {
 	}
 	if c.DBName != "dumpster" {
 		t.Errorf("DBName: got %q, want %q", c.DBName, "dumpster")
+	}
+	if !reflect.DeepEqual(c.EntityTypes, defaultEntityTypes) {
+		t.Errorf("EntityTypes: got %v, want %v", c.EntityTypes, defaultEntityTypes)
+	}
+	if c.EntityExtractorScript != "scripts/extract_entities.py" {
+		t.Errorf("EntityExtractorScript: got %q, want %q", c.EntityExtractorScript, "scripts/extract_entities.py")
+	}
+}
+
+func TestLoad_entityTypesFromEnv(t *testing.T) {
+	t.Setenv("ENTITY_TYPES", "person, organization ,custom_type")
+
+	c := Load()
+
+	want := []string{"person", "organization", "custom_type"}
+	if !reflect.DeepEqual(c.EntityTypes, want) {
+		t.Errorf("EntityTypes: got %v, want %v", c.EntityTypes, want)
+	}
+}
+
+func TestGetEntityTypes_fallbackOnEmpty(t *testing.T) {
+	t.Setenv("ENTITY_TYPES_EMPTY_TEST", "  ,  ,")
+	fallback := []string{"a", "b"}
+	if got := getEntityTypes("ENTITY_TYPES_EMPTY_TEST", fallback); !reflect.DeepEqual(got, fallback) {
+		t.Errorf("got %v, want fallback %v", got, fallback)
+	}
+}
+
+func TestGetEntityTypes_unset(t *testing.T) {
+	if err := os.Unsetenv("ENTITY_TYPES_UNSET_TEST"); err != nil {
+		t.Fatal(err)
+	}
+	fallback := []string{"a", "b"}
+	if got := getEntityTypes("ENTITY_TYPES_UNSET_TEST", fallback); !reflect.DeepEqual(got, fallback) {
+		t.Errorf("got %v, want fallback %v", got, fallback)
 	}
 }
 
@@ -39,5 +75,19 @@ func TestGetEnv_fallback(t *testing.T) {
 	}
 	if got := getEnv("NONEXISTENT_VAR", "default"); got != "default" {
 		t.Errorf("got %q, want %q", got, "default")
+	}
+}
+
+func TestLoad_clerkFromEnv(t *testing.T) {
+	t.Setenv("CLERK_SECRET_KEY", "sk_test_abc")
+	t.Setenv("CLERK_WEBHOOK_SECRET", "whsec_abc")
+
+	c := Load()
+
+	if c.ClerkSecretKey != "sk_test_abc" {
+		t.Errorf("ClerkSecretKey: got %q, want %q", c.ClerkSecretKey, "sk_test_abc")
+	}
+	if c.ClerkWebhookSecret != "whsec_abc" {
+		t.Errorf("ClerkWebhookSecret: got %q, want %q", c.ClerkWebhookSecret, "whsec_abc")
 	}
 }

@@ -16,6 +16,11 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: >-
+        A Clerk session token, obtained client-side via the Clerk SDK
+        after sign-up/sign-in (including social providers). The API
+        verifies it against Clerk and maps it to a local user record;
+        there is no longer an /auth/register or /auth/login endpoint.
 
   schemas:
     KnowledgeBase:
@@ -123,22 +128,6 @@ components:
           nullable: true
       required: [items]
 
-    AuthResponse:
-      type: object
-      properties:
-        token:
-          type: string
-        user:
-          type: object
-          properties:
-            id:
-              type: string
-              format: uuid
-            email:
-              type: string
-          required: [id, email]
-      required: [token, user]
-
     Error:
       type: object
       properties:
@@ -147,80 +136,6 @@ components:
       required: [error]
 
 paths:
-  /auth/register:
-    post:
-      summary: Register a new user
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  format: email
-                password:
-                  type: string
-              required: [email, password]
-      responses:
-        "201":
-          description: User created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthResponse"
-        "400":
-          description: Missing or invalid fields
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "409":
-          description: Email already registered
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /auth/login:
-    post:
-      summary: Authenticate and receive a JWT
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  format: email
-                password:
-                  type: string
-              required: [email, password]
-      responses:
-        "200":
-          description: Login successful
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthResponse"
-        "400":
-          description: Missing or invalid fields
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          description: Invalid credentials
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
   /healthz:
     get:
       summary: Health check

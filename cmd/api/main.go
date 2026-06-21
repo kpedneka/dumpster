@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
-	"time"
 
+	"github.com/kunalpednekar/dumpster/internal/auth/clerk"
 	authpg "github.com/kunalpednekar/dumpster/internal/auth/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
@@ -75,20 +74,15 @@ func main() {
 	answerer := search.NewAnswerer(generator)
 	searcher := search.New(retriever, answerer)
 
-	jwtTTL := 24 * time.Hour
-	if h, err := strconv.Atoi(cfg.JWTExpiryHours); err == nil && h > 0 {
-		jwtTTL = time.Duration(h) * time.Hour
-	}
-
 	deps := server.Deps{
-		KBs:       kbpg.New(txRunner),
-		Docs:      docpg.New(txRunner),
-		Objects:   obj,
-		Publisher: qpg.New(pool),
-		Searcher:  searcher,
-		Users:     authpg.New(pool),
-		JWTSecret: cfg.JWTSecret,
-		JWTTTL:    jwtTTL,
+		KBs:           kbpg.New(txRunner),
+		Docs:          docpg.New(txRunner),
+		Objects:       obj,
+		Publisher:     qpg.New(pool),
+		Searcher:      searcher,
+		Verifier:      clerk.New(cfg.ClerkSecretKey),
+		Users:         authpg.New(pool),
+		WebhookSecret: cfg.ClerkWebhookSecret,
 	}
 
 	router := server.NewRouter(deps)

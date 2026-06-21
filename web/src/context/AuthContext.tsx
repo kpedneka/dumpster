@@ -1,56 +1,53 @@
-import React, { createContext, useCallback, useContext, useState } from 'react'
+import React, { createContext, useContext, useEffect } from 'react'
+import { useAuth as useClerkAuth, useUser } from '@clerk/clerk-react'
 import { useQueryClient } from '@tanstack/react-query'
-import { clearSession, getToken, getUser, saveSession, type AuthUser } from '@/lib/auth'
-import { api } from '@/api/client'
+import { setTokenGetter, type AuthUser } from '@/lib/auth'
 import { clearSearchState } from '@/lib/search-state'
 
 interface AuthContextValue {
   user: AuthUser | null
   isAuthenticated: boolean
-  login: (email: string, password: string) => Promise<void>
-  register: (email: string, password: string) => Promise<void>
-  logout: () => void
+  /** True until Clerk has resolved the initial session state. */
+  isLoaded: boolean
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+// Sign-up/sign-in are handled by Clerk's <SignIn>/<SignUp> components
+// (rendered in LoginPage/RegisterPage), not by imperative email/password
+// calls here — Clerk owns credential collection, MFA, and social-provider
+// flows. AuthProvider's job is to expose the resulting session in the same
+// shape downstream consumers (RequireAuth, page components) already use,
+// and to bridge the session's token getter to the non-React API client.
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(getUser)
+  const { isLoaded, isSignedIn, getToken, signOut } = useClerkAuth()
+  const { user: clerkUser } = useUser()
   const queryClient = useQueryClient()
 
-  const login = useCallback(async (email: string, password: string) => {
-    const { data, error } = await api.POST('/auth/login', {
-      body: { email, password },
-    })
-    if (error || !data) {
-      throw new Error((error as { error?: string } | undefined)?.error ?? 'Login failed')
-    }
-    saveSession(data.token, data.user)
-    setUser(data.user)
-  }, [])
+  // Keep lib/auth.ts's module-level token getter in sync with the current
+  // session so api/client.ts and api/upload.ts (outside the React tree)
+  // can always fetch a fresh token on demand.
+  useEffect(() => {
+    setTokenGetter(isSignedIn ? getToken : null)
+    return () => setTokenGetter(null)
+  }, [isSignedIn, getToken])
 
-  const register = useCallback(async (email: string, password: string) => {
-    const { data, error } = await api.POST('/auth/register', {
-      body: { email, password },
-    })
-    if (error || !data) {
-      throw new Error((error as { error?: string } | undefined)?.error ?? 'Registration failed')
-    }
-    saveSession(data.token, data.user)
-    setUser(data.user)
-  }, [])
+  const user: AuthUser | null =
+    isSignedIn && clerkUser
+      ? { id: clerkUser.id, email: clerkUser.primaryEmailAddress?.emailAddress ?? '' }
+      : null
 
-  const logout = useCallback(() => {
-    clearSession()
+  const logout = async () => {
+    await signOut()
     // A same-tab account switch must never render the previous tenant's
     // cached KBs/documents/search results before the next user's data loads.
     queryClient.clear()
     clearSearchState()
-    setUser(null)
-  }, [queryClient])
+  }
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, register, logout }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!isSignedIn, isLoaded, logout }}>
       {children}
     </AuthContext.Provider>
   )
@@ -62,6 +59,3 @@ export function useAuth(): AuthContextValue {
   if (!ctx) throw new Error('useAuth must be used inside AuthProvider')
   return ctx
 }
-
-// eslint-disable-next-line react-refresh/only-export-components -- re-export for consumers that only need the token, not the full context
-export { getToken }

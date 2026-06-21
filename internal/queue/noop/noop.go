@@ -21,4 +21,10 @@ func (p *Publisher) PublishDocumentUploaded(_ context.Context, evt queue.Documen
 	return nil
 }
 
+// PublishEntityExtraction logs the event instead of enqueuing it.
+func (p *Publisher) PublishEntityExtraction(_ context.Context, evt queue.EntityExtractionRequested) error {
+	log.Printf("queue: EntityExtractionRequested{document_id=%s user_id=%s}", evt.DocumentID, evt.UserID)
+	return nil
+}
+
 var _ queue.Publisher = (*Publisher)(nil)

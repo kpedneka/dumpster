@@ -69,8 +69,8 @@ export function Sidebar() {
     if (newName.trim()) createMutation.mutate(newName.trim())
   }
 
-  function handleLogout() {
-    logout()
+  async function handleLogout() {
+    await logout()
     navigate('/login')
   }
 
