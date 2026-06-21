@@ -6,7 +6,7 @@ COVERAGE_THRESHOLD := 80
 # excluded from the unit-test coverage gate. They are exercised separately
 # by integration tests that run against live infrastructure.
 # This list must stay in sync with .github/workflows/ci.yml.
-UNIT_COVERPKG := ./internal/auth,./internal/config,./internal/server,./internal/llm,./internal/llm/mock,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock
+UNIT_COVERPKG := ./internal/auth,./internal/auth/mock,./internal/config,./internal/server,./internal/llm,./internal/llm/mock,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock
 
 # UNIT_TESTPKG: test packages that exercise UNIT_COVERPKG (excludes pgstore and other infra).
 UNIT_TESTPKG := ./internal/auth ./internal/config ./internal/server ./internal/llm \
