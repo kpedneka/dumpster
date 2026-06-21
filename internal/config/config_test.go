@@ -77,3 +77,17 @@ func TestGetEnv_fallback(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "default")
 	}
 }
+
+func TestLoad_clerkFromEnv(t *testing.T) {
+	t.Setenv("CLERK_SECRET_KEY", "sk_test_abc")
+	t.Setenv("CLERK_WEBHOOK_SECRET", "whsec_abc")
+
+	c := Load()
+
+	if c.ClerkSecretKey != "sk_test_abc" {
+		t.Errorf("ClerkSecretKey: got %q, want %q", c.ClerkSecretKey, "sk_test_abc")
+	}
+	if c.ClerkWebhookSecret != "whsec_abc" {
+		t.Errorf("ClerkWebhookSecret: got %q, want %q", c.ClerkWebhookSecret, "whsec_abc")
+	}
+}

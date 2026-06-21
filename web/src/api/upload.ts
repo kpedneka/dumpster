@@ -14,7 +14,7 @@ export async function uploadDocument(kbId: string, file: File): Promise<Document
   const formData = new FormData()
   formData.append('file', file)
 
-  const token = getToken()
+  const token = await getToken()
   const res = await fetch(`${BASE_URL}/kbs/${kbId}/documents`, {
     method: 'POST',
     headers: token ? { Authorization: `Bearer ${token}` } : {},
