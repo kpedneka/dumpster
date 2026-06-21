@@ -7,6 +7,7 @@ import { KBTabs } from '@/components/KBTabs'
 import { CitationMarker } from '@/components/CitationMarker'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { getDraftQuery, setDraftQuery, getSubmittedQuery, setSubmittedQuery } from '@/lib/search-state'
 import type { components } from '@/api/schema.d.ts'
 
 type Citation = components['schemas']['Citation']
@@ -36,8 +37,8 @@ function describeError(error: unknown): string {
 
 export function SearchPage() {
   const { kbId } = useParams<{ kbId: string }>()
-  const [query, setQuery] = useState('')
-  const [submittedQuery, setSubmittedQuery] = useState('')
+  const [query, setQuery] = useState(() => getDraftQuery(kbId!))
+  const [submittedQuery, setSubmittedQueryState] = useState(() => getSubmittedQuery(kbId!))
 
   const { data: kb } = useQuery({
     queryKey: ['kbs', kbId],
@@ -67,9 +68,18 @@ export function SearchPage() {
     enabled: !!kbId && !!submittedQuery,
   })
 
+  function handleQueryChange(value: string) {
+    setQuery(value)
+    setDraftQuery(kbId!, value)
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (query.trim()) setSubmittedQuery(query.trim())
+    const trimmed = query.trim()
+    if (trimmed) {
+      setSubmittedQueryState(trimmed)
+      setSubmittedQuery(kbId!, trimmed)
+    }
   }
 
   return (
@@ -80,7 +90,7 @@ export function SearchPage() {
       <form onSubmit={handleSubmit} className="mb-8 flex gap-2">
         <Input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => handleQueryChange(e.target.value)}
           placeholder="Ask a question about this knowledge base…"
         />
         <Button type="submit" disabled={!query.trim() || isFetching}>

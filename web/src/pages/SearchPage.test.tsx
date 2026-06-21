@@ -30,6 +30,7 @@ beforeEach(() => {
     data: { id: 'kb-1', name: 'Test KB' },
     error: undefined,
   } as never)
+  sessionStorage.clear()
 })
 
 describe('SearchPage', () => {
@@ -94,6 +95,56 @@ describe('SearchPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText(/search failed/i)).toBeInTheDocument()
+    })
+  })
+
+  describe('state persistence across remounts', () => {
+    it('restores an in-progress, unsubmitted query after the component remounts', async () => {
+      const user = userEvent.setup()
+      const { unmount } = renderSearchPage()
+
+      await user.type(screen.getByRole('textbox'), 'mid-typing query')
+      unmount()
+
+      renderSearchPage()
+      expect(screen.getByRole('textbox')).toHaveValue('mid-typing query')
+    })
+
+    it('restores a submitted query and its results after the component remounts', async () => {
+      vi.mocked(api.POST).mockResolvedValue({
+        data: {
+          summary: 'Paris is the capital of France [1].',
+          citations: [{ number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 10 }],
+        },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      const { unmount } = renderSearchPage()
+
+      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.click(screen.getByRole('button', { name: /search/i }))
+      await waitFor(() => {
+        expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
+      })
+      unmount()
+
+      renderSearchPage()
+      expect(screen.getByRole('textbox')).toHaveValue('What is the capital of France?')
+      await waitFor(() => {
+        expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
+      })
+    })
+
+    it('keeps search state isolated between different knowledge bases', async () => {
+      const user = userEvent.setup()
+      const { unmount } = renderSearchPage('kb-1')
+
+      await user.type(screen.getByRole('textbox'), 'kb-1 query')
+      unmount()
+
+      renderSearchPage('kb-2')
+      expect(screen.getByRole('textbox')).toHaveValue('')
     })
   })
 

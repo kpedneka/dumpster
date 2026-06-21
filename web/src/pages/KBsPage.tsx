@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/hooks/use-toast'
+import { useDeleteKB } from '@/hooks/use-delete-kb'
 import type { components } from '@/api/schema.d.ts'
 
 type KB = components['schemas']['KnowledgeBase']
@@ -64,17 +65,7 @@ export function KBsPage() {
     onError: () => toast({ variant: 'destructive', title: 'Failed to create knowledge base' }),
   })
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await api.DELETE('/kbs/{id}', { params: { path: { id } } })
-      if (error) throw error
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['kbs'] })
-      toast({ title: 'Knowledge base deleted' })
-    },
-    onError: () => toast({ variant: 'destructive', title: 'Failed to delete knowledge base' }),
-  })
+  const deleteMutation = useDeleteKB()
 
   function handleCreate(e: React.FormEvent) {
     e.preventDefault()

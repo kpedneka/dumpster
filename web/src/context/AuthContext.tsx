@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect } from 'react'
 import { useAuth as useClerkAuth, useUser } from '@clerk/clerk-react'
 import { useQueryClient } from '@tanstack/react-query'
 import { setTokenGetter, type AuthUser } from '@/lib/auth'
+import { clearSearchState } from '@/lib/search-state'
 
 interface AuthContextValue {
   user: AuthUser | null
@@ -42,6 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // A same-tab account switch must never render the previous tenant's
     // cached KBs/documents/search results before the next user's data loads.
     queryClient.clear()
+    clearSearchState()
   }
 
   return (

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './AuthContext'
 import { getToken } from '@/lib/auth'
+import { setDraftQuery, getDraftQuery } from '@/lib/search-state'
 
 const mockUseAuth = vi.fn()
 const mockUseUser = vi.fn()
@@ -38,6 +39,7 @@ function renderWithProvider() {
 beforeEach(() => {
   mockUseAuth.mockReset()
   mockUseUser.mockReset()
+  sessionStorage.clear()
 })
 
 describe('AuthProvider', () => {
@@ -111,6 +113,23 @@ describe('AuthProvider', () => {
     expect(signOut).toHaveBeenCalled()
     await waitFor(() => {
       expect(queryClient.getQueryData(['kbs'])).toBeUndefined()
+    })
+  })
+
+  it('clears search sessionStorage on logout so the next user does not see a previous draft query', async () => {
+    setDraftQuery('kb-1', 'user 1 draft query')
+    const signOut = vi.fn().mockResolvedValue(undefined)
+    mockUseAuth.mockReturnValue({ isLoaded: true, isSignedIn: true, getToken: vi.fn(), signOut })
+    mockUseUser.mockReturnValue({
+      user: { id: 'user_123', primaryEmailAddress: { emailAddress: 'alice@example.com' } },
+    })
+
+    const { getCaptured } = renderWithProvider()
+
+    await getCaptured().logout()
+
+    await waitFor(() => {
+      expect(getDraftQuery('kb-1')).toBe('')
     })
   })
 
