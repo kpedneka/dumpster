@@ -12,6 +12,7 @@ import (
 	authmock "github.com/kunalpednekar/dumpster/internal/auth/mock"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
+	emailmock "github.com/kunalpednekar/dumpster/internal/email/mock"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	kbmem "github.com/kunalpednekar/dumpster/internal/kb/memory"
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
@@ -78,6 +79,7 @@ func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.St
 		Searcher:  searchmock.NewSearcher(search.Result{}),
 		Verifier:  testVerifier{},
 		Users:     newTestUserStore(),
+		Emails:    emailmock.New(),
 	}
 }
 

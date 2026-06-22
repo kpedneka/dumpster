@@ -11,6 +11,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/email/resend"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
@@ -82,6 +83,7 @@ func main() {
 		Searcher:      searcher,
 		Verifier:      clerk.New(cfg.ClerkSecretKey),
 		Users:         authpg.New(pool),
+		Emails:        resend.New(cfg.ResendAPIKey, cfg.ResendFromAddr),
 		WebhookSecret: cfg.ClerkWebhookSecret,
 	}
 

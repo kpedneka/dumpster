@@ -78,6 +78,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/account/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the authenticated user's demo-account TTL status
+         * @description Backs the in-app day-6 warning banner. warning_active becomes true once the account enters its day-6 TTL warning window; deletes_at is when the account will be hard-deleted by the daily cleanup sweep.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Account TTL status */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            warning_active: boolean;
+                            /** Format: date-time */
+                            deletes_at: string;
+                        };
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs": {
         parameters: {
             query?: never;

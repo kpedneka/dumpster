@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	emailmock "github.com/kunalpednekar/dumpster/internal/email/mock"
 )
 
 const testWebhookSecretRaw = "supersecretvalue1234567890123456"
@@ -78,6 +80,71 @@ func TestWebhook_missingHeaders(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status: got %d, want 400", w.Code)
+	}
+}
+
+func TestWebhook_userCreated_sendsWelcomeEmail(t *testing.T) {
+	deps, _, _, _, _ := defaultDeps()
+	deps.WebhookSecret = testWebhookSecret()
+	emails := emailmock.New()
+	deps.Emails = emails
+	router := NewRouter(deps)
+
+	body := `{"type":"user.created","data":{"id":"user_123","primary_email_address_id":"idn_1",` +
+		`"email_addresses":[{"id":"idn_1","email_address":"alice@example.com"}]}}`
+	id, ts := "msg_1", "1700000000"
+	sig := signWebhook(id, ts, body)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, webhookRequest(body, id, ts, sig))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if emails.SentTo("alice@example.com") != 1 {
+		t.Errorf("expected 1 welcome email sent to alice@example.com, got %d", emails.SentTo("alice@example.com"))
+	}
+}
+
+func TestWebhook_otherEventTypes_doNotSendEmail(t *testing.T) {
+	deps, _, _, _, _ := defaultDeps()
+	deps.WebhookSecret = testWebhookSecret()
+	emails := emailmock.New()
+	deps.Emails = emails
+	router := NewRouter(deps)
+
+	for _, eventType := range []string{"user.updated", "user.deleted", "session.created"} {
+		body := `{"type":"` + eventType + `","data":{"id":"user_123","primary_email_address_id":"idn_1",` +
+			`"email_addresses":[{"id":"idn_1","email_address":"alice@example.com"}]}}`
+		id, ts := "msg_"+eventType, "1700000000"
+		sig := signWebhook(id, ts, body)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, webhookRequest(body, id, ts, sig))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status: got %d, want 200", eventType, w.Code)
+		}
+	}
+	if len(emails.Sent()) != 0 {
+		t.Errorf("expected no emails sent for non-user.created events, got %d", len(emails.Sent()))
+	}
+}
+
+func TestWebhook_userCreated_malformedDataDoesNotPanic(t *testing.T) {
+	deps, _, _, _, _ := defaultDeps()
+	deps.WebhookSecret = testWebhookSecret()
+	router := NewRouter(deps)
+
+	body := `{"type":"user.created","data":"not-an-object"}`
+	id, ts := "msg_1", "1700000000"
+	sig := signWebhook(id, ts, body)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, webhookRequest(body, id, ts, sig))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 }
 

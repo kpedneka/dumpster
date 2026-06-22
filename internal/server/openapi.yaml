@@ -163,6 +163,34 @@ paths:
               schema:
                 type: string
 
+  /account/status:
+    get:
+      summary: Get the authenticated user's demo-account TTL status
+      description: >-
+        Backs the in-app day-6 warning banner. warning_active becomes true
+        once the account enters its day-6 TTL warning window; deletes_at is
+        when the account will be hard-deleted by the daily cleanup sweep.
+      responses:
+        "200":
+          description: Account TTL status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  warning_active:
+                    type: boolean
+                  deletes_at:
+                    type: string
+                    format: date-time
+                required: [warning_active, deletes_at]
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /kbs:
     get:
       summary: List knowledge bases

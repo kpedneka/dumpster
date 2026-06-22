@@ -52,6 +52,10 @@ type Config struct {
 	// a webhook signing secret to authenticate Clerk's lifecycle webhooks.
 	ClerkSecretKey     string
 	ClerkWebhookSecret string
+	// Email — transactional email for the demo account lifecycle (welcome
+	// and TTL-warning messages), sent via Resend.
+	ResendAPIKey   string
+	ResendFromAddr string
 	// LLM
 	AnthropicAPIKey  string
 	AnthropicModel   string
@@ -93,6 +97,8 @@ func Load() *Config {
 		S3UsePathStyle:     getEnv("S3_USE_PATH_STYLE", "true") == "true",
 		ClerkSecretKey:     getEnv("CLERK_SECRET_KEY", ""),
 		ClerkWebhookSecret: getEnv("CLERK_WEBHOOK_SECRET", ""),
+		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
+		ResendFromAddr:     getEnv("RESEND_FROM_ADDR", "noreply@example.com"),
 		AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:     getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
 		OpenAIAPIKey:       getEnv("OPENAI_API_KEY", ""),
