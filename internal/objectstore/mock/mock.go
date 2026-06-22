@@ -15,6 +15,9 @@ import (
 type Store struct {
 	mu      sync.RWMutex
 	objects map[string][]byte
+	// DeleteErrFor, when set for a key, is returned by Delete for that key
+	// instead of removing it, so tests can exercise partial-failure paths.
+	DeleteErrFor map[string]error
 }
 
 func New() *Store {
@@ -44,8 +47,11 @@ func (s *Store) Get(_ context.Context, key string) (io.ReadCloser, error) {
 
 func (s *Store) Delete(_ context.Context, key string) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err, ok := s.DeleteErrFor[key]; ok {
+		return err
+	}
 	delete(s.objects, key)
-	s.mu.Unlock()
 	return nil
 }
 

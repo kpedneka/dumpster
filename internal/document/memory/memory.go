@@ -53,6 +53,18 @@ func (r *Repository) ListByKB(_ context.Context, userID, kbID uuid.UUID) ([]*doc
 	return out, nil
 }
 
+func (r *Repository) ListByUserID(_ context.Context, userID uuid.UUID) ([]*document.Document, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*document.Document
+	for _, d := range r.rows {
+		if d.UserID == userID {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 func (r *Repository) UpdateStatus(_ context.Context, userID, id uuid.UUID, status document.Status) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

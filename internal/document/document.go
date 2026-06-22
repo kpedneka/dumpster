@@ -41,6 +41,10 @@ type Repository interface {
 	Create(ctx context.Context, d *Document) (*Document, error)
 	Get(ctx context.Context, userID, id uuid.UUID) (*Document, error)
 	ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*Document, error)
+	// ListByUserID returns every document a user owns across all of their
+	// knowledge bases. Used by account cleanup to find every R2 object that
+	// must be removed before the user's rows are deleted.
+	ListByUserID(ctx context.Context, userID uuid.UUID) ([]*Document, error)
 	UpdateStatus(ctx context.Context, userID, id uuid.UUID, status Status) error
 	Delete(ctx context.Context, userID, id uuid.UUID) error
 }
