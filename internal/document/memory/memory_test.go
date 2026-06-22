@@ -98,6 +98,33 @@ func TestListByKB_Empty(t *testing.T) {
 	}
 }
 
+func TestListByUserID(t *testing.T) {
+	r := memory.New()
+	userID := uuid.New()
+	seed(t, r, userID, uuid.New(), "a.txt")
+	seed(t, r, userID, uuid.New(), "b.txt") // different KB, same user
+	seed(t, r, uuid.New(), uuid.New(), "other.txt") // different user
+
+	docs, err := r.ListByUserID(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 2 {
+		t.Errorf("count: got %d, want 2", len(docs))
+	}
+}
+
+func TestListByUserID_Empty(t *testing.T) {
+	r := memory.New()
+	docs, err := r.ListByUserID(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("count: got %d, want 0", len(docs))
+	}
+}
+
 func TestUpdateStatus(t *testing.T) {
 	r := memory.New()
 	userID, kbID := uuid.New(), uuid.New()

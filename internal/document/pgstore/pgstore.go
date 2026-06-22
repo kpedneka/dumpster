@@ -93,6 +93,37 @@ func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*docume
 	return results, nil
 }
 
+func (s *Store) ListByUserID(ctx context.Context, userID uuid.UUID) ([]*document.Document, error) {
+	var results []*document.Document
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, kb_id, user_id, filename, s3_key, content_type, status, created_at, updated_at
+			 FROM documents WHERE user_id = $1 ORDER BY created_at DESC`,
+			userID,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d document.Document
+			if err := rows.Scan(
+				&d.ID, &d.KBID, &d.UserID,
+				&d.Filename, &d.S3Key, &d.ContentType,
+				&d.Status, &d.CreatedAt, &d.UpdatedAt,
+			); err != nil {
+				return err
+			}
+			results = append(results, &d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("document: list by user %v: %w", userID, err)
+	}
+	return results, nil
+}
+
 func (s *Store) UpdateStatus(ctx context.Context, userID, id uuid.UUID, status document.Status) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
