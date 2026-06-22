@@ -35,9 +35,9 @@ func (s *Store) GetOrCreateByClerkID(ctx context.Context, clerkUserID, email str
 	err := s.pool.QueryRow(ctx,
 		`INSERT INTO users (clerk_user_id, email) VALUES ($1, $2)
 		 ON CONFLICT (clerk_user_id) DO UPDATE SET clerk_user_id = users.clerk_user_id
-		 RETURNING id, clerk_user_id, email, created_at`,
+		 RETURNING id, clerk_user_id, email, created_at, warning_sent_at`,
 		clerkUserID, email,
-	).Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt)
+	).Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt, &u.WarningSentAt)
 	if err != nil {
 		return nil, fmt.Errorf("pgstore: get or create user: %w", err)
 	}
@@ -48,9 +48,9 @@ func (s *Store) GetOrCreateByClerkID(ctx context.Context, clerkUserID, email str
 func (s *Store) GetByClerkID(ctx context.Context, clerkUserID string) (*auth.User, error) {
 	var u auth.User
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, clerk_user_id, email, created_at FROM users WHERE clerk_user_id = $1`,
+		`SELECT id, clerk_user_id, email, created_at, warning_sent_at FROM users WHERE clerk_user_id = $1`,
 		clerkUserID,
-	).Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt)
+	).Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt, &u.WarningSentAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrUserNotFound
@@ -64,9 +64,9 @@ func (s *Store) GetByClerkID(ctx context.Context, clerkUserID string) (*auth.Use
 func (s *Store) GetByID(ctx context.Context, id uuid.UUID) (*auth.User, error) {
 	var u auth.User
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, clerk_user_id, email, created_at FROM users WHERE id = $1`,
+		`SELECT id, clerk_user_id, email, created_at, warning_sent_at FROM users WHERE id = $1`,
 		id,
-	).Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt)
+	).Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt, &u.WarningSentAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, auth.ErrUserNotFound
@@ -84,6 +84,39 @@ func (s *Store) DeleteByClerkID(ctx context.Context, clerkUserID string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM users WHERE clerk_user_id = $1`, clerkUserID)
 	if err != nil {
 		return fmt.Errorf("pgstore: delete user by clerk id: %w", err)
+	}
+	return nil
+}
+
+// ListForSweep returns every local user, with no tenant filter — see the
+// LocalUserStore interface doc for why this cross-tenant query is the one
+// legitimate exception to "every query filters by tenant".
+func (s *Store) ListForSweep(ctx context.Context) ([]*auth.User, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, clerk_user_id, email, created_at, warning_sent_at FROM users`)
+	if err != nil {
+		return nil, fmt.Errorf("pgstore: list users for sweep: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*auth.User
+	for rows.Next() {
+		var u auth.User
+		if err := rows.Scan(&u.ID, &u.ClerkUserID, &u.Email, &u.CreatedAt, &u.WarningSentAt); err != nil {
+			return nil, fmt.Errorf("pgstore: list users for sweep: %w", err)
+		}
+		users = append(users, &u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("pgstore: list users for sweep: %w", err)
+	}
+	return users, nil
+}
+
+// MarkWarningSent stamps warning_sent_at = now for id.
+func (s *Store) MarkWarningSent(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET warning_sent_at = NOW() WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("pgstore: mark warning sent for %s: %w", id, err)
 	}
 	return nil
 }

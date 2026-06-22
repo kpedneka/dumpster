@@ -15,6 +15,10 @@ type User struct {
 	ClerkUserID string
 	Email       string
 	CreatedAt   time.Time
+	// WarningSentAt is when the day-6 demo-account TTL warning email was
+	// sent, or nil if it hasn't been sent yet. Set by the account lifecycle
+	// sweep (internal/account.Sweep) to make repeated sweep runs idempotent.
+	WarningSentAt *time.Time
 }
 
 // LocalUserStore is the persistence boundary for the local user records
@@ -35,4 +39,11 @@ type LocalUserStore interface {
 	// DeleteByClerkID removes the local user mapped to clerkUserID, if any.
 	// Used by webhook-driven lifecycle handling; a no-op if no mapping exists.
 	DeleteByClerkID(ctx context.Context, clerkUserID string) error
+	// ListForSweep returns every local user, with no tenant filter. This is
+	// the one legitimate cross-tenant query in the app: it's used solely by
+	// the daily account-lifecycle sweep, which operates on the tenant
+	// membership table (users) itself rather than tenant-owned domain data.
+	ListForSweep(ctx context.Context) ([]*User, error)
+	// MarkWarningSent stamps WarningSentAt = now for id, idempotently.
+	MarkWarningSent(ctx context.Context, id uuid.UUID) error
 }

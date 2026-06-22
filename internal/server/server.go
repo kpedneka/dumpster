@@ -6,6 +6,7 @@ import (
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	"github.com/kunalpednekar/dumpster/internal/email"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
@@ -21,6 +22,7 @@ type Deps struct {
 	Searcher       search.Searcher
 	Verifier       auth.SessionVerifier // verifies Clerk session tokens
 	Users          auth.LocalUserStore  // maps Clerk identities to local app users
+	Emails         email.Sender         // sends lifecycle emails (welcome, etc.)
 	WebhookSecret  string               // Clerk webhook signing secret; "" disables the endpoint
 	MaxUploadBytes int64                // 0 defaults to 32 MiB
 }
@@ -35,12 +37,13 @@ func NewRouter(deps Deps) http.Handler {
 	mux.HandleFunc("GET /openapi.yaml", serveOpenAPI)
 
 	if deps.WebhookSecret != "" {
-		registerWebhookRoutes(mux, deps.WebhookSecret)
+		registerWebhookRoutes(mux, deps.WebhookSecret, deps.Emails)
 	}
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
 	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.MaxUploadBytes)
+	registerAccountRoutes(authed, deps.Users)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher)
 	}

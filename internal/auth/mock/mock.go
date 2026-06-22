@@ -6,6 +6,7 @@ package mock
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/auth"
@@ -111,6 +112,28 @@ func (s *UserStore) DeleteByClerkID(_ context.Context, clerkUserID string) error
 	}
 	delete(s.byClerk, clerkUserID)
 	delete(s.byID, u.ID)
+	return nil
+}
+
+func (s *UserStore) ListForSweep(_ context.Context) ([]*auth.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*auth.User, 0, len(s.byID))
+	for _, u := range s.byID {
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+func (s *UserStore) MarkWarningSent(_ context.Context, id uuid.UUID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.byID[id]
+	if !ok {
+		return auth.ErrUserNotFound
+	}
+	now := time.Now()
+	u.WarningSentAt = &now
 	return nil
 }
 

@@ -101,6 +101,63 @@ func TestUserStore_GetOrCreateByClerkID_error(t *testing.T) {
 	}
 }
 
+func TestUserStore_ListForSweep(t *testing.T) {
+	s := mock.NewUserStore()
+	u1, err := s.GetOrCreateByClerkID(context.Background(), "user_1", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u2, err := s.GetOrCreateByClerkID(context.Background(), "user_2", "b@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := s.ListForSweep(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("count: got %d, want 2", len(users))
+	}
+	found := map[uuid.UUID]bool{}
+	for _, u := range users {
+		found[u.ID] = true
+	}
+	if !found[u1.ID] || !found[u2.ID] {
+		t.Errorf("expected both seeded users in ListForSweep result, got %+v", users)
+	}
+}
+
+func TestUserStore_MarkWarningSent(t *testing.T) {
+	s := mock.NewUserStore()
+	u, err := s.GetOrCreateByClerkID(context.Background(), "user_1", "a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.WarningSentAt != nil {
+		t.Fatal("expected WarningSentAt to start nil")
+	}
+
+	if err := s.MarkWarningSent(context.Background(), u.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetByID(context.Background(), u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WarningSentAt == nil {
+		t.Error("expected WarningSentAt to be set after MarkWarningSent")
+	}
+}
+
+func TestUserStore_MarkWarningSent_notFound(t *testing.T) {
+	s := mock.NewUserStore()
+	if err := s.MarkWarningSent(context.Background(), uuid.New()); !errors.Is(err, auth.ErrUserNotFound) {
+		t.Errorf("got %v, want auth.ErrUserNotFound", err)
+	}
+}
+
 func TestUserStore_Seed(t *testing.T) {
 	s := mock.NewUserStore()
 	fixedID := uuid.New()
