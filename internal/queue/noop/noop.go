@@ -27,4 +27,10 @@ func (p *Publisher) PublishEntityExtraction(_ context.Context, evt queue.EntityE
 	return nil
 }
 
+// PublishEdgeExtraction logs the event instead of enqueuing it.
+func (p *Publisher) PublishEdgeExtraction(_ context.Context, evt queue.EdgeExtractionRequested) error {
+	log.Printf("queue: EdgeExtractionRequested{document_id=%s user_id=%s}", evt.DocumentID, evt.UserID)
+	return nil
+}
+
 var _ queue.Publisher = (*Publisher)(nil)

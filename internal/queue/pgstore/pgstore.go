@@ -61,6 +61,22 @@ func (s *Store) PublishEntityExtraction(ctx context.Context, evt queue.EntityExt
 	return nil
 }
 
+// PublishEdgeExtraction inserts a pending edge-extraction job for the given
+// document. This is a distinct job type from entity extraction so it can be
+// queued and re-run independently after an entity re-run completes.
+func (s *Store) PublishEdgeExtraction(ctx context.Context, evt queue.EdgeExtractionRequested) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO jobs (document_id, user_id, job_type)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
+		evt.DocumentID, evt.UserID, string(queue.JobTypeEdgeExtraction),
+	)
+	if err != nil {
+		return fmt.Errorf("queue: enqueue edge extraction for document %s: %w", evt.DocumentID, err)
+	}
+	return nil
+}
+
 // Dequeue claims the next available job using SELECT FOR UPDATE SKIP LOCKED.
 // Returns ErrNoJobs when no pending jobs are ready to run.
 func (s *Store) Dequeue(ctx context.Context) (*queue.Job, error) {
