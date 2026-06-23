@@ -13,6 +13,7 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/email/resend"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
+	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
@@ -80,6 +81,7 @@ func main() {
 		Docs:          docpg.New(txRunner),
 		Objects:       obj,
 		Publisher:     qpg.New(pool),
+		Manifest:      manifestpg.New(txRunner),
 		Searcher:      searcher,
 		Verifier:      clerk.New(cfg.ClerkSecretKey),
 		Users:         authpg.New(pool),

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/kb"
+	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 )
@@ -19,9 +20,24 @@ import (
 const defaultMaxUploadBytes int64 = 32 << 20 // 32 MiB
 
 // allowedContentTypes maps accepted file extensions to their MIME type.
+// PDF and image types are routed through the region-classification pipeline;
+// text/markdown continues through the plain-text chunking pipeline.
 var allowedContentTypes = map[string]string{
-	".txt": "text/plain",
-	".md":  "text/markdown",
+	".txt":  "text/plain",
+	".md":   "text/markdown",
+	".pdf":  "application/pdf",
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+}
+
+// regionClassificationTypes is the subset of allowedContentTypes that need
+// the region-classification pipeline (pdfplumber + VLM) instead of the
+// plain-text chunking pipeline.
+var regionClassificationTypes = map[string]bool{
+	"application/pdf": true,
+	"image/png":       true,
+	"image/jpeg":      true,
 }
 
 type docHandler struct {
@@ -29,6 +45,7 @@ type docHandler struct {
 	docRepo   document.Repository
 	objects   objectstore.ObjectStore
 	publisher queue.Publisher
+	manifest  manifest.Repository // nil when manifest not yet available
 	maxUpload int64
 }
 
@@ -38,6 +55,7 @@ func registerDocRoutes(
 	docRepo document.Repository,
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
+	manifestRepo manifest.Repository,
 	maxUploadBytes int64,
 ) {
 	if maxUploadBytes <= 0 {
@@ -48,6 +66,7 @@ func registerDocRoutes(
 		docRepo:   docRepo,
 		objects:   objects,
 		publisher: publisher,
+		manifest:  manifestRepo,
 		maxUpload: maxUploadBytes,
 	}
 	mux.HandleFunc("POST /kbs/{kbID}/documents", h.upload)
@@ -108,7 +127,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 
 	contentType, supported := contentTypeFor(filename)
 	if !supported {
-		writeError(w, http.StatusUnprocessableEntity, "unsupported file type; accepted: .txt, .md")
+		writeError(w, http.StatusUnprocessableEntity, "unsupported file type; accepted: .txt, .md, .pdf, .png, .jpg")
 		return
 	}
 
@@ -134,7 +153,17 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{DocumentID: doc.ID, UserID: userID}); err != nil {
+	var publishErr error
+	if regionClassificationTypes[contentType] {
+		publishErr = h.publisher.PublishRegionClassification(r.Context(), queue.RegionClassificationRequested{
+			DocumentID: doc.ID, UserID: userID,
+		})
+	} else {
+		publishErr = h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{
+			DocumentID: doc.ID, UserID: userID,
+		})
+	}
+	if publishErr != nil {
 		// Mark failed so the caller knows processing will not happen. The S3
 		// object and DB row are retained — the reconciliation job can retry.
 		_ = h.docRepo.UpdateStatus(r.Context(), userID, doc.ID, document.StatusFailed)
@@ -201,7 +230,43 @@ func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, doc)
+	// Enrich the response with the ingestion manifest summary when available.
+	type docDetailResponse struct {
+		*document.Document
+		// ManifestSummary is set for PDF/image documents once region
+		// classification has run. Omitted (nil) for text/markdown documents
+		// and before classification completes.
+		ManifestSummary *manifestSummary `json:"manifest_summary,omitempty"`
+	}
+
+	resp := &docDetailResponse{Document: doc}
+	if h.manifest != nil {
+		regions, _ := h.manifest.ListByDocument(r.Context(), userID, docID)
+		if len(regions) > 0 {
+			var indexed, skipped, failed int
+			for _, reg := range regions {
+				switch reg.Status {
+				case manifest.StatusIndexed:
+					indexed++
+				case manifest.StatusSkipped:
+					skipped++
+				case manifest.StatusFailed:
+					failed++
+				}
+			}
+			resp.ManifestSummary = &manifestSummary{
+				Indexed: indexed, Skipped: skipped, Failed: failed,
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+type manifestSummary struct {
+	Indexed int `json:"indexed"`
+	Skipped int `json:"skipped"`
+	Failed  int `json:"failed"`
 }
 
 // content streams the raw text of a document from object storage. Only

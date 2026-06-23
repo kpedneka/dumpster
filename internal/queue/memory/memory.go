@@ -10,10 +10,11 @@ import (
 
 // Publisher records published events in memory.
 type Publisher struct {
-	mu                sync.Mutex
-	events            []queue.DocumentUploaded
-	entityExtractions []queue.EntityExtractionRequested
-	edgeExtractions   []queue.EdgeExtractionRequested
+	mu                    sync.Mutex
+	events                []queue.DocumentUploaded
+	entityExtractions     []queue.EntityExtractionRequested
+	edgeExtractions       []queue.EdgeExtractionRequested
+	regionClassifications []queue.RegionClassificationRequested
 }
 
 // New returns an empty in-memory Publisher.
@@ -69,6 +70,24 @@ func (p *Publisher) EdgeExtractionEvents() []queue.EdgeExtractionRequested {
 	defer p.mu.Unlock()
 	cp := make([]queue.EdgeExtractionRequested, len(p.edgeExtractions))
 	copy(cp, p.edgeExtractions)
+	return cp
+}
+
+// PublishRegionClassification appends evt to the recorded region-classification event list.
+func (p *Publisher) PublishRegionClassification(_ context.Context, evt queue.RegionClassificationRequested) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.regionClassifications = append(p.regionClassifications, evt)
+	return nil
+}
+
+// RegionClassificationEvents returns a snapshot of all published
+// RegionClassificationRequested events.
+func (p *Publisher) RegionClassificationEvents() []queue.RegionClassificationRequested {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cp := make([]queue.RegionClassificationRequested, len(p.regionClassifications))
+	copy(cp, p.regionClassifications)
 	return cp
 }
 

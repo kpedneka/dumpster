@@ -56,6 +56,14 @@ type Config struct {
 	// and TTL-warning messages), sent via Resend.
 	ResendAPIKey   string
 	ResendFromAddr string
+	// OllamaURL is the base URL of the local Ollama service used by the
+	// RegionClassificationHandler for VLM inference (figure description and
+	// scanned-content confirmation). Defaults to the docker-compose service
+	// name; override in .env.local for local development without Docker.
+	OllamaURL      string
+	// OllamaVLMModel is the Ollama model name used for vision-language
+	// inference. Pull it once with: docker compose exec ollama ollama pull qwen2.5vl
+	OllamaVLMModel string
 	// LLM
 	AnthropicAPIKey  string
 	AnthropicModel   string
@@ -70,8 +78,11 @@ type Config struct {
 	// adapter invokes via os/exec to run local spaCy+GLiNER extraction.
 	EntityExtractorScript string
 	// EntityExtractorPython is the Python interpreter used to run
-	// EntityExtractorScript.
+	// EntityExtractorScript (and RegionExtractorScript).
 	EntityExtractorPython string
+	// RegionExtractorScript is the path to scripts/extract_regions.py, the
+	// PDF region classifier invoked by the RegionClassificationHandler.
+	RegionExtractorScript string
 }
 
 func Load() *Config {
@@ -99,6 +110,8 @@ func Load() *Config {
 		ClerkWebhookSecret: getEnv("CLERK_WEBHOOK_SECRET", ""),
 		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
 		ResendFromAddr:     getEnv("RESEND_FROM_ADDR", "noreply@example.com"),
+		OllamaURL:          getEnv("OLLAMA_URL", "http://ollama:11434"),
+		OllamaVLMModel:     getEnv("OLLAMA_VLM_MODEL", "qwen2.5vl"),
 		AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:     getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
 		OpenAIAPIKey:       getEnv("OPENAI_API_KEY", ""),
@@ -107,6 +120,7 @@ func Load() *Config {
 		EntityTypes:           getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		EntityExtractorScript: getEnv("ENTITY_EXTRACTOR_SCRIPT", "scripts/extract_entities.py"),
 		EntityExtractorPython: getEnv("ENTITY_EXTRACTOR_PYTHON", "python3"),
+		RegionExtractorScript: getEnv("REGION_EXTRACTOR_SCRIPT", "scripts/extract_regions.py"),
 	}
 }
 

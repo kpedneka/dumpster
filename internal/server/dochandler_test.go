@@ -50,6 +50,10 @@ func (p *failPublisher) PublishEdgeExtraction(_ context.Context, _ queue.EdgeExt
 	return errors.New("queue unavailable")
 }
 
+func (p *failPublisher) PublishRegionClassification(_ context.Context, _ queue.RegionClassificationRequested) error {
+	return errors.New("queue unavailable")
+}
+
 func TestDocUpload(t *testing.T) {
 	deps, kbRepo, _, obj, pub := defaultDeps()
 	router := NewRouter(deps)
@@ -125,7 +129,8 @@ func TestDocUpload_UnsupportedType(t *testing.T) {
 	userID := uuid.New()
 
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
-	body, ct := multipartUpload(t, "data.pdf", "%PDF")
+	// .docx is not in the accepted set.
+	body, ct := multipartUpload(t, "report.docx", "PK (office xml content)")
 
 	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
@@ -134,6 +139,52 @@ func TestDocUpload_UnsupportedType(t *testing.T) {
 
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status: got %d, want 422", w.Code)
+	}
+}
+
+func TestDocUpload_PDF_RoutesToRegionClassification(t *testing.T) {
+	deps, kbRepo, _, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	body, ct := multipartUpload(t, "report.pdf", "%PDF-1.4")
+
+	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+	// Should have published a RegionClassification event, not a DocumentUploaded.
+	if len(pub.RegionClassificationEvents()) != 1 {
+		t.Errorf("expected 1 RegionClassification event, got %d", len(pub.RegionClassificationEvents()))
+	}
+	if len(pub.Events()) != 0 {
+		t.Errorf("expected 0 DocumentUploaded events for PDF, got %d", len(pub.Events()))
+	}
+}
+
+func TestDocUpload_Image_RoutesToRegionClassification(t *testing.T) {
+	deps, kbRepo, _, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	body, ct := multipartUpload(t, "figure.png", "\x89PNG\r\n")
+
+	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+	if len(pub.RegionClassificationEvents()) != 1 {
+		t.Errorf("expected 1 RegionClassification event for image, got %d", len(pub.RegionClassificationEvents()))
 	}
 }
 

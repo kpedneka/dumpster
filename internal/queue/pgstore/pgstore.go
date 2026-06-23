@@ -77,6 +77,22 @@ func (s *Store) PublishEdgeExtraction(ctx context.Context, evt queue.EdgeExtract
 	return nil
 }
 
+// PublishRegionClassification inserts a pending region-classification job
+// for the given PDF or image document as the alternative ingestion entry
+// point to document indexing.
+func (s *Store) PublishRegionClassification(ctx context.Context, evt queue.RegionClassificationRequested) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO jobs (document_id, user_id, job_type)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
+		evt.DocumentID, evt.UserID, string(queue.JobTypeRegionClassification),
+	)
+	if err != nil {
+		return fmt.Errorf("queue: enqueue region classification for document %s: %w", evt.DocumentID, err)
+	}
+	return nil
+}
+
 // Dequeue claims the next available job using SELECT FOR UPDATE SKIP LOCKED.
 // Returns ErrNoJobs when no pending jobs are ready to run.
 func (s *Store) Dequeue(ctx context.Context) (*queue.Job, error) {

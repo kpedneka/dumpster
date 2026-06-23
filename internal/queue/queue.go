@@ -29,6 +29,12 @@ const (
 	// table. Depends on entity extraction having populated entities rows, but
 	// does not touch chunks, embeddings, or entity text.
 	JobTypeEdgeExtraction JobType = "edge_extraction"
+	// JobTypeRegionClassification runs the layered PDF/image region
+	// classifier (pdfplumber + unstructured.io + Ollama VLM) and is the
+	// alternative entry point to JobTypeDocumentIndexing for non-text
+	// file types. It produces the ingestion manifest and the document's
+	// chunks, then enqueues JobTypeEntityExtraction.
+	JobTypeRegionClassification JobType = "region_classification"
 )
 
 // DocumentUploaded is published once a document's bytes land in object storage
@@ -66,6 +72,14 @@ type Job struct {
 // ErrNoJobs is returned by Consumer.Dequeue when no work is available.
 var ErrNoJobs = errors.New("queue: no jobs available")
 
+// RegionClassificationRequested is published for PDF and image documents
+// in place of DocumentUploaded, since those file types require region
+// classification before chunking and embedding can proceed.
+type RegionClassificationRequested struct {
+	DocumentID uuid.UUID
+	UserID     uuid.UUID
+}
+
 // Publisher dispatches document lifecycle events for background processing.
 type Publisher interface {
 	PublishDocumentUploaded(ctx context.Context, evt DocumentUploaded) error
@@ -76,6 +90,11 @@ type Publisher interface {
 	// PublishEdgeExtraction enqueues a distinct edge-extraction job for an
 	// already-entity-extracted document, independently of entity extraction.
 	PublishEdgeExtraction(ctx context.Context, evt EdgeExtractionRequested) error
+	// PublishRegionClassification enqueues a region-classification job for
+	// a PDF or image document in place of document indexing. The handler
+	// performs layered region classification, produces chunks + the ingestion
+	// manifest, and then enqueues entity extraction.
+	PublishRegionClassification(ctx context.Context, evt RegionClassificationRequested) error
 }
 
 // Consumer pulls jobs from the queue for processing.

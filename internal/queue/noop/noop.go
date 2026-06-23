@@ -33,4 +33,10 @@ func (p *Publisher) PublishEdgeExtraction(_ context.Context, evt queue.EdgeExtra
 	return nil
 }
 
+// PublishRegionClassification logs the event instead of enqueuing it.
+func (p *Publisher) PublishRegionClassification(_ context.Context, evt queue.RegionClassificationRequested) error {
+	log.Printf("queue: RegionClassificationRequested{document_id=%s user_id=%s}", evt.DocumentID, evt.UserID)
+	return nil
+}
+
 var _ queue.Publisher = (*Publisher)(nil)

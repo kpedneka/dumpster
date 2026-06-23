@@ -15,11 +15,14 @@ import (
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
+	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
+	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
+	ollamavision "github.com/kunalpednekar/dumpster/internal/vision/ollama"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
@@ -65,13 +68,24 @@ func main() {
 		ScriptPath: cfg.EntityExtractorScript,
 	})
 
+	manifestRepo := manifestpg.New(txRunner)
+	layoutExtractor := layout.New(layout.Config{
+		PythonPath: cfg.EntityExtractorPython, // reuse the same Python interpreter
+		ScriptPath: cfg.RegionExtractorScript,
+	})
+	describer := ollamavision.New(cfg.OllamaURL, cfg.OllamaVLMModel)
+
 	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
 		WithEntityExtractionPublisher(q)
+	regionHandler := worker.NewRegionClassificationHandler(
+		docs, obj, chunks, manifestRepo, layoutExtractor, describer, embedder, q,
+	)
 	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, cfg.EntityTypes).
 		WithEdgeExtractionPublisher(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
 
 	w := worker.New(q, docHandler, worker.Config{})
+	w.RegisterHandler(queue.JobTypeRegionClassification, regionHandler)
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
 	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)
 

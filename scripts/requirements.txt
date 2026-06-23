@@ -2,3 +2,10 @@
 # sidecar invoked by internal/entity/gliner via subprocess.
 spacy>=3.7,<4
 gliner>=0.2,<1
+
+# Dependencies for scripts/extract_regions.py, the PDF region classifier
+# invoked by internal/manifest/layout via subprocess (layers 1+2 only;
+# layer 3 VLM runs Go-side via Ollama HTTP API).
+pdfplumber>=0.11,<1
+unstructured[pdf]>=0.16,<1
+Pillow>=10,<12

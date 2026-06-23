@@ -8,6 +8,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/email"
 	"github.com/kunalpednekar/dumpster/internal/kb"
+	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/search"
@@ -19,6 +20,7 @@ type Deps struct {
 	Docs           document.Repository
 	Objects        objectstore.ObjectStore
 	Publisher      queue.Publisher
+	Manifest       manifest.Repository  // optional; used for ingestion manifest summaries on PDF/image docs
 	Searcher       search.Searcher
 	Verifier       auth.SessionVerifier // verifies Clerk session tokens
 	Users          auth.LocalUserStore  // maps Clerk identities to local app users
@@ -42,7 +44,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.MaxUploadBytes)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.MaxUploadBytes)
 	registerAccountRoutes(authed, deps.Users)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher)

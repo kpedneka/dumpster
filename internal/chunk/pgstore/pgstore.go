@@ -3,6 +3,7 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -27,12 +28,22 @@ func (s *Store) BulkCreate(ctx context.Context, chunks []*chunk.Chunk) error {
 	}
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		for _, c := range chunks {
+			var bboxJSON []byte
+			if c.BoundingBox != nil {
+				var err error
+				bboxJSON, err = json.Marshal(c.BoundingBox)
+				if err != nil {
+					return fmt.Errorf("marshal bounding_box: %w", err)
+				}
+			}
 			_, err := tx.Exec(ctx,
 				`INSERT INTO chunks
-				 (document_id, kb_id, user_id, ordinal, text, token_count, embedding, char_start, char_end)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9)`,
+				 (document_id, kb_id, user_id, ordinal, text, token_count, embedding, char_start, char_end,
+				  region_id, page_number, bounding_box)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9, $10, $11, $12)`,
 				c.DocumentID, c.KBID, c.UserID, c.Ordinal,
 				c.Text, c.TokenCount, vectorParam(c.Embedding), c.CharStart, c.CharEnd,
+				c.RegionID, c.PageNumber, bboxJSON,
 			)
 			if err != nil {
 				return err
@@ -76,7 +87,8 @@ func (s *Store) list(ctx context.Context, userID uuid.UUID, col string, val uuid
 	var results []*chunk.Chunk
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		q := fmt.Sprintf(
-			`SELECT id, document_id, kb_id, user_id, ordinal, text, token_count, char_start, char_end
+			`SELECT id, document_id, kb_id, user_id, ordinal, text, token_count, char_start, char_end,
+			        region_id, page_number, bounding_box
 			 FROM chunks WHERE %s = $1 AND user_id = $2 ORDER BY ordinal`, col)
 		rows, err := tx.Query(ctx, q, val, userID)
 		if err != nil {
@@ -85,11 +97,20 @@ func (s *Store) list(ctx context.Context, userID uuid.UUID, col string, val uuid
 		defer rows.Close()
 		for rows.Next() {
 			var c chunk.Chunk
+			var bboxJSON []byte
 			if err := rows.Scan(
 				&c.ID, &c.DocumentID, &c.KBID, &c.UserID,
 				&c.Ordinal, &c.Text, &c.TokenCount, &c.CharStart, &c.CharEnd,
+				&c.RegionID, &c.PageNumber, &bboxJSON,
 			); err != nil {
 				return err
+			}
+			if len(bboxJSON) > 0 {
+				var bb chunk.BoundingBox
+				if err := json.Unmarshal(bboxJSON, &bb); err != nil {
+					return fmt.Errorf("unmarshal bounding_box: %w", err)
+				}
+				c.BoundingBox = &bb
 			}
 			results = append(results, &c)
 		}
