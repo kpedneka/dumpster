@@ -27,6 +27,11 @@ type EntityHandler struct {
 	// (see internal/config ENTITY_TYPES). Adding a type is a config change,
 	// not a code change, and requires no migration.
 	allowedTypes []entity.Type
+	// publisher, when non-nil, is used to enqueue a distinct edge-extraction
+	// job once entities are successfully persisted. Optional so existing
+	// callers and tests that only care about entity extraction keep working
+	// unmodified.
+	publisher queue.Publisher
 }
 
 // NewEntityHandler creates an EntityHandler wired to the given dependencies.
@@ -49,6 +54,14 @@ func NewEntityHandler(
 		extractor:    extractor,
 		allowedTypes: types,
 	}
+}
+
+// WithEdgeExtractionPublisher wires publisher into h so that, after entities
+// are successfully persisted, a distinct edge-extraction job is queued for
+// the same document. Mirrors DocumentHandler's WithEntityExtractionPublisher.
+func (h *EntityHandler) WithEdgeExtractionPublisher(publisher queue.Publisher) *EntityHandler {
+	h.publisher = publisher
+	return h
 }
 
 // Handle runs entity extraction for one document job: it fetches the
@@ -103,6 +116,20 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 
 	if err := h.entities.BulkCreate(ctx, entities); err != nil {
 		return fmt.Errorf("entityhandler: persist entities: %w", err)
+	}
+
+	// Queue the edge-extraction stage as a distinct job, inline in the
+	// ingestion flow behind the existing queue/job-stage seam: it can be
+	// retried or re-run independently of (re-)extracting entities. A
+	// publish failure here is logged, not fatal — entity extraction has
+	// already succeeded and must not be rolled back.
+	if h.publisher != nil {
+		if err := h.publisher.PublishEdgeExtraction(ctx, queue.EdgeExtractionRequested{
+			DocumentID: job.DocumentID,
+			UserID:     job.UserID,
+		}); err != nil {
+			log.Printf("entityhandler: failed to queue edge extraction for document %s: %v", job.DocumentID, err)
+		}
 	}
 
 	return nil

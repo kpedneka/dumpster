@@ -13,6 +13,7 @@ type Publisher struct {
 	mu                sync.Mutex
 	events            []queue.DocumentUploaded
 	entityExtractions []queue.EntityExtractionRequested
+	edgeExtractions   []queue.EdgeExtractionRequested
 }
 
 // New returns an empty in-memory Publisher.
@@ -50,6 +51,24 @@ func (p *Publisher) EntityExtractionEvents() []queue.EntityExtractionRequested {
 	defer p.mu.Unlock()
 	cp := make([]queue.EntityExtractionRequested, len(p.entityExtractions))
 	copy(cp, p.entityExtractions)
+	return cp
+}
+
+// PublishEdgeExtraction appends evt to the recorded edge-extraction event list.
+func (p *Publisher) PublishEdgeExtraction(_ context.Context, evt queue.EdgeExtractionRequested) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.edgeExtractions = append(p.edgeExtractions, evt)
+	return nil
+}
+
+// EdgeExtractionEvents returns a snapshot of all published
+// EdgeExtractionRequested events.
+func (p *Publisher) EdgeExtractionEvents() []queue.EdgeExtractionRequested {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cp := make([]queue.EdgeExtractionRequested, len(p.edgeExtractions))
+	copy(cp, p.edgeExtractions)
 	return cp
 }
 

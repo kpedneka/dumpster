@@ -46,6 +46,10 @@ func (p *failPublisher) PublishEntityExtraction(_ context.Context, _ queue.Entit
 	return errors.New("queue unavailable")
 }
 
+func (p *failPublisher) PublishEdgeExtraction(_ context.Context, _ queue.EdgeExtractionRequested) error {
+	return errors.New("queue unavailable")
+}
+
 func TestDocUpload(t *testing.T) {
 	deps, kbRepo, _, obj, pub := defaultDeps()
 	router := NewRouter(deps)

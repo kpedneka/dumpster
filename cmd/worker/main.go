@@ -13,6 +13,7 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/entity/gliner"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
+	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue"
@@ -56,6 +57,7 @@ func main() {
 	docs := docpg.New(txRunner)
 	chunks := chunkpg.New(txRunner)
 	entities := entitypg.New(txRunner)
+	edges := graphedgepg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
 	embedder := openai.New(cfg.OpenAIAPIKey, cfg.OpenAIEmbedModel)
 	extractor := gliner.New(gliner.Config{
@@ -65,10 +67,13 @@ func main() {
 
 	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
 		WithEntityExtractionPublisher(q)
-	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, cfg.EntityTypes)
+	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, cfg.EntityTypes).
+		WithEdgeExtractionPublisher(q)
+	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
 
 	w := worker.New(q, docHandler, worker.Config{})
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
+	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)
 
 	logger.Info("worker starting",
 		"db_host", cfg.DBHost, "db_name", cfg.DBName,

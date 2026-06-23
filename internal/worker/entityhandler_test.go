@@ -16,6 +16,7 @@ import (
 	entitymem "github.com/kunalpednekar/dumpster/internal/entity/memory"
 	entitymock "github.com/kunalpednekar/dumpster/internal/entity/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
@@ -234,6 +235,48 @@ func TestEntityHandler_OnFailed_DoesNotErrorOrPanic(t *testing.T) {
 
 	job := &queue.Job{ID: uuid.New(), Type: queue.JobTypeEntityExtraction, DocumentID: uuid.New(), UserID: uuid.New()}
 	h.OnFailed(context.Background(), job) // must not panic
+}
+
+func TestEntityHandler_PublishesEdgeExtractionAfterPersist(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+	pub := qmem.New()
+
+	job, userID := seedEntityJob(t, docs, chunks, 1)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	extractor := entitymock.NewFixed([]*entity.Entity{{Type: "person", Text: "Ada", Start: 0, End: 3, Score: 0.9}})
+	h := worker.NewEntityHandler(docs, chunks, entities, extractor, []string{"person"}).
+		WithEdgeExtractionPublisher(pub)
+
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	evts := pub.EdgeExtractionEvents()
+	if len(evts) != 1 {
+		t.Fatalf("expected 1 EdgeExtraction event published, got %d", len(evts))
+	}
+	if evts[0].DocumentID != job.DocumentID {
+		t.Errorf("event DocumentID: got %v, want %v", evts[0].DocumentID, job.DocumentID)
+	}
+}
+
+func TestEntityHandler_NilPublisher_NoEdgePublish(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+
+	job, userID := seedEntityJob(t, docs, chunks, 1)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	extractor := entitymock.NewFixed([]*entity.Entity{{Type: "person", Text: "Ada", Start: 0, End: 3}})
+	h := worker.NewEntityHandler(docs, chunks, entities, extractor, []string{"person"})
+	// No publisher wired — must not panic.
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
 }
 
 func TestEntityHandler_ImplementsHandler(t *testing.T) {

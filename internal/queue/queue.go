@@ -24,6 +24,11 @@ const (
 	// existing chunks. It depends on document indexing having already
 	// produced chunk rows, but does not itself touch chunks or embeddings.
 	JobTypeEntityExtraction JobType = "entity_extraction"
+	// JobTypeEdgeExtraction derives co-occurrence edges between entity
+	// mentions found in the same chunk, and persists them to the entity_edges
+	// table. Depends on entity extraction having populated entities rows, but
+	// does not touch chunks, embeddings, or entity text.
+	JobTypeEdgeExtraction JobType = "edge_extraction"
 )
 
 // DocumentUploaded is published once a document's bytes land in object storage
@@ -36,6 +41,13 @@ type DocumentUploaded struct {
 // EntityExtractionRequested is published to (re-)run local entity extraction
 // over a document's existing chunks, independent of chunking/embedding.
 type EntityExtractionRequested struct {
+	DocumentID uuid.UUID
+	UserID     uuid.UUID
+}
+
+// EdgeExtractionRequested is published to derive co-occurrence edges between
+// entity mentions found in the same chunk, independent of entity extraction.
+type EdgeExtractionRequested struct {
 	DocumentID uuid.UUID
 	UserID     uuid.UUID
 }
@@ -61,6 +73,9 @@ type Publisher interface {
 	// an already-ingested document, independently of (re-)chunking or
 	// (re-)embedding.
 	PublishEntityExtraction(ctx context.Context, evt EntityExtractionRequested) error
+	// PublishEdgeExtraction enqueues a distinct edge-extraction job for an
+	// already-entity-extracted document, independently of entity extraction.
+	PublishEdgeExtraction(ctx context.Context, evt EdgeExtractionRequested) error
 }
 
 // Consumer pulls jobs from the queue for processing.
