@@ -509,7 +509,10 @@ export interface paths {
             };
         };
         put?: never;
-        /** Upload a document */
+        /**
+         * Upload a document
+         * @description Accepts .txt and .md files (text pipeline) plus .pdf, .png, .jpg (region- classification pipeline: pdfplumber + unstructured.io layout analysis + Ollama VLM for figures).
+         */
         post: {
             parameters: {
                 query?: never;
@@ -780,6 +783,12 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description Set for PDF/image documents once region classification has run. Omitted for text/markdown documents and before classification completes. */
+            manifest_summary?: {
+                indexed: number;
+                skipped: number;
+                failed: number;
+            } | null;
         };
         Citation: {
             /** @description The 1-indexed [N] marker this citation corresponds to in the summary text. Match markers to citations by this field, not by array position — the list is sparse whenever the model didn't cite every numbered source chunk. */

@@ -69,6 +69,21 @@ components:
         updated_at:
           type: string
           format: date-time
+        manifest_summary:
+          type: object
+          nullable: true
+          description: >-
+            Set for PDF/image documents once region classification has run.
+            Omitted for text/markdown documents and before classification
+            completes.
+          properties:
+            indexed:
+              type: integer
+            skipped:
+              type: integer
+            failed:
+              type: integer
+          required: [indexed, skipped, failed]
       required: [id, kb_id, user_id, filename, s3_key, content_type, status, created_at, updated_at]
 
     Citation:
@@ -438,6 +453,10 @@ paths:
 
     post:
       summary: Upload a document
+      description: >-
+        Accepts .txt and .md files (text pipeline) plus .pdf, .png, .jpg (region-
+        classification pipeline: pdfplumber + unstructured.io layout analysis +
+        Ollama VLM for figures).
       requestBody:
         required: true
         content:

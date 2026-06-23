@@ -19,6 +19,21 @@ type Chunk struct {
 	Embedding  []float32
 	CharStart  int
 	CharEnd    int
+	// Region provenance — only set for chunks derived from PDF/image region
+	// classification. Nil for text/markdown chunks which have no manifest region.
+	RegionID    *uuid.UUID
+	PageNumber  *int
+	BoundingBox *BoundingBox
+}
+
+// BoundingBox holds fractional page coordinates [0,1]: top-left (X0,Y0)
+// to bottom-right (X1,Y1). Stored as JSONB in Postgres; nil for chunks
+// that have no page-region provenance.
+type BoundingBox struct {
+	X0 float64 `json:"x0"`
+	Y0 float64 `json:"y0"`
+	X1 float64 `json:"x1"`
+	Y1 float64 `json:"y1"`
 }
 
 // Repository is the persistence boundary for Chunk records.

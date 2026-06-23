@@ -10,9 +10,21 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/retrieval"
 )
 
+// CitationBoundingBox holds the fractional [0,1] page coordinates of a
+// region-derived chunk, mirroring chunk.BoundingBox. Defined here to avoid
+// a search→chunk import dependency.
+type CitationBoundingBox struct {
+	X0 float64 `json:"x0"`
+	Y0 float64 `json:"y0"`
+	X1 float64 `json:"x1"`
+	Y1 float64 `json:"y1"`
+}
+
 // Citation identifies the exact source span that supports a claim in the answer.
 // Every citation resolves to a real chunk: slicing the original document at
 // CharStart:CharEnd reproduces the text the model relied on.
+// For PDF/image chunks derived from region classification, PageNumber and
+// BoundingBox additionally locate the region on the rendered source page.
 type Citation struct {
 	// Number is the 1-indexed [N] marker this citation corresponds to in the
 	// summary text. The Citations slice is built from whichever numbers the
@@ -24,6 +36,11 @@ type Citation struct {
 	ChunkID    uuid.UUID
 	CharStart  int
 	CharEnd    int
+	// PageNumber and BoundingBox are the second citation variant: set only
+	// for chunks derived from PDF/image region classification. Both are nil
+	// for text/markdown chunks.
+	PageNumber  *int
+	BoundingBox *CitationBoundingBox
 }
 
 // Result is the structured output of an answered query.

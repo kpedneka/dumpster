@@ -95,13 +95,25 @@ func parseResponse(resp string, chunks []retrieval.ScoredChunk) Result {
 		}
 		seen[n] = true
 		sc := chunks[n-1]
-		citations = append(citations, Citation{
+		c := Citation{
 			Number:     n,
 			DocumentID: sc.DocumentID,
 			ChunkID:    sc.ID,
 			CharStart:  sc.CharStart,
 			CharEnd:    sc.CharEnd,
-		})
+		}
+		if sc.PageNumber != nil {
+			c.PageNumber = sc.PageNumber
+		}
+		if sc.BoundingBox != nil {
+			c.BoundingBox = &CitationBoundingBox{
+				X0: sc.BoundingBox.X0,
+				Y0: sc.BoundingBox.Y0,
+				X1: sc.BoundingBox.X1,
+				Y1: sc.BoundingBox.Y1,
+			}
+		}
+		citations = append(citations, c)
 	}
 
 	return Result{Summary: summary, Citations: citations}
