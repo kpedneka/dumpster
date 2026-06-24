@@ -12,6 +12,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/email/resend"
+	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
@@ -20,6 +21,7 @@ import (
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
+	queryrouter "github.com/kunalpednekar/dumpster/internal/router"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/server"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
@@ -74,7 +76,12 @@ func main() {
 	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
 	retriever := retrievalpg.New(txRunner, embedder)
 	answerer := search.NewAnswerer(generator)
-	searcher := search.New(retriever, answerer)
+	queryRouter := queryrouter.NewLLMRouter(generator)
+	graphRetriever := graphragpg.New(txRunner)
+	searcher := search.New(retriever, answerer,
+		search.WithRouter(queryRouter),
+		search.WithGraphRetriever(graphRetriever),
+	)
 
 	deps := server.Deps{
 		KBs:           kbpg.New(txRunner),
