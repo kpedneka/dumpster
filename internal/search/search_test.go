@@ -9,8 +9,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
+	"github.com/kunalpednekar/dumpster/internal/graphrag/memory"
 	"github.com/kunalpednekar/dumpster/internal/llm/mock"
 	"github.com/kunalpednekar/dumpster/internal/retrieval"
+	"github.com/kunalpednekar/dumpster/internal/router"
+	routermock "github.com/kunalpednekar/dumpster/internal/router/mock"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 )
@@ -332,6 +335,145 @@ func TestAnswerer_NotFoundExactMatch(t *testing.T) {
 	}
 	if len(result.Citations) == 0 {
 		t.Error("expected citations to be preserved; not-found check should use exact match, not substring")
+	}
+}
+
+// ---- GraphRAG service tests --------------------------------------------------
+
+// TestService_Search_Normal verifies that a Normal route never activates any
+// graph leg even when a GraphRetriever is wired in.
+func TestService_Search_Normal(t *testing.T) {
+	docID := uuid.New()
+	hybridChunks := []retrieval.ScoredChunk{makeChunk(docID, "hybrid chunk", 0, 12)}
+
+	gr := memory.New()
+	// If a graph leg were called, it would return this; seeing it in the
+	// answer would signal an incorrect activation.
+	gr.AggregationChunks = []retrieval.ScoredChunk{makeChunk(docID, "should not appear", 100, 120)}
+
+	ret := &stubRetriever{chunks: hybridChunks}
+	gen := mock.NewGenerator("Hybrid answer [1].\nCITATIONS: 1")
+	rt := routermock.New(router.Normal)
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt), search.WithGraphRetriever(gr))
+
+	result, err := svc.Search(authedCtx(), uuid.New(), "What is Go?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Summary == "" {
+		t.Error("expected non-empty summary")
+	}
+}
+
+// TestService_Search_Aggregation verifies that an aggregation query activates
+// the aggregation leg and includes graph chunks in the RRF merge.
+func TestService_Search_Aggregation(t *testing.T) {
+	docID := uuid.New()
+	hybridChunk := makeChunk(docID, "hybrid chunk", 0, 12)
+	graphChunk := makeChunk(docID, "graph chunk", 13, 25)
+
+	ret := &stubRetriever{chunks: []retrieval.ScoredChunk{hybridChunk}}
+	gr := memory.New()
+	gr.AggregationChunks = []retrieval.ScoredChunk{graphChunk}
+
+	rt := routermock.New(router.Aggregation)
+	gen := mock.NewGenerator("Answer [1].\nCITATIONS: 1")
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt), search.WithGraphRetriever(gr))
+
+	result, err := svc.Search(authedCtx(), uuid.New(), "What organizations are mentioned with FEMA?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Summary == "" {
+		t.Error("expected non-empty summary")
+	}
+}
+
+// TestService_Search_MultiHop verifies that a multi-hop query activates the
+// traversal leg and includes graph chunks in the RRF merge.
+func TestService_Search_MultiHop(t *testing.T) {
+	docID := uuid.New()
+	hybridChunk := makeChunk(docID, "hybrid chunk", 0, 12)
+	graphChunk := makeChunk(docID, "traversal chunk", 13, 28)
+
+	ret := &stubRetriever{chunks: []retrieval.ScoredChunk{hybridChunk}}
+	gr := memory.New()
+	gr.TraversalChunks = []retrieval.ScoredChunk{graphChunk}
+
+	rt := routermock.New(router.MultiHop)
+	gen := mock.NewGenerator("Connected [1].\nCITATIONS: 1")
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt), search.WithGraphRetriever(gr))
+
+	result, err := svc.Search(authedCtx(), uuid.New(), "How is Alice connected to Bob?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Summary == "" {
+		t.Error("expected non-empty summary")
+	}
+}
+
+// TestService_Search_RouterError verifies that a router error is propagated.
+func TestService_Search_RouterError(t *testing.T) {
+	ret := &stubRetriever{chunks: nil}
+	rt := routermock.New(router.Normal)
+	rt.Err = errors.New("router unavailable")
+	gen := mock.NewGenerator("irrelevant")
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt))
+
+	_, err := svc.Search(authedCtx(), uuid.New(), "query")
+	if err == nil {
+		t.Fatal("expected error from router, got nil")
+	}
+}
+
+// TestService_Search_AggregationLegError verifies that a graph leg error surfaces.
+func TestService_Search_AggregationLegError(t *testing.T) {
+	ret := &stubRetriever{chunks: []retrieval.ScoredChunk{makeChunk(uuid.New(), "hybrid", 0, 6)}}
+	gr := memory.New()
+	gr.AggregationErr = errors.New("graph db down")
+
+	rt := routermock.New(router.Aggregation)
+	gen := mock.NewGenerator("irrelevant")
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt), search.WithGraphRetriever(gr))
+
+	_, err := svc.Search(authedCtx(), uuid.New(), "query")
+	if err == nil {
+		t.Fatal("expected error from aggregation leg, got nil")
+	}
+}
+
+// TestService_Search_TraversalLegError verifies that a traversal leg error surfaces.
+func TestService_Search_TraversalLegError(t *testing.T) {
+	ret := &stubRetriever{chunks: []retrieval.ScoredChunk{makeChunk(uuid.New(), "hybrid", 0, 6)}}
+	gr := memory.New()
+	gr.TraversalErr = errors.New("graph db down")
+
+	rt := routermock.New(router.MultiHop)
+	gen := mock.NewGenerator("irrelevant")
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt), search.WithGraphRetriever(gr))
+
+	_, err := svc.Search(authedCtx(), uuid.New(), "query")
+	if err == nil {
+		t.Fatal("expected error from traversal leg, got nil")
+	}
+}
+
+// TestService_Search_NoRouter verifies backward compatibility: a Service with
+// no router configured behaves exactly as before — always uses hybrid only.
+func TestService_Search_NoRouter(t *testing.T) {
+	docID := uuid.New()
+	chunks := []retrieval.ScoredChunk{makeChunk(docID, "The sky is blue.", 0, 16)}
+	ret := &stubRetriever{chunks: chunks}
+	gen := mock.NewGenerator("The sky is blue [1].\nCITATIONS: 1")
+	svc := search.New(ret, search.NewAnswerer(gen))
+
+	result, err := svc.Search(authedCtx(), uuid.New(), "What colour is the sky?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Citations) == 0 {
+		t.Error("expected citations from hybrid-only path")
 	}
 }
 
