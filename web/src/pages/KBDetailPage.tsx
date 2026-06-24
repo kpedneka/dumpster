@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDropzone } from 'react-dropzone'
-import { FileText, MoreHorizontal, Trash2, Upload } from 'lucide-react'
+import { AlertTriangle, FileText, MoreHorizontal, Trash2, Upload } from 'lucide-react'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
 import { KBTabs } from '@/components/KBTabs'
@@ -65,7 +65,6 @@ export function KBDetailPage() {
       return data
     },
     enabled: !!kbId,
-    // Keep polling while any document is still being processed.
     refetchInterval: (query) => {
       const docs = query.state.data?.items ?? []
       return docs.some((d) => !TERMINAL.includes(d.status)) ? 2000 : false
@@ -79,9 +78,6 @@ export function KBDetailPage() {
   const uploadMutation = useMutation({
     mutationFn: (file: File) => uploadDocument(kbId!, file),
     onSuccess: (doc) => {
-      // No success toast here — the document list below already shows live
-      // per-file status, and a toast per file in a multi-file drop can
-      // silently exceed the toast tray's cap (see use-toast.ts TOAST_LIMIT).
       queryClient.setQueryData<typeof docPage>(['docs', kbId], (prev) =>
         prev ? { ...prev, items: [doc, ...prev.items] } : { items: [doc] },
       )
@@ -103,10 +99,46 @@ export function KBDetailPage() {
     multiple: true,
   })
 
+  const uploadPanel = (
+    <div className="flex flex-col gap-3">
+      <div
+        {...getRootProps()}
+        className={cn(
+          'flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-9 text-center transition-colors',
+          isDragActive
+            ? 'border-primary bg-accent'
+            : 'border-border hover:border-primary/50 hover:bg-accent/40',
+          uploadMutation.isPending && 'pointer-events-none opacity-60',
+        )}
+      >
+        <input {...getInputProps()} />
+        <Upload className="h-7 w-7 text-primary" />
+        {isDragActive ? (
+          <p className="text-sm font-medium">Drop to upload</p>
+        ) : (
+          <>
+            <p className="text-sm font-medium">Drop files or click to upload</p>
+            <p className="text-xs text-muted-foreground">Supports .txt files</p>
+          </>
+        )}
+        {uploadMutation.isPending && <p className="text-xs text-muted-foreground">Uploading…</p>}
+      </div>
+
+      {/* v2.8: confidentiality warning */}
+      <div className="flex items-start gap-2 rounded-lg border border-amber-600/30 bg-amber-500/10 px-3 py-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>
+          Do not upload proprietary or confidential information. This is a public demo and uploaded
+          content may be processed by third-party models.
+        </span>
+      </div>
+    </div>
+  )
+
   return (
-    <div className="mx-auto max-w-3xl px-6 py-8">
+    <div className="rise mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{kb?.name ?? '—'}</h1>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">{kb?.name ?? '—'}</h1>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -152,45 +184,42 @@ export function KBDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Upload zone */}
-      <div
-        {...getRootProps()}
-        className={cn(
-          'mb-8 flex cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors',
-          isDragActive
-            ? 'border-primary bg-primary/5'
-            : 'border-border hover:border-primary/50 hover:bg-accent/30',
-          uploadMutation.isPending && 'pointer-events-none opacity-60',
-        )}
-      >
-        <input {...getInputProps()} />
-        <Upload className="h-8 w-8 text-muted-foreground" />
-        {isDragActive ? (
-          <p className="text-sm font-medium">Drop to upload</p>
-        ) : (
-          <>
-            <p className="text-sm font-medium">Drag &amp; drop files here, or click to select</p>
-            <p className="text-xs text-muted-foreground">Supports .txt files</p>
-          </>
-        )}
-        {uploadMutation.isPending && (
-          <p className="text-xs text-muted-foreground">Uploading…</p>
-        )}
-      </div>
+      {/* v2.8 layout: documents (main) + docked upload panel (right) on desktop;
+          stacks on mobile/tablet with upload first. */}
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
+        {/* Upload — first on mobile, docked right on desktop */}
+        <aside className="order-first lg:order-last">
+          <div className="lg:sticky lg:top-4">
+            <h2 className="mb-1 font-display text-base font-semibold">Upload documents</h2>
+            <p className="mb-3 text-xs text-muted-foreground">Add .txt files to this knowledge base.</p>
+            {uploadPanel}
+          </div>
+        </aside>
 
-      {/* Document list */}
-      {docs.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 py-16 text-center text-muted-foreground">
-          <FileText className="h-10 w-10 opacity-30" />
-          <p className="text-sm">No documents yet. Upload one above to get started.</p>
-        </div>
-      ) : (
-        <div className="grid gap-2">
-          {docs.map((doc) => (
-            <DocRow key={doc.id} doc={doc} kbId={kbId!} />
-          ))}
-        </div>
-      )}
+        {/* Document list — scrollable region once it grows past ~5 items */}
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Documents
+            </span>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+              {docs.length}
+            </span>
+          </div>
+          {docs.length === 0 ? (
+            <div className="flex flex-col items-center gap-3 py-16 text-center text-muted-foreground">
+              <FileText className="h-10 w-10 opacity-30" />
+              <p className="text-sm">No documents yet. Upload one to get started.</p>
+            </div>
+          ) : (
+            <div className="rise-stagger grid gap-2 lg:max-h-[calc(100vh-15rem)] lg:overflow-y-auto lg:pr-1">
+              {docs.map((doc) => (
+                <DocRow key={doc.id} doc={doc} kbId={kbId!} />
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   )
 }
@@ -218,13 +247,10 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
   const isActive = !TERMINAL.includes(doc.status)
 
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-card px-4 py-3 shadow-sm">
+    <div className="lift flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm hover:border-primary/40">
       <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="flex-1 truncate text-sm font-medium">{doc.filename}</span>
-      <Badge
-        variant={doc.status as DocStatus}
-        className={cn(isActive && 'animate-pulse')}
-      >
+      <Badge variant={doc.status as DocStatus} className={cn(isActive && 'animate-pulse')}>
         {STATUS_LABEL[doc.status]}
       </Badge>
       <Button
@@ -247,10 +273,15 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
             <Button
               variant="destructive"
-              onClick={() => { setConfirmOpen(false); deleteMutation.mutate() }}
+              onClick={() => {
+                setConfirmOpen(false)
+                deleteMutation.mutate()
+              }}
             >
               Delete
             </Button>

@@ -39,6 +39,35 @@ describe('SearchPage', () => {
     expect(screen.getByText(/ask a question/i)).toBeInTheDocument()
   })
 
+  it('submits the query when Enter is pressed', async () => {
+    vi.mocked(api.POST).mockResolvedValue({
+      data: {
+        summary: 'Paris is the capital of France [1].',
+        citations: [{ number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 10 }],
+      },
+      error: undefined,
+    } as never)
+
+    const user = userEvent.setup()
+    renderSearchPage()
+
+    await user.type(screen.getByRole('textbox'), 'What is the capital of France?{Enter}')
+
+    await waitFor(() => {
+      expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
+    })
+  })
+
+  it('does not submit when Shift+Enter is pressed', async () => {
+    const user = userEvent.setup()
+    renderSearchPage()
+
+    await user.type(screen.getByRole('textbox'), 'first line{Shift>}{Enter}{/Shift}second line')
+
+    expect(api.POST).not.toHaveBeenCalled()
+    expect(screen.getByRole('textbox')).toHaveValue('first line\nsecond line')
+  })
+
   it('submits a query and renders the cited summary', async () => {
     vi.mocked(api.POST).mockResolvedValue({
       data: {
