@@ -26,6 +26,7 @@ test:
 
 lint:
 	golangci-lint run ./...
+	cd web && npm run typecheck
 	cd web && npm run lint
 
 run:
