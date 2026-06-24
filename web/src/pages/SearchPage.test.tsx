@@ -26,6 +26,7 @@ function renderSearchPage(kbId = 'kb-1') {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks()
   vi.mocked(api.GET).mockResolvedValue({
     data: { id: 'kb-1', name: 'Test KB' },
     error: undefined,
