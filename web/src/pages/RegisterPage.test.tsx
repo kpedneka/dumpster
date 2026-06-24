@@ -24,4 +24,11 @@ describe('RegisterPage', () => {
       }),
     )
   })
+
+  it('shows the demo account notice with 7-day deletion warning', () => {
+    render(<RegisterPage />)
+
+    expect(screen.getByText(/demo accounts/i)).toBeInTheDocument()
+    expect(screen.getByText(/7 days/i)).toBeInTheDocument()
+  })
 })

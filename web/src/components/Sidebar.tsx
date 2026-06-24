@@ -29,7 +29,9 @@ type KB = components['schemas']['KnowledgeBase']
 
 const SIDEBAR_LIMIT = 5
 
-export function Sidebar() {
+// v2.8: `onNavigate` lets the mobile drawer close the nav after a selection.
+// On desktop the prop is omitted and the rail stays open.
+export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -60,6 +62,7 @@ export function Sidebar() {
       setCreateOpen(false)
       setNewName('')
       navigate(`/kbs/${kb!.id}`)
+      onNavigate?.()
     },
     onError: () => toast({ variant: 'destructive', title: 'Failed to create knowledge base' }),
   })
@@ -75,9 +78,20 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex h-full w-60 flex-col border-r bg-background">
+    <aside className="flex h-full w-64 flex-col border-r border-border bg-background/70 backdrop-blur">
+      {/* Brand */}
+      <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary font-display text-lg font-semibold text-primary-foreground shadow-sm">
+          D
+        </span>
+        <div>
+          <div className="font-display text-lg font-semibold leading-none tracking-tight">Dumpster</div>
+          <div className="mt-1 text-[11px] text-muted-foreground">Multimodal knowledge base</div>
+        </div>
+      </div>
+
       {/* Account menu */}
-      <div className="border-b p-3">
+      <div className="px-3 pb-2">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="w-full justify-start gap-2 px-2">
@@ -88,8 +102,8 @@ export function Sidebar() {
           <DropdownMenuContent align="start" className="w-52">
             <DropdownMenuLabel className="font-normal">
               <div className="flex flex-col space-y-1">
-                <p className="text-sm font-medium">Account</p>
-                <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                <p className="text-sm font-medium">Demo account</p>
+                <p className="truncate text-xs text-muted-foreground">{user?.email}</p>
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
@@ -102,9 +116,9 @@ export function Sidebar() {
       </div>
 
       {/* KB navigation */}
-      <div className="flex flex-1 flex-col overflow-hidden p-2">
+      <div className="flex flex-1 flex-col overflow-hidden px-2">
         <div className="mb-1 flex items-center justify-between px-2 py-1">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Knowledge Bases
           </span>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -136,16 +150,17 @@ export function Sidebar() {
           </Dialog>
         </div>
 
-        <nav className="flex-1 overflow-y-auto space-y-0.5">
+        <nav className="flex-1 space-y-0.5 overflow-y-auto">
           {visible.length === 0 && (
             <p className="px-2 py-6 text-center text-xs text-muted-foreground">No knowledge bases yet</p>
           )}
           {visible.map((kb) => (
-            <KBNavItem key={kb.id} kb={kb} />
+            <KBNavItem key={kb.id} kb={kb} onNavigate={onNavigate} />
           ))}
           {hasMore && (
             <Link
               to="/kbs"
+              onClick={onNavigate}
               className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
             >
               More knowledge bases…
@@ -157,14 +172,15 @@ export function Sidebar() {
   )
 }
 
-function KBNavItem({ kb }: { kb: KB }) {
+function KBNavItem({ kb, onNavigate }: { kb: KB; onNavigate?: () => void }) {
   return (
     <NavLink
       to={`/kbs/${kb.id}`}
+      onClick={onNavigate}
       className={({ isActive }) =>
         `flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
           isActive
-            ? 'bg-accent text-accent-foreground font-medium'
+            ? 'bg-accent font-medium text-accent-foreground'
             : 'text-foreground/70 hover:bg-accent hover:text-accent-foreground'
         }`
       }

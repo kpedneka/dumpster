@@ -48,6 +48,12 @@ beforeEach(() => {
 })
 
 describe('KBDetailPage', () => {
+  it('shows a warning against uploading proprietary or confidential content', async () => {
+    renderKBDetailPage()
+    await screen.findByRole('heading', { name: 'Test KB' })
+    expect(screen.getByText(/proprietary or confidential/i)).toBeInTheDocument()
+  })
+
   describe('delete knowledge base', () => {
     it('deletes the knowledge base and navigates back to the list on confirm', async () => {
       vi.mocked(api.DELETE).mockResolvedValue({ error: undefined } as never)

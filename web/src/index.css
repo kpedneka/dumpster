@@ -1,64 +1,110 @@
 @import "tailwindcss";
 
+/* ============================================================
+   Dumpster — v2.8 theme
+   "Warm Sand" palette, light + dark, following prefers-color-scheme.
+   Token names are unchanged from M9 so every shadcn/ui component
+   picks the new palette up automatically. Contrast pairs chosen to
+   meet WCAG AA for text and interactive elements in both modes.
+   ============================================================ */
+
 @theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(240 10% 3.9%);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Spectral', Georgia, 'Times New Roman', serif;
+
+  /* light — Warm Sand */
+  --color-background: hsl(40 30% 96%);          /* #f7f5f1 */
+  --color-foreground: hsl(30 12% 10%);          /* #1d1b17 */
   --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(240 10% 3.9%);
+  --color-card-foreground: hsl(30 12% 10%);
   --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(240 10% 3.9%);
-  --color-primary: hsl(240 5.9% 10%);
-  --color-primary-foreground: hsl(0 0% 98%);
-  --color-secondary: hsl(240 4.8% 95.9%);
-  --color-secondary-foreground: hsl(240 5.9% 10%);
-  --color-muted: hsl(240 4.8% 95.9%);
-  --color-muted-foreground: hsl(240 3.8% 46.1%);
-  --color-accent: hsl(240 4.8% 95.9%);
-  --color-accent-foreground: hsl(240 5.9% 10%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  --color-border: hsl(240 5.9% 90%);
-  --color-input: hsl(240 5.9% 90%);
-  --color-ring: hsl(240 5.9% 10%);
-  --radius: 0.5rem;
+  --color-popover-foreground: hsl(30 12% 10%);
+  --color-primary: hsl(18 71% 41%);             /* terracotta #b24c1f — AA with white text */
+  --color-primary-foreground: hsl(0 0% 100%);
+  --color-secondary: hsl(40 22% 92%);           /* #f0ece5 */
+  --color-secondary-foreground: hsl(30 12% 14%);
+  --color-muted: hsl(40 22% 92%);
+  --color-muted-foreground: hsl(30 9% 38%);     /* #6c645a — AA on background */
+  --color-accent: hsl(22 55% 92%);              /* soft terracotta tint #f6e7dd */
+  --color-accent-foreground: hsl(18 71% 38%);   /* terracotta text */
+  --color-destructive: hsl(2 72% 44%);          /* AA with white text */
+  --color-destructive-foreground: hsl(0 0% 100%);
+  --color-border: hsl(36 24% 87%);              /* #e6e0d7 */
+  --color-input: hsl(36 24% 87%);
+  --color-ring: hsl(18 71% 45%);
+  --radius: 0.625rem;
 }
 
 @media (prefers-color-scheme: dark) {
   @theme {
-    --color-background: hsl(240 10% 3.9%);
-    --color-foreground: hsl(0 0% 98%);
-    --color-card: hsl(240 10% 3.9%);
-    --color-card-foreground: hsl(0 0% 98%);
-    --color-popover: hsl(240 10% 3.9%);
-    --color-popover-foreground: hsl(0 0% 98%);
-    --color-primary: hsl(0 0% 98%);
-    --color-primary-foreground: hsl(240 5.9% 10%);
-    --color-secondary: hsl(240 3.7% 15.9%);
-    --color-secondary-foreground: hsl(0 0% 98%);
-    --color-muted: hsl(240 3.7% 15.9%);
-    --color-muted-foreground: hsl(240 5% 64.9%);
-    --color-accent: hsl(240 3.7% 15.9%);
-    --color-accent-foreground: hsl(0 0% 98%);
-    --color-destructive: hsl(0 62.8% 30.6%);
-    --color-destructive-foreground: hsl(0 0% 98%);
-    --color-border: hsl(240 3.7% 15.9%);
-    --color-input: hsl(240 3.7% 15.9%);
-    --color-ring: hsl(240 4.9% 83.9%);
+    /* dark — Warm Sand */
+    --color-background: hsl(36 22% 8%);          /* #18150f */
+    --color-foreground: hsl(40 30% 93%);         /* #f3efe8 */
+    --color-card: hsl(34 18% 11%);               /* #211d17 */
+    --color-card-foreground: hsl(40 30% 93%);
+    --color-popover: hsl(34 18% 11%);
+    --color-popover-foreground: hsl(40 30% 93%);
+    --color-primary: hsl(22 67% 62%);            /* #e08a5c */
+    --color-primary-foreground: hsl(28 45% 9%);  /* dark text on terracotta */
+    --color-secondary: hsl(38 24% 13%);          /* #2a2519 */
+    --color-secondary-foreground: hsl(40 30% 93%);
+    --color-muted: hsl(38 24% 13%);
+    --color-muted-foreground: hsl(36 16% 61%);   /* #a89e8d — AA on dark bg */
+    --color-accent: hsl(28 28% 16%);             /* #34281d */
+    --color-accent-foreground: hsl(22 67% 66%);
+    --color-destructive: hsl(2 64% 56%);
+    --color-destructive-foreground: hsl(28 45% 9%);
+    --color-border: hsl(36 22% 17%);             /* #342e22 */
+    --color-input: hsl(36 22% 17%);
+    --color-ring: hsl(22 67% 60%);
   }
 }
 
 @layer base {
-  * {
-    box-sizing: border-box;
-  }
+  * { box-sizing: border-box; }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
     margin: 0;
   }
-  #root {
-    height: 100vh;
-    width: 100%;
-  }
+  #root { height: 100vh; width: 100%; }
+
+  /* Display face for page + dialog titles; opt-in via .font-display, plus
+     a light default on h1 so existing page titles get it for free. */
+  .font-display { font-family: var(--font-display); letter-spacing: -0.015em; }
+  h1 { font-family: var(--font-display); letter-spacing: -0.015em; }
+}
+
+/* ============================================================
+   Motion — one consistent "rise" language, site-wide.
+   Expressive treatment (the chosen option): content rises into
+   place on mount and interactive surfaces lift on hover. Transform
+   only, so a throttled/paused timeline never hides content.
+   Fully gated on prefers-reduced-motion.
+   ============================================================ */
+@keyframes dumpster-rise {
+  from { transform: translateY(15px); }
+  to   { transform: none; }
+}
+
+@layer utilities {
+  /* default (reduced-motion or unsupported): no transform, fully visible */
+  .rise { will-change: transform; }
+  .rise-stagger > * { will-change: transform; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .rise { animation: dumpster-rise 480ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+  .rise-stagger > * { animation: dumpster-rise 480ms cubic-bezier(0.22, 0.61, 0.36, 1); }
+  .rise-stagger > *:nth-child(2) { animation-delay: 60ms; }
+  .rise-stagger > *:nth-child(3) { animation-delay: 120ms; }
+  .rise-stagger > *:nth-child(4) { animation-delay: 180ms; }
+  .rise-stagger > *:nth-child(5) { animation-delay: 240ms; }
+  .rise-stagger > *:nth-child(6) { animation-delay: 300ms; }
+
+  /* expressive hover lift — shared by KB rows, doc rows, primary buttons */
+  .lift { transition: transform 240ms cubic-bezier(0.22, 0.61, 0.36, 1), box-shadow 240ms, border-color 240ms, background-color 240ms; }
+  .lift:hover { transform: translateY(-2px); }
 }
