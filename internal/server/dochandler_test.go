@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -249,6 +250,41 @@ func TestDocUpload_PathTraversal(t *testing.T) {
 		t.Fatalf("s3 object not found at sanitised key: %v", err)
 	}
 	_ = w // suppress unused warning
+}
+
+// TestDocUpload_DocumentCapReached verifies that a session which has already
+// hit MaxDocumentsPerSession receives a 422 rather than a silent upload.
+func TestDocUpload_DocumentCapReached(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	deps.MaxDocumentsPerSession = 2
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+
+	// Seed the repository up to the cap.
+	for i := range 2 {
+		_, err := docRepo.Create(context.TODO(), &document.Document{
+			KBID: kb.ID, UserID: userID,
+			Filename:    fmt.Sprintf("doc%d.txt", i),
+			S3Key:       fmt.Sprintf("key%d", i),
+			ContentType: "text/plain",
+			Status:      document.StatusPending,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body, ct := multipartUpload(t, "overflow.txt", "one too many")
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("document cap: got %d, want 422 — body: %s", w.Code, w.Body)
+	}
 }
 
 // --- Finding 2: unbounded upload size ---

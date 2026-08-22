@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	env "github.com/joho/godotenv"
 )
@@ -78,6 +80,17 @@ type Config struct {
 	// RegionExtractorScript is the path to scripts/extract_regions.py, the
 	// PDF region classifier invoked by the RegionClassificationHandler.
 	RegionExtractorScript string
+
+	// Guardrails — per-session upload limits and IP rate limiting.
+	// MaxDocumentsPerSession caps how many documents a single anonymous
+	// session may upload in total (across all knowledge bases).
+	MaxDocumentsPerSession int
+	// RateLimitRequests is the maximum number of requests allowed from a
+	// single IP within RateLimitWindow.
+	RateLimitRequests int
+	// RateLimitWindow is the sliding window over which RateLimitRequests is
+	// counted.
+	RateLimitWindow time.Duration
 }
 
 func Load() *Config {
@@ -114,12 +127,34 @@ func Load() *Config {
 		EntityExtractorScript: getEnv("ENTITY_EXTRACTOR_SCRIPT", "scripts/extract_entities.py"),
 		EntityExtractorPython: getEnv("ENTITY_EXTRACTOR_PYTHON", "python3"),
 		RegionExtractorScript: getEnv("REGION_EXTRACTOR_SCRIPT", "scripts/extract_regions.py"),
+
+		MaxDocumentsPerSession: getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
+		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
+		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
 	}
 }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
 	}
 	return fallback
 }

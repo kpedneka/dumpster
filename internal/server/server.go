@@ -10,6 +10,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/ratelimit"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/session"
 )
@@ -24,6 +25,12 @@ type Deps struct {
 	Searcher       search.Searcher
 	Sessions       session.SessionStore
 	MaxUploadBytes int64 // 0 defaults to 32 MiB
+	// RateLimiter is applied to all non-healthz routes (including session
+	// creation) keyed by client IP. Nil disables IP rate limiting.
+	RateLimiter ratelimit.Limiter
+	// MaxDocumentsPerSession caps the number of documents a single session
+	// may upload across all knowledge bases. 0 defaults to 20.
+	MaxDocumentsPerSession int
 }
 
 // NewRouter constructs the application HTTP router. All routes (other than
@@ -37,13 +44,17 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.MaxUploadBytes)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher)
 	}
 
-	mux.Handle("/", auth.Middleware(deps.Sessions, authed))
+	var handler http.Handler = auth.Middleware(deps.Sessions, authed)
+	if deps.RateLimiter != nil {
+		handler = ratelimit.Middleware(deps.RateLimiter, handler)
+	}
+	mux.Handle("/", handler)
 
 	return mux
 }

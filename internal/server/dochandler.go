@@ -17,7 +17,10 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/queue"
 )
 
-const defaultMaxUploadBytes int64 = 32 << 20 // 32 MiB
+const (
+	defaultMaxUploadBytes    int64 = 32 << 20 // 32 MiB
+	defaultMaxDocsPerSession       = 20
+)
 
 // allowedContentTypes maps accepted file extensions to their MIME type.
 // PDF and image types are routed through the region-classification pipeline;
@@ -41,12 +44,13 @@ var regionClassificationTypes = map[string]bool{
 }
 
 type docHandler struct {
-	kbRepo    kb.Repository
-	docRepo   document.Repository
-	objects   objectstore.ObjectStore
-	publisher queue.Publisher
-	manifest  manifest.Repository // nil when manifest not yet available
-	maxUpload int64
+	kbRepo           kb.Repository
+	docRepo          document.Repository
+	objects          objectstore.ObjectStore
+	publisher        queue.Publisher
+	manifest         manifest.Repository // nil when manifest not yet available
+	maxUpload        int64
+	maxDocsPerSession int
 }
 
 func registerDocRoutes(
@@ -57,17 +61,22 @@ func registerDocRoutes(
 	publisher queue.Publisher,
 	manifestRepo manifest.Repository,
 	maxUploadBytes int64,
+	maxDocsPerSession int,
 ) {
 	if maxUploadBytes <= 0 {
 		maxUploadBytes = defaultMaxUploadBytes
 	}
+	if maxDocsPerSession <= 0 {
+		maxDocsPerSession = defaultMaxDocsPerSession
+	}
 	h := &docHandler{
-		kbRepo:    kbRepo,
-		docRepo:   docRepo,
-		objects:   objects,
-		publisher: publisher,
-		manifest:  manifestRepo,
-		maxUpload: maxUploadBytes,
+		kbRepo:           kbRepo,
+		docRepo:          docRepo,
+		objects:          objects,
+		publisher:        publisher,
+		manifest:         manifestRepo,
+		maxUpload:        maxUploadBytes,
+		maxDocsPerSession: maxDocsPerSession,
 	}
 	mux.HandleFunc("POST /kbs/{kbID}/documents", h.upload)
 	mux.HandleFunc("GET /kbs/{kbID}/documents", h.list)
@@ -94,6 +103,17 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := h.kbRepo.Get(r.Context(), userID, kbID); err != nil {
 		writeKBError(w, err)
+		return
+	}
+
+	// Enforce the per-session document cap before consuming the request body.
+	existing, err := h.docRepo.ListByUserID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check document quota")
+		return
+	}
+	if len(existing) >= h.maxDocsPerSession {
+		writeError(w, http.StatusUnprocessableEntity, fmt.Sprintf("session document limit of %d reached", h.maxDocsPerSession))
 		return
 	}
 

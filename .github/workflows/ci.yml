@@ -23,13 +23,14 @@ jobs:
           # pgstore, db, s3store, llm/anthropic, llm/openai, entity/gliner,
           # manifest/layout, session/pgstore, vision/ollama require external
           # services/processes; covered by integration tests, not the unit gate.
-          CORE=./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/email,./internal/email/mock,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/vision,./internal/vision/mock,./internal/llm,./internal/llm/mock,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory
+          CORE=./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/email,./internal/email/mock,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/vision,./internal/vision/mock,./internal/llm,./internal/llm/mock,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock
           go test -coverpkg=$CORE -coverprofile=coverage.out -covermode=atomic \
             ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/email ./internal/graphedge ./internal/manifest ./internal/vision/ollama ./internal/llm \
             ./internal/kb ./internal/document ./internal/chunk ./internal/entity \
             ./internal/objectstore ./internal/worker \
             ./internal/rls ./internal/retrieval ./internal/retrieval/memory \
-            ./internal/search ./internal/router ./internal/graphrag/memory
+            ./internal/search ./internal/router ./internal/graphrag/memory \
+            ./internal/ratelimit ./internal/ratelimit/memory
           go tool cover -func=coverage.out | grep total | awk '{gsub(/%/,""); if ($3+0 < 80) {print "::error::coverage " $3 "% is below 80% threshold"; exit 1}}'
 
       - name: Lint
