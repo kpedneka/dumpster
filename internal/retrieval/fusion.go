@@ -33,7 +33,13 @@ func RRFMerge(k int, lists ...[]ScoredChunk) []ScoredChunk {
 	for id, score := range scores {
 		out = append(out, ScoredChunk{Chunk: byID[id], Score: score})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score != out[j].Score {
+			return out[i].Score > out[j].Score
+		}
+		// Tie-break on chunk ID so output is deterministic across calls.
+		return out[i].ID.String() < out[j].ID.String()
+	})
 
 	if k > 0 && len(out) > k {
 		out = out[:k]
