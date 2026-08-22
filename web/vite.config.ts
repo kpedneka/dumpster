@@ -17,7 +17,6 @@ export default defineConfig({
       'react-dom/client',
       'react-router-dom',
       '@tanstack/react-query',
-      '@clerk/clerk-react',
       'lucide-react',
     ],
   },

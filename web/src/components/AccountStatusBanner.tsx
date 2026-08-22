@@ -1,17 +1,13 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/api/client'
-import { useAuth } from '@/context/AuthContext'
 
-// Polls the demo account's TTL status and shows the day-6 warning banner
-// alongside the warning email (see internal/server/accounthandler.go and
-// internal/account.Sweep) so active users see it even without checking
-// email.
+/**
+ * Shows a warning banner when the current session is within 15 minutes of
+ * being swept due to inactivity. Hidden when the warning is not yet active.
+ */
 export function AccountStatusBanner() {
-  const { isAuthenticated } = useAuth()
-
   const { data } = useQuery({
     queryKey: ['account', 'status'],
-    enabled: isAuthenticated,
     queryFn: async () => {
       const { data, error } = await api.GET('/account/status', {})
       if (error) throw error
@@ -21,10 +17,9 @@ export function AccountStatusBanner() {
 
   if (!data?.warning_active) return null
 
-  const deletesAt = new Date(data.deletes_at).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
+  const expiresAt = new Date(data.deletes_at).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
   })
 
   return (
@@ -32,7 +27,7 @@ export function AccountStatusBanner() {
       role="alert"
       className="border-b border-yellow-600/30 bg-yellow-500/10 px-4 py-2 text-center text-sm text-yellow-700 dark:text-yellow-400"
     >
-      This is a demo account. Your data will be permanently deleted on {deletesAt}.
+      Your session and all documents will be permanently deleted at {expiresAt} due to inactivity.
     </div>
   )
 }

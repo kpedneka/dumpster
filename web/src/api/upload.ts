@@ -1,4 +1,3 @@
-import { getToken } from '@/lib/auth'
 import type { components } from './schema.d.ts'
 
 type Document = components['schemas']['Document']
@@ -14,10 +13,9 @@ export async function uploadDocument(kbId: string, file: File): Promise<Document
   const formData = new FormData()
   formData.append('file', file)
 
-  const token = await getToken()
   const res = await fetch(`${BASE_URL}/kbs/${kbId}/documents`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: 'include',
     body: formData,
   })
 
