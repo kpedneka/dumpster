@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
 # downloads glibc-linked binaries that don't run on Alpine's musl libc.
 FROM node:22-slim AS web-builder
 WORKDIR /app/web
-COPY web/package*.json ./
+COPY web/package*.json web/.npmrc ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
