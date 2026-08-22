@@ -1,6 +1,6 @@
 // Package account implements the demo account lifecycle: a hard-delete
 // capability spanning object storage and the local DB, plus (in sweep.go)
-// the day-6/day-7 TTL sweep that drives it.
+// the two-clock idle-timeout + hard-cap sweep that drives it.
 package account
 
 import (
