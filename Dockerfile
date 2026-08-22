@@ -35,10 +35,6 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 COPY scripts/ /app/scripts/
 RUN pip install --no-cache-dir -r /app/scripts/requirements.txt
 
-# api and worker stages exist for docker-compose (each needs its own ENTRYPOINT).
-FROM runtime AS api
-ENTRYPOINT ["/bin/api"]
-
-# The worker stage reuses the runtime image (Python + ML deps already installed).
-FROM runtime AS worker
-ENTRYPOINT ["/bin/worker"]
+# No ENTRYPOINT or CMD here: Fly.io selects the binary via [processes] in
+# fly.toml; docker-compose selects it via the `command:` key in compose.yml.
+# This must remain the last stage so builds without --target use runtime.
