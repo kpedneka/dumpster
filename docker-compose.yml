@@ -6,7 +6,8 @@ services:
   api:
     build:
       context: .
-      target: api
+      target: runtime
+    command: ["/bin/api"]
     env_file:
       - path: .env
         required: false
@@ -18,7 +19,8 @@ services:
   worker:
     build:
       context: .
-      target: worker
+      target: runtime
+    command: ["/bin/worker"]
     env_file:
       - path: .env
         required: false
