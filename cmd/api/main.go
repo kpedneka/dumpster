@@ -89,6 +89,7 @@ func main() {
 		Manifest: manifestpg.New(txRunner),
 		Searcher: searcher,
 		Sessions: sessionpg.New(pool),
+		SPADir:   "web/dist",
 	}
 
 	router := server.NewRouter(deps)

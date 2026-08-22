@@ -22,6 +22,11 @@ primary_region = "iad"
   # Cloudflare R2 S3-compatible endpoint (account-specific, set as secret).
   # S3_ENDPOINT = "https://<account-id>.r2.cloudflarestorage.com"
   S3_USE_PATH_STYLE = "false"
+  # Python ML scripts for entity extraction and PDF region classification.
+  # These paths match the COPY destinations in the runtime Dockerfile stage.
+  ENTITY_EXTRACTOR_PYTHON = "python3"
+  ENTITY_EXTRACTOR_SCRIPT = "/app/scripts/extract_entities.py"
+  REGION_EXTRACTOR_SCRIPT = "/app/scripts/extract_regions.py"
 
 # HTTP service binds only to the api process group.
 # min_machines_running=1 keeps one API machine warm at all times.
