@@ -50,7 +50,7 @@ func NewRouter(deps Deps) http.Handler {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher)
 	}
 
-	var handler http.Handler = auth.Middleware(deps.Sessions, authed)
+	handler := auth.Middleware(deps.Sessions, authed)
 	if deps.RateLimiter != nil {
 		handler = ratelimit.Middleware(deps.RateLimiter, handler)
 	}
