@@ -7,7 +7,9 @@ RUN CGO_ENABLED=0 go build -o /bin/api ./cmd/api
 RUN CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
 
 # web-builder compiles the React SPA so the api binary can serve it.
-FROM node:22-alpine AS web-builder
+# Uses node:22-slim (Debian/glibc) rather than Alpine: esbuild (used by Vite)
+# downloads glibc-linked binaries that don't run on Alpine's musl libc.
+FROM node:22-slim AS web-builder
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
