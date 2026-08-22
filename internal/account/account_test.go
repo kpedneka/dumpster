@@ -5,27 +5,25 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/account"
-	accountmock "github.com/kunalpednekar/dumpster/internal/account/mock"
-	"github.com/kunalpednekar/dumpster/internal/auth"
-	authmock "github.com/kunalpednekar/dumpster/internal/auth/mock"
 	"github.com/kunalpednekar/dumpster/internal/document"
-	"github.com/kunalpednekar/dumpster/internal/document/memory"
-	"github.com/kunalpednekar/dumpster/internal/objectstore/mock"
+	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
+	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
+	"github.com/kunalpednekar/dumpster/internal/session"
+	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
 )
 
-func seedUser(t *testing.T, users *authmock.UserStore, clerkUserID, email string) *auth.User {
+func seedSession(t *testing.T, store *sessionmock.Store) *session.Session {
 	t.Helper()
-	u, err := users.GetOrCreateByClerkID(context.Background(), clerkUserID, email)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
+	sess := &session.Session{ID: uuid.New(), CreatedAt: time.Now()}
+	store.Seed(sess)
+	return sess
 }
 
-func seedDoc(t *testing.T, docs *memory.Repository, userID uuid.UUID, key string) {
+func seedDoc(t *testing.T, docs *docmem.Repository, userID uuid.UUID, key string) {
 	t.Helper()
 	_, err := docs.Create(context.Background(), &document.Document{
 		KBID:        uuid.New(),
@@ -41,14 +39,13 @@ func seedDoc(t *testing.T, docs *memory.Repository, userID uuid.UUID, key string
 }
 
 func TestDeleter_Delete_happyPath(t *testing.T) {
-	identity := accountmock.New()
-	objects := mock.New()
-	docs := memory.New()
-	users := authmock.NewUserStore()
+	sessions := sessionmock.New()
+	objects := objmock.New()
+	docs := docmem.New()
 
-	u := seedUser(t, users, "user_abc123", "alice@example.com")
-	seedDoc(t, docs, u.ID, "uploads/a.txt")
-	seedDoc(t, docs, u.ID, "uploads/b.txt")
+	s := seedSession(t, sessions)
+	seedDoc(t, docs, s.ID, "uploads/a.txt")
+	seedDoc(t, docs, s.ID, "uploads/b.txt")
 	if err := objects.Put(context.Background(), "uploads/a.txt", strings.NewReader("a"), 1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
@@ -56,112 +53,108 @@ func TestDeleter_Delete_happyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := account.New(identity, objects, docs, users)
-	if err := d.Delete(context.Background(), u); err != nil {
+	d := account.New(sessions, objects, docs)
+	if err := d.Delete(context.Background(), s); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	if !identity.Deleted("user_abc123") {
-		t.Error("expected Clerk identity to be deleted")
-	}
 	if _, err := objects.Get(context.Background(), "uploads/a.txt"); err == nil {
 		t.Error("expected uploads/a.txt to be removed from object store")
 	}
 	if _, err := objects.Get(context.Background(), "uploads/b.txt"); err == nil {
 		t.Error("expected uploads/b.txt to be removed from object store")
 	}
-	if _, err := users.GetByClerkID(context.Background(), "user_abc123"); !errors.Is(err, auth.ErrUserNotFound) {
-		t.Errorf("got %v, want auth.ErrUserNotFound", err)
+	// Session row should be gone.
+	if _, err := sessions.GetByID(context.Background(), s.ID); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("got %v, want session.ErrSessionNotFound", err)
 	}
 }
 
 func TestDeleter_Delete_allowsResignup(t *testing.T) {
-	identity := accountmock.New()
-	objects := mock.New()
-	docs := memory.New()
-	users := authmock.NewUserStore()
+	sessions := sessionmock.New()
+	objects := objmock.New()
+	docs := docmem.New()
 
-	u := seedUser(t, users, "user_abc123", "alice@example.com")
+	s := seedSession(t, sessions)
 
-	d := account.New(identity, objects, docs, users)
-	if err := d.Delete(context.Background(), u); err != nil {
+	d := account.New(sessions, objects, docs)
+	if err := d.Delete(context.Background(), s); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	fresh, err := users.GetOrCreateByClerkID(context.Background(), "user_abc123", "alice@example.com")
+	// A new session can be created with a different ID.
+	fresh, err := sessions.Create(context.Background())
 	if err != nil {
-		t.Fatalf("re-signup should succeed after deletion: %v", err)
+		t.Fatalf("re-signup (Create) should succeed after deletion: %v", err)
 	}
-	if fresh.ID == u.ID {
-		t.Error("re-signup should create a fresh local row, not reuse the deleted one")
-	}
-}
-
-func TestDeleter_Delete_clerkFailureLeavesLocalRowIntact(t *testing.T) {
-	identity := accountmock.New()
-	identity.Err = errors.New("clerk: backend unavailable")
-	objects := mock.New()
-	docs := memory.New()
-	users := authmock.NewUserStore()
-
-	u := seedUser(t, users, "user_abc123", "alice@example.com")
-
-	d := account.New(identity, objects, docs, users)
-	if err := d.Delete(context.Background(), u); err == nil {
-		t.Fatal("expected error when Clerk delete fails")
-	}
-
-	if _, err := users.GetByClerkID(context.Background(), "user_abc123"); err != nil {
-		t.Errorf("local row should not be deleted when Clerk delete fails: %v", err)
+	if fresh.ID == s.ID {
+		t.Error("re-signup should create a fresh session ID")
 	}
 }
 
-func TestDeleter_Delete_partialR2FailureAbortsBeforeClerkAndDB(t *testing.T) {
-	identity := accountmock.New()
-	objects := mock.New()
-	docs := memory.New()
-	users := authmock.NewUserStore()
+func TestDeleter_Delete_objectFailureAborts(t *testing.T) {
+	sessions := sessionmock.New()
+	objects := objmock.New()
+	docs := docmem.New()
 
-	u := seedUser(t, users, "user_abc123", "alice@example.com")
-	seedDoc(t, docs, u.ID, "uploads/a.txt")
-	seedDoc(t, docs, u.ID, "uploads/b.txt")
+	s := seedSession(t, sessions)
+	seedDoc(t, docs, s.ID, "uploads/a.txt")
+	seedDoc(t, docs, s.ID, "uploads/b.txt")
 	if err := objects.Put(context.Background(), "uploads/a.txt", strings.NewReader("a"), 1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 	if err := objects.Put(context.Background(), "uploads/b.txt", strings.NewReader("b"), 1, "text/plain"); err != nil {
 		t.Fatal(err)
 	}
-	objects.DeleteErrFor = map[string]error{"uploads/a.txt": errors.New("r2: unavailable")}
+	objects.DeleteErrFor = map[string]error{"uploads/a.txt": errors.New("object store: unavailable")}
 
-	d := account.New(identity, objects, docs, users)
-	if err := d.Delete(context.Background(), u); err == nil {
-		t.Fatal("expected error when an R2 delete fails")
+	d := account.New(sessions, objects, docs)
+	if err := d.Delete(context.Background(), s); err == nil {
+		t.Fatal("expected error when an object delete fails")
 	}
 
-	if _, err := objects.Get(context.Background(), "uploads/b.txt"); err == nil {
-		t.Error("uploads/b.txt should still have been attempted and removed despite uploads/a.txt failing")
-	}
-	if identity.Deleted("user_abc123") {
-		t.Error("Clerk identity should not be deleted when an R2 delete fails")
-	}
-	if _, err := users.GetByClerkID(context.Background(), "user_abc123"); err != nil {
-		t.Errorf("local row should not be deleted when an R2 delete fails: %v", err)
+	// Session row should still be present — not deleted when objects fail.
+	if _, err := sessions.GetByID(context.Background(), s.ID); err != nil {
+		t.Errorf("session row should not be deleted when object delete fails: %v", err)
 	}
 }
 
 func TestDeleter_Delete_zeroDocuments(t *testing.T) {
-	identity := accountmock.New()
-	objects := mock.New()
-	docs := memory.New()
-	users := authmock.NewUserStore()
+	sessions := sessionmock.New()
+	objects := objmock.New()
+	docs := docmem.New()
 
-	u := seedUser(t, users, "user_abc123", "alice@example.com")
+	s := seedSession(t, sessions)
 
-	d := account.New(identity, objects, docs, users)
-	if err := d.Delete(context.Background(), u); err != nil {
+	d := account.New(sessions, objects, docs)
+	if err := d.Delete(context.Background(), s); err != nil {
 		t.Fatalf("Delete with no documents should succeed: %v", err)
 	}
-	if !identity.Deleted("user_abc123") {
-		t.Error("expected Clerk identity to be deleted")
+	if _, err := sessions.GetByID(context.Background(), s.ID); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Errorf("expected session to be deleted, got: %v", err)
 	}
+}
+
+func TestDeleter_Delete_sessionDeletedLast(t *testing.T) {
+	// R2 objects deleted before session row, so a failure in objects leaves
+	// session intact for retry.
+	sessions := sessionmock.New()
+	objects := objmock.New()
+	docs := docmem.New()
+
+	s := seedSession(t, sessions)
+	seedDoc(t, docs, s.ID, "uploads/x.txt")
+	_ = objects.Put(context.Background(), "uploads/x.txt", strings.NewReader("x"), 1, "text/plain")
+	objects.DeleteErrFor = map[string]error{"uploads/x.txt": errors.New("r2: timeout")}
+
+	d := account.New(sessions, objects, docs)
+	_ = d.Delete(context.Background(), s)
+
+	if _, err := sessions.GetByID(context.Background(), s.ID); err != nil {
+		t.Error("session should survive when object delete fails (retry semantics)")
+	}
+}
+
+func TestDeleter_compileTimeCheck(t *testing.T) {
+	var _ account.AccountDeleter = (*account.Deleter)(nil)
 }

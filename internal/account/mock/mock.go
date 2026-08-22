@@ -1,5 +1,4 @@
-// Package mock provides test doubles for account.IdentityDeleter and
-// account.AccountDeleter.
+// Package mock provides test doubles for account.AccountDeleter.
 package mock
 
 import (
@@ -8,66 +7,31 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/account"
-	"github.com/kunalpednekar/dumpster/internal/auth"
+	"github.com/kunalpednekar/dumpster/internal/session"
 )
 
-// IdentityDeleter is an in-memory test double for account.IdentityDeleter.
-type IdentityDeleter struct {
-	mu      sync.Mutex
-	deleted []string
-	// Err, when set, is returned by every DeleteUser call.
-	Err error
-}
-
-func New() *IdentityDeleter {
-	return &IdentityDeleter{}
-}
-
-func (d *IdentityDeleter) DeleteUser(_ context.Context, clerkUserID string) error {
-	if d.Err != nil {
-		return d.Err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.deleted = append(d.deleted, clerkUserID)
-	return nil
-}
-
-// Deleted reports whether DeleteUser was called with clerkUserID.
-func (d *IdentityDeleter) Deleted(clerkUserID string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	for _, id := range d.deleted {
-		if id == clerkUserID {
-			return true
-		}
-	}
-	return false
-}
-
-var _ account.IdentityDeleter = (*IdentityDeleter)(nil)
-
 // Deleter is an in-memory test double for account.AccountDeleter, used by
-// Sweep tests so they don't need to drive a real Deleter's Clerk/R2/DB
-// chain.
+// Sweep tests so they don't need to drive a real object-store / DB chain.
 type Deleter struct {
 	mu      sync.Mutex
 	deleted []uuid.UUID
-	// ErrFor, when set for a user ID, is returned by Delete for that user.
+	// ErrFor, when set for a session ID, is returned by Delete for that session.
 	ErrFor map[uuid.UUID]error
 }
 
+// NewDeleter returns a Deleter ready for use in tests.
 func NewDeleter() *Deleter {
 	return &Deleter{}
 }
 
-func (d *Deleter) Delete(_ context.Context, u *auth.User) error {
-	if err, ok := d.ErrFor[u.ID]; ok {
+// Delete records the deletion and returns any configured error for s.ID.
+func (d *Deleter) Delete(_ context.Context, s *session.Session) error {
+	if err, ok := d.ErrFor[s.ID]; ok {
 		return err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.deleted = append(d.deleted, u.ID)
+	d.deleted = append(d.deleted, s.ID)
 	return nil
 }
 
@@ -83,7 +47,7 @@ func (d *Deleter) Deleted(id uuid.UUID) bool {
 	return false
 }
 
-// DeletedCount returns how many users Delete was called for.
+// DeletedCount returns the number of sessions Delete was called for.
 func (d *Deleter) DeletedCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

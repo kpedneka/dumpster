@@ -29,7 +29,7 @@ func TestSearch(t *testing.T) {
 	router := NewRouter(deps)
 
 	body := strings.NewReader(`{"query":"what is the answer?"}`)
-	req := authedRequest(t, http.MethodPost, "/kbs/"+k.ID.String()+"/search", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search", body, userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -65,7 +65,7 @@ func TestSearch_MissingQuery(t *testing.T) {
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	router := NewRouter(deps)
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
 		strings.NewReader(`{}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -81,7 +81,7 @@ func TestSearch_KBNotFound(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+uuid.New().String()+"/search",
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+uuid.New().String()+"/search",
 		strings.NewReader(`{"query":"hello"}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -92,18 +92,21 @@ func TestSearch_KBNotFound(t *testing.T) {
 	}
 }
 
-func TestSearch_Unauthorized(t *testing.T) {
+// TestSearch_NoSession verifies that a request with no session cookie
+// receives a fresh session (middleware never 401s) and returns 404 since
+// the KB doesn't belong to the newly-minted session.
+func TestSearch_NoSession(t *testing.T) {
 	deps, _, _, _, _ := defaultDeps()
 	router := NewRouter(deps)
 
-	req := httptest.NewRequest(http.MethodPost, "/kbs/"+uuid.New().String()+"/search",
+	req := unauthRequest(http.MethodPost, "/kbs/"+uuid.New().String()+"/search",
 		strings.NewReader(`{"query":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("no-session search: got %d, want 404", w.Code)
 	}
 }
 
@@ -115,7 +118,7 @@ func TestSearch_TenantIsolation(t *testing.T) {
 	k, _ := kbRepo.Create(context.TODO(), user1, "kb1")
 
 	// user2 tries to search user1's KB
-	req := authedRequest(t, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
 		strings.NewReader(`{"query":"secret"}`), user2)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -133,7 +136,7 @@ func TestSearch_ServiceError(t *testing.T) {
 	deps.Searcher = searchmock.NewErrorSearcher("index unavailable")
 	router := NewRouter(deps)
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
 		strings.NewReader(`{"query":"hello"}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

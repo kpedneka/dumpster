@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	env "github.com/joho/godotenv"
 )
@@ -47,13 +49,8 @@ type Config struct {
 	S3UsePathStyle bool
 	// Observability
 	MetricsPort string
-	// Auth — Clerk manages sign-up/sign-in/session lifecycle; the API only
-	// needs a secret key to verify sessions and call the Backend API, and
-	// a webhook signing secret to authenticate Clerk's lifecycle webhooks.
-	ClerkSecretKey     string
-	ClerkWebhookSecret string
-	// Email — transactional email for the demo account lifecycle (welcome
-	// and TTL-warning messages), sent via Resend.
+	// Email — transactional email for the demo account lifecycle, sent via Resend.
+	// Reserved for future use; sessions are anonymous and have no email address.
 	ResendAPIKey   string
 	ResendFromAddr string
 	// OllamaURL is the base URL of the local Ollama service used by the
@@ -83,6 +80,17 @@ type Config struct {
 	// RegionExtractorScript is the path to scripts/extract_regions.py, the
 	// PDF region classifier invoked by the RegionClassificationHandler.
 	RegionExtractorScript string
+
+	// Guardrails — per-session upload limits and IP rate limiting.
+	// MaxDocumentsPerSession caps how many documents a single anonymous
+	// session may upload in total (across all knowledge bases).
+	MaxDocumentsPerSession int
+	// RateLimitRequests is the maximum number of requests allowed from a
+	// single IP within RateLimitWindow.
+	RateLimitRequests int
+	// RateLimitWindow is the sliding window over which RateLimitRequests is
+	// counted.
+	RateLimitWindow time.Duration
 }
 
 func Load() *Config {
@@ -106,8 +114,6 @@ func Load() *Config {
 		S3AccessKey:        getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:        getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UsePathStyle:     getEnv("S3_USE_PATH_STYLE", "true") == "true",
-		ClerkSecretKey:     getEnv("CLERK_SECRET_KEY", ""),
-		ClerkWebhookSecret: getEnv("CLERK_WEBHOOK_SECRET", ""),
 		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
 		ResendFromAddr:     getEnv("RESEND_FROM_ADDR", "noreply@example.com"),
 		OllamaURL:          getEnv("OLLAMA_URL", "http://ollama:11434"),
@@ -121,12 +127,34 @@ func Load() *Config {
 		EntityExtractorScript: getEnv("ENTITY_EXTRACTOR_SCRIPT", "scripts/extract_entities.py"),
 		EntityExtractorPython: getEnv("ENTITY_EXTRACTOR_PYTHON", "python3"),
 		RegionExtractorScript: getEnv("REGION_EXTRACTOR_SCRIPT", "scripts/extract_regions.py"),
+
+		MaxDocumentsPerSession: getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
+		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
+		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
 	}
 }
 
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
 	}
 	return fallback
 }

@@ -19,7 +19,7 @@ func TestKBCreate(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	req := authedRequest(t, http.MethodPost, "/kbs", strings.NewReader(`{"name":"my kb"}`), userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs", strings.NewReader(`{"name":"my kb"}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -45,7 +45,7 @@ func TestKBCreate_MissingName(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	req := authedRequest(t, http.MethodPost, "/kbs", strings.NewReader(`{}`), userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs", strings.NewReader(`{}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -55,17 +55,20 @@ func TestKBCreate_MissingName(t *testing.T) {
 	}
 }
 
-func TestKBCreate_Unauthorized(t *testing.T) {
+// TestKBCreate_NoSession verifies that a request with no session cookie
+// is handled: the middleware mints a fresh session and the KB creation
+// proceeds successfully.
+func TestKBCreate_NoSession(t *testing.T) {
 	deps, _, _, _, _ := defaultDeps()
 	router := NewRouter(deps)
 
-	req := httptest.NewRequest(http.MethodPost, "/kbs", strings.NewReader(`{"name":"x"}`))
+	req := unauthRequest(http.MethodPost, "/kbs", strings.NewReader(`{"name":"x"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("no-session KB create: got %d, want 201", w.Code)
 	}
 }
 
@@ -79,7 +82,7 @@ func TestKBList(t *testing.T) {
 	_, _ = kbRepo.Create(context.TODO(), userID, "beta")
 	_, _ = kbRepo.Create(context.TODO(), uuid.New(), "other")
 
-	req := authedRequest(t, http.MethodGet, "/kbs", nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -103,7 +106,7 @@ func TestKBGet(t *testing.T) {
 
 	created, _ := kbRepo.Create(context.TODO(), userID, "test kb")
 
-	req := authedRequest(t, http.MethodGet, "/kbs/"+created.ID.String(), nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -125,7 +128,7 @@ func TestKBGet_NotFound(t *testing.T) {
 	router := NewRouter(deps)
 	userID := uuid.New()
 
-	req := authedRequest(t, http.MethodGet, "/kbs/"+uuid.New().String(), nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+uuid.New().String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -141,7 +144,7 @@ func TestKBRename(t *testing.T) {
 
 	created, _ := kbRepo.Create(context.TODO(), userID, "old name")
 
-	req := authedRequest(t, http.MethodPatch, "/kbs/"+created.ID.String(),
+	req := authedRequest(t, deps, http.MethodPatch, "/kbs/"+created.ID.String(),
 		strings.NewReader(`{"name":"new name"}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -167,7 +170,7 @@ func TestKBDelete(t *testing.T) {
 
 	created, _ := kbRepo.Create(context.TODO(), userID, "to delete")
 
-	req := authedRequest(t, http.MethodDelete, "/kbs/"+created.ID.String(), nil, userID)
+	req := authedRequest(t, deps, http.MethodDelete, "/kbs/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -176,7 +179,7 @@ func TestKBDelete(t *testing.T) {
 	}
 }
 
-// --- Finding 5: error discrimination (ErrNotFound → 404, other errors → 500) ---
+// --- error discrimination (ErrNotFound → 404, other errors → 500) ---
 
 // stubKBRepo delegates to an underlying memory repo but overrides specific
 // methods to return a configurable error, enabling storage-error testing.
@@ -209,13 +212,12 @@ func (r *stubKBRepo) Delete(ctx context.Context, userID, id uuid.UUID) error {
 }
 
 func TestKBGet_StorageError_Returns500(t *testing.T) {
-	stub := &stubKBRepo{Repository: kbmem.New(), getErr: errors.New("connection refused")}
-	deps, _, docRepo, obj, pub := defaultDeps()
-	deps.KBs = stub
-	router := NewRouter(testDeps(stub, docRepo, obj, pub))
+	deps, _, _, _, _ := defaultDeps()
+	deps.KBs = &stubKBRepo{Repository: kbmem.New(), getErr: errors.New("connection refused")}
+	router := NewRouter(deps)
 	userID := uuid.New()
 
-	req := authedRequest(t, http.MethodGet, "/kbs/"+uuid.New().String(), nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+uuid.New().String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -225,13 +227,12 @@ func TestKBGet_StorageError_Returns500(t *testing.T) {
 }
 
 func TestKBGet_ErrNotFound_Returns404(t *testing.T) {
-	stub := &stubKBRepo{Repository: kbmem.New(), getErr: kb.ErrNotFound}
-	deps, _, docRepo, obj, pub := defaultDeps()
-	router := NewRouter(testDeps(stub, docRepo, obj, pub))
+	deps, _, _, _, _ := defaultDeps()
+	deps.KBs = &stubKBRepo{Repository: kbmem.New(), getErr: kb.ErrNotFound}
+	router := NewRouter(deps)
 	userID := uuid.New()
-	_ = deps
 
-	req := authedRequest(t, http.MethodGet, "/kbs/"+uuid.New().String(), nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+uuid.New().String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -241,15 +242,14 @@ func TestKBGet_ErrNotFound_Returns404(t *testing.T) {
 }
 
 func TestKBRename_StorageError_Returns500(t *testing.T) {
-	base := kbmem.New()
+	deps, _, _, _, _ := defaultDeps()
 	userID := uuid.New()
+	base := kbmem.New()
 	created, _ := base.Create(context.TODO(), userID, "kb")
-	stub := &stubKBRepo{Repository: base, renameErr: errors.New("db timeout")}
-	deps, _, docRepo, obj, pub := defaultDeps()
-	router := NewRouter(testDeps(stub, docRepo, obj, pub))
-	_ = deps
+	deps.KBs = &stubKBRepo{Repository: base, renameErr: errors.New("db timeout")}
+	router := NewRouter(deps)
 
-	req := authedRequest(t, http.MethodPatch, "/kbs/"+created.ID.String(),
+	req := authedRequest(t, deps, http.MethodPatch, "/kbs/"+created.ID.String(),
 		strings.NewReader(`{"name":"new"}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -261,15 +261,14 @@ func TestKBRename_StorageError_Returns500(t *testing.T) {
 }
 
 func TestKBDelete_StorageError_Returns500(t *testing.T) {
-	base := kbmem.New()
+	deps, _, _, _, _ := defaultDeps()
 	userID := uuid.New()
+	base := kbmem.New()
 	created, _ := base.Create(context.TODO(), userID, "kb")
-	stub := &stubKBRepo{Repository: base, deleteErr: errors.New("db timeout")}
-	deps, _, docRepo, obj, pub := defaultDeps()
-	router := NewRouter(testDeps(stub, docRepo, obj, pub))
-	_ = deps
+	deps.KBs = &stubKBRepo{Repository: base, deleteErr: errors.New("db timeout")}
+	router := NewRouter(deps)
 
-	req := authedRequest(t, http.MethodDelete, "/kbs/"+created.ID.String(), nil, userID)
+	req := authedRequest(t, deps, http.MethodDelete, "/kbs/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -285,16 +284,16 @@ func TestKBTenantIsolation(t *testing.T) {
 
 	kb1, _ := kbRepo.Create(context.TODO(), user1, "user1 kb")
 
-	// user2 should get 404 trying to access user1's KB
-	req := authedRequest(t, http.MethodGet, "/kbs/"+kb1.ID.String(), nil, user2)
+	// user2 should get 404 trying to access user1's KB.
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb1.ID.String(), nil, user2)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("cross-tenant get: got %d, want 404", w.Code)
 	}
 
-	// user2 should get 404 trying to delete user1's KB
-	req = authedRequest(t, http.MethodDelete, "/kbs/"+kb1.ID.String(), nil, user2)
+	// user2 should get 404 trying to delete user1's KB.
+	req = authedRequest(t, deps, http.MethodDelete, "/kbs/"+kb1.ID.String(), nil, user2)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {

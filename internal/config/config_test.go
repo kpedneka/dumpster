@@ -78,17 +78,12 @@ func TestGetEnv_fallback(t *testing.T) {
 	}
 }
 
-func TestLoad_clerkFromEnv(t *testing.T) {
-	t.Setenv("CLERK_SECRET_KEY", "sk_test_abc")
-	t.Setenv("CLERK_WEBHOOK_SECRET", "whsec_abc")
-
+func TestLoad_resendEnvVarsPresent(t *testing.T) {
+	// Smoke-test that the Resend config block still loads from env.
+	t.Setenv("RESEND_API_KEY", "re_smoke_test")
 	c := Load()
-
-	if c.ClerkSecretKey != "sk_test_abc" {
-		t.Errorf("ClerkSecretKey: got %q, want %q", c.ClerkSecretKey, "sk_test_abc")
-	}
-	if c.ClerkWebhookSecret != "whsec_abc" {
-		t.Errorf("ClerkWebhookSecret: got %q, want %q", c.ClerkWebhookSecret, "whsec_abc")
+	if c.ResendAPIKey != "re_smoke_test" {
+		t.Errorf("ResendAPIKey: got %q, want %q", c.ResendAPIKey, "re_smoke_test")
 	}
 }
 
