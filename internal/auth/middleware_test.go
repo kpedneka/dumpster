@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -63,7 +64,7 @@ func TestMiddleware_noCookie_mintsSession(t *testing.T) {
 func TestMiddleware_validCookie_resumesSession(t *testing.T) {
 	sessions := sessionmock.New()
 	// Pre-create a session so GetByID succeeds.
-	sess, err := sessions.Create(nil)
+	sess, err := sessions.Create(context.TODO())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +100,8 @@ func TestMiddleware_validCookie_resumesSession(t *testing.T) {
 func TestMiddleware_sweptSession_mintsFresh(t *testing.T) {
 	sessions := sessionmock.New()
 	// Create then delete a session to simulate a swept session.
-	swept, _ := sessions.Create(nil)
-	_ = sessions.Delete(nil, swept.ID)
+	swept, _ := sessions.Create(context.TODO())
+	_ = sessions.Delete(context.TODO(), swept.ID)
 
 	var gotID uuid.UUID
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +142,7 @@ func TestMiddleware_sweptSession_mintsFresh(t *testing.T) {
 // matching the Clerk-era guarantee that session identity is stable.
 func TestMiddleware_sameSessionAcrossRequests(t *testing.T) {
 	sessions := sessionmock.New()
-	sess, _ := sessions.Create(nil)
+	sess, _ := sessions.Create(context.TODO())
 
 	var ids []uuid.UUID
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
