@@ -23,6 +23,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { toast } from '@/hooks/use-toast'
 import { useDeleteKB } from '@/hooks/use-delete-kb'
+import { KBTabs } from '@/components/KBTabs'
 import { cn } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
 
@@ -180,6 +181,8 @@ export function KBDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <KBTabs kbId={kbId!} />
 
       {/* v2.8 layout: documents (main) + docked upload panel (right) on desktop;
           stacks on mobile/tablet with upload first. */}

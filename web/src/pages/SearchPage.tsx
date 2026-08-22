@@ -6,6 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { api } from '@/api/client'
 import { CitationMarker } from '@/components/CitationMarker'
+import { KBTabs } from '@/components/KBTabs'
 import { Button } from '@/components/ui/button'
 import { getDraftQuery, setDraftQuery, getSubmittedQuery, setSubmittedQuery } from '@/lib/search-state'
 import { cn } from '@/lib/utils'
@@ -135,6 +136,8 @@ export function SearchPage() {
   return (
     <div className="rise mx-auto max-w-3xl px-6 py-8">
       <h1 className="mb-6 font-display text-2xl font-semibold tracking-tight">{kb?.name ?? '—'}</h1>
+
+      <KBTabs kbId={kbId!} />
 
       <form onSubmit={handleSubmit} className="mb-8 flex items-start gap-2">
         <div className="relative flex-1">
