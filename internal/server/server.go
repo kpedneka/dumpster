@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/document"
@@ -31,6 +32,11 @@ type Deps struct {
 	// MaxDocumentsPerSession caps the number of documents a single session
 	// may upload across all knowledge bases. 0 defaults to 20.
 	MaxDocumentsPerSession int
+	// SPADir is the path to the built React SPA (e.g. "web/dist"). When set,
+	// the router serves static assets from that directory and falls back to
+	// index.html for browser navigation. Leave empty to disable SPA serving
+	// (development: Vite dev server handles this instead).
+	SPADir string
 }
 
 // NewRouter constructs the application HTTP router. All routes (other than
@@ -54,9 +60,32 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.RateLimiter != nil {
 		handler = ratelimit.Middleware(deps.RateLimiter, handler)
 	}
+
+	// When SPADir is set (production), serve static assets and wrap the API
+	// handler so browser navigation returns index.html instead of JSON 404s.
+	if deps.SPADir != "" {
+		spaFS := http.Dir(deps.SPADir)
+		mux.Handle("/assets/", http.FileServer(spaFS))
+		mux.Handle("/favicon.ico", http.FileServer(spaFS))
+		handler = spaFallback(handler, deps.SPADir+"/index.html")
+	}
 	mux.Handle("/", handler)
 
 	return mux
+}
+
+// spaFallback serves index.html for browser navigation (GET requests that
+// include "text/html" in their Accept header) so React Router can handle
+// client-side routing. API calls from fetch() use Accept: application/json
+// or Accept: */* and pass through to the wrapped handler unchanged.
+func spaFallback(next http.Handler, indexPath string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
