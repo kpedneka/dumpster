@@ -10,7 +10,21 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'react-router-dom',
+      '@tanstack/react-query',
+      '@clerk/clerk-react',
+      'lucide-react',
+    ],
+  },
   server: {
+    warmup: {
+      clientFiles: ['./src/main.tsx'],
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8080',
