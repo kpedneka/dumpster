@@ -17,7 +17,7 @@ UNIT_TESTPKG := ./internal/auth ./internal/account ./internal/config ./internal/
                 ./internal/ratelimit ./internal/ratelimit/memory
 
 build:
-	go build ./...
+	go build ./cmd/... ./internal/...
 
 test:
 	go test ./...
@@ -27,6 +27,7 @@ test:
 
 lint:
 	golangci-lint run ./...
+	cd web && npm run typecheck
 	cd web && npm run lint
 
 run:

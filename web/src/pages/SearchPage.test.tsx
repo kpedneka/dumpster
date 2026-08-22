@@ -279,8 +279,8 @@ describe('SearchPage', () => {
       vi.mocked(api.POST).mockResolvedValue({
         data: {
           summary: 'Paris [1] is the capital of France [2].',
-          // Deliberately out of marker order — citations is matched by `number`,
-          // never by array position (see SearchPage.tsx renderCitedSummary).
+          // Deliberately out of marker order — citations are matched by `number`,
+          // never by array position.
           citations: [
             { number: 2, document_id: 'doc-1', chunk_id: 'chunk-2', char_start: 6, char_end: 31 },
             { number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 5 },

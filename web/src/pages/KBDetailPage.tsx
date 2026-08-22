@@ -5,7 +5,6 @@ import { useDropzone } from 'react-dropzone'
 import { AlertTriangle, FileText, MoreHorizontal, Trash2, Upload } from 'lucide-react'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
-import { KBTabs } from '@/components/KBTabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -157,8 +156,6 @@ export function KBDetailPage() {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <KBTabs kbId={kbId!} />
-
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
