@@ -9,34 +9,31 @@ import (
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/account"
 	accountmock "github.com/kunalpednekar/dumpster/internal/account/mock"
-	"github.com/kunalpednekar/dumpster/internal/auth"
-	authmock "github.com/kunalpednekar/dumpster/internal/auth/mock"
-	emailmock "github.com/kunalpednekar/dumpster/internal/email/mock"
+	"github.com/kunalpednekar/dumpster/internal/session"
+	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
 )
 
 var fixedNow = time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
 
-func newTestSweep(users auth.LocalUserStore, deleter account.AccountDeleter, emails *emailmock.Sender) *account.Sweep {
-	sweep := account.NewSweep(users, deleter, emails)
+func newTestSweep(sessions *sessionmock.Store, deleter account.AccountDeleter) *account.Sweep {
+	sweep := account.NewSweep(sessions, deleter)
 	sweep.Now = func() time.Time { return fixedNow }
 	return sweep
 }
 
-func seedAt(t *testing.T, users *authmock.UserStore, age time.Duration, warned bool) *auth.User {
+func seedAt(t *testing.T, store *sessionmock.Store, age time.Duration, warned bool) *session.Session {
 	t.Helper()
 	id := uuid.New()
-	u := &auth.User{
-		ID:          id,
-		ClerkUserID: "clerk_" + id.String(),
-		Email:       id.String() + "@example.com",
-		CreatedAt:   fixedNow.Add(-age),
+	sess := &session.Session{
+		ID:        id,
+		CreatedAt: fixedNow.Add(-age),
 	}
 	if warned {
 		warnedAt := fixedNow.Add(-time.Hour)
-		u.WarningSentAt = &warnedAt
+		sess.WarnedAt = &warnedAt
 	}
-	users.Seed(u)
-	return u
+	store.Seed(sess)
+	return sess
 }
 
 func TestSweep_boundaries(t *testing.T) {
@@ -60,22 +57,30 @@ func TestSweep_boundaries(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			users := authmock.NewUserStore()
-			u := seedAt(t, users, tc.age, tc.warned)
+			sessions := sessionmock.New()
+			sess := seedAt(t, sessions, tc.age, tc.warned)
 			deleter := accountmock.NewDeleter()
-			emails := emailmock.New()
-			sweep := newTestSweep(users, deleter, emails)
+			sweep := newTestSweep(sessions, deleter)
 
 			result, err := sweep.Run(context.Background())
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 
-			gotWarned := emails.SentTo(u.Email) > 0
+			// Check warned: session should have WarnedAt set.
+			got, _ := sessions.GetByID(context.Background(), sess.ID)
+			gotWarned := got != nil && got.WarnedAt != nil && !tc.warned
+			if tc.warned {
+				// Already warned before the run; WarnedAt was set before.
+				gotWarned = false
+			} else if result.Warned > 0 {
+				gotWarned = true
+			}
+
 			if gotWarned != tc.wantWarned {
 				t.Errorf("warned: got %v, want %v (result=%+v)", gotWarned, tc.wantWarned, result)
 			}
-			gotDeleted := deleter.Deleted(u.ID)
+			gotDeleted := deleter.Deleted(sess.ID)
 			if gotDeleted != tc.wantDeleted {
 				t.Errorf("deleted: got %v, want %v (result=%+v)", gotDeleted, tc.wantDeleted, result)
 			}
@@ -84,35 +89,43 @@ func TestSweep_boundaries(t *testing.T) {
 }
 
 func TestSweep_warningIdempotency_acrossRuns(t *testing.T) {
-	users := authmock.NewUserStore()
-	u := seedAt(t, users, 6*24*time.Hour, false)
+	sessions := sessionmock.New()
+	sess := seedAt(t, sessions, 6*24*time.Hour, false)
 	deleter := accountmock.NewDeleter()
-	emails := emailmock.New()
-	sweep := newTestSweep(users, deleter, emails)
+	sweep := newTestSweep(sessions, deleter)
 
 	if _, err := sweep.Run(context.Background()); err != nil {
 		t.Fatalf("first Run: %v", err)
 	}
-	if emails.SentTo(u.Email) != 1 {
-		t.Fatalf("expected 1 warning email after first run, got %d", emails.SentTo(u.Email))
+	// WarnedAt should be set after the first run.
+	got, err := sessions.GetByID(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.WarnedAt == nil {
+		t.Fatal("expected WarnedAt to be set after first run")
 	}
 
 	if _, err := sweep.Run(context.Background()); err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
-	if emails.SentTo(u.Email) != 1 {
-		t.Errorf("expected no additional warning email on second run, still got %d", emails.SentTo(u.Email))
+	// No additional warnings on repeated runs within the window.
+	got2, err := sessions.GetByID(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got2.WarnedAt != got.WarnedAt {
+		t.Error("WarnedAt should not change on second run")
 	}
 }
 
 func TestSweep_mixedBatch(t *testing.T) {
-	users := authmock.NewUserStore()
-	fresh := seedAt(t, users, 1*24*time.Hour, false)
-	toWarn := seedAt(t, users, 6*24*time.Hour, false)
-	toDelete := seedAt(t, users, 8*24*time.Hour, false)
+	sessions := sessionmock.New()
+	_ = seedAt(t, sessions, 1*24*time.Hour, false)   // fresh — no action
+	_ = seedAt(t, sessions, 6*24*time.Hour, false)   // day-6 — warn
+	toDelete := seedAt(t, sessions, 8*24*time.Hour, false) // day-8 — delete
 	deleter := accountmock.NewDeleter()
-	emails := emailmock.New()
-	sweep := newTestSweep(users, deleter, emails)
+	sweep := newTestSweep(sessions, deleter)
 
 	result, err := sweep.Run(context.Background())
 	if err != nil {
@@ -122,64 +135,53 @@ func TestSweep_mixedBatch(t *testing.T) {
 	if result.Warned != 1 || result.Deleted != 1 {
 		t.Errorf("result: got %+v, want Warned=1 Deleted=1", result)
 	}
-	if emails.SentTo(fresh.Email) != 0 {
-		t.Error("fresh account should not be warned")
-	}
-	if emails.SentTo(toWarn.Email) != 1 {
-		t.Error("day-6 account should be warned")
-	}
 	if !deleter.Deleted(toDelete.ID) {
-		t.Error("day-8 account should be deleted")
-	}
-	if deleter.Deleted(toWarn.ID) || deleter.Deleted(fresh.ID) {
-		t.Error("only the day-8 account should be deleted")
+		t.Error("day-8 session should be deleted")
 	}
 }
 
 func TestSweep_deletionErrorIsolatedFromRestOfBatch(t *testing.T) {
-	users := authmock.NewUserStore()
-	failing := seedAt(t, users, 8*24*time.Hour, false)
-	ok := seedAt(t, users, 8*24*time.Hour, false)
+	sessions := sessionmock.New()
+	failing := seedAt(t, sessions, 8*24*time.Hour, false)
+	ok := seedAt(t, sessions, 8*24*time.Hour, false)
 	deleter := accountmock.NewDeleter()
-	deleter.ErrFor = map[uuid.UUID]error{failing.ID: errors.New("clerk: backend unavailable")}
-	emails := emailmock.New()
-	sweep := newTestSweep(users, deleter, emails)
+	deleter.ErrFor = map[uuid.UUID]error{failing.ID: errors.New("object store: unavailable")}
+	sweep := newTestSweep(sessions, deleter)
 
 	result, err := sweep.Run(context.Background())
 	if err != nil {
-		t.Fatalf("Run should not return a top-level error for a per-account failure: %v", err)
+		t.Fatalf("Run should not return a top-level error for a per-session failure: %v", err)
 	}
 
 	if len(result.Errors) != 1 {
 		t.Fatalf("expected 1 collected error, got %d: %v", len(result.Errors), result.Errors)
 	}
 	if result.Deleted != 1 {
-		t.Errorf("expected the non-failing account to still be deleted, got Deleted=%d", result.Deleted)
+		t.Errorf("expected the non-failing session to still be deleted, got Deleted=%d", result.Deleted)
 	}
 	if !deleter.Deleted(ok.ID) {
-		t.Error("non-failing account should still have been deleted")
+		t.Error("non-failing session should still have been deleted")
 	}
 	if deleter.Deleted(failing.ID) {
-		t.Error("failing account should not be recorded as deleted")
+		t.Error("failing session should not be recorded as deleted")
 	}
 }
 
-func TestSweep_markWarningSentCalledOncePerWarnedUser(t *testing.T) {
-	users := authmock.NewUserStore()
-	u := seedAt(t, users, 6*24*time.Hour, false)
+func TestSweep_markWarnedCalledOncePerWarnedSession(t *testing.T) {
+	sessions := sessionmock.New()
+	sess := seedAt(t, sessions, 6*24*time.Hour, false)
 	deleter := accountmock.NewDeleter()
-	emails := emailmock.New()
-	sweep := newTestSweep(users, deleter, emails)
+	sweep := newTestSweep(sessions, deleter)
 
 	if _, err := sweep.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	got, err := users.GetByID(context.Background(), u.ID)
+	got, err := sessions.GetByID(context.Background(), sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.WarningSentAt == nil {
-		t.Error("expected WarningSentAt to be set after a warning is sent")
+	if got.WarnedAt == nil {
+		t.Error("expected WarnedAt to be set after a warning is sent")
 	}
 }

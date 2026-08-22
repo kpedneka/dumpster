@@ -8,25 +8,27 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kunalpednekar/dumpster/internal/auth"
-	authmock "github.com/kunalpednekar/dumpster/internal/auth/mock"
+	"github.com/kunalpednekar/dumpster/internal/session"
+	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
 )
 
-// accountStatusRequest builds an authed /account/status request against a
-// freshly-seeded plain authmock.UserStore (bypassing clerkIDForUserStore,
-// whose GetOrCreateByClerkID unconditionally re-seeds a blank CreatedAt on
-// every request — fine for handlers that don't care about CreatedAt, but
-// not for this one).
+// accountStatusRequest builds a /account/status request for a session with
+// the given createdAt timestamp, wired against a fresh set of deps. Returns
+// the recorded response.
 func accountStatusRequest(t *testing.T, createdAt time.Time) *httptest.ResponseRecorder {
 	t.Helper()
 	deps, _, _, _, _ := defaultDeps()
-	users := authmock.NewUserStore()
-	users.Seed(&auth.User{ID: uuid.New(), ClerkUserID: "user_test", Email: "a@example.com", CreatedAt: createdAt})
-	deps.Users = users
+	sessionID := uuid.New()
+	// Seed the session directly in the store to control CreatedAt.
+	deps.Sessions.(*sessionmock.Store).Seed(&session.Session{
+		ID:           sessionID,
+		CreatedAt:    createdAt,
+		LastActiveAt: time.Now(),
+	})
 	router := NewRouter(deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/account/status", nil)
-	req.Header.Set("Authorization", "Bearer user_test")
+	req.AddCookie(&http.Cookie{Name: "session_id", Value: sessionID.String()})
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	return w
@@ -62,14 +64,35 @@ func TestAccountStatus_day6Account(t *testing.T) {
 	}
 }
 
-func TestAccountStatus_requiresAuth(t *testing.T) {
+// TestAccountStatus_noSession verifies that a request with no cookie mints a
+// fresh session (middleware never 401s) and returns a valid account status for
+// that new session.
+func TestAccountStatus_noSession(t *testing.T) {
 	deps, _, _, _, _ := defaultDeps()
 	router := NewRouter(deps)
 
 	w := httptest.NewRecorder()
-	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/account/status", nil))
+	router.ServeHTTP(w, unauthRequest(http.MethodGet, "/account/status", nil))
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("no-session account status: got %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	// A fresh session should have warning_active=false.
+	var resp accountStatusResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.WarningActive {
+		t.Error("brand-new session should not be in warning window")
+	}
+	// New session cookie should be set.
+	var found bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "session_id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected Set-Cookie: session_id for fresh session")
 	}
 }

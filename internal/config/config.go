@@ -47,13 +47,8 @@ type Config struct {
 	S3UsePathStyle bool
 	// Observability
 	MetricsPort string
-	// Auth — Clerk manages sign-up/sign-in/session lifecycle; the API only
-	// needs a secret key to verify sessions and call the Backend API, and
-	// a webhook signing secret to authenticate Clerk's lifecycle webhooks.
-	ClerkSecretKey     string
-	ClerkWebhookSecret string
-	// Email — transactional email for the demo account lifecycle (welcome
-	// and TTL-warning messages), sent via Resend.
+	// Email — transactional email for the demo account lifecycle, sent via Resend.
+	// Reserved for future use; sessions are anonymous and have no email address.
 	ResendAPIKey   string
 	ResendFromAddr string
 	// OllamaURL is the base URL of the local Ollama service used by the
@@ -106,8 +101,6 @@ func Load() *Config {
 		S3AccessKey:        getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:        getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UsePathStyle:     getEnv("S3_USE_PATH_STYLE", "true") == "true",
-		ClerkSecretKey:     getEnv("CLERK_SECRET_KEY", ""),
-		ClerkWebhookSecret: getEnv("CLERK_WEBHOOK_SECRET", ""),
 		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
 		ResendFromAddr:     getEnv("RESEND_FROM_ADDR", "noreply@example.com"),
 		OllamaURL:          getEnv("OLLAMA_URL", "http://ollama:11434"),

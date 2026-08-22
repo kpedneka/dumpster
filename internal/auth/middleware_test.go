@@ -1,118 +1,166 @@
 package auth_test
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/auth"
-	"github.com/kunalpednekar/dumpster/internal/auth/mock"
+	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
 )
 
-func authedHandler(t *testing.T) http.Handler {
+const sessionCookie = "session_id"
+
+func sessionHandler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := auth.UserIDFromContext(r.Context())
 		if !ok {
-			t.Error("user UUID missing from context in handler")
+			t.Error("session UUID missing from context in handler")
 		}
 		if id == uuid.Nil {
-			t.Error("user UUID is the zero value")
+			t.Error("session UUID is the zero value")
 		}
 		w.WriteHeader(http.StatusOK)
 	})
 }
 
-func TestMiddleware_valid(t *testing.T) {
-	verifier := mock.NewVerifier(auth.Identity{ClerkUserID: "user_123", Email: "alice@example.com"})
-	users := mock.NewUserStore()
+// TestMiddleware_noCookie_mintsSession verifies that a request with no
+// session cookie receives a freshly minted session: a Set-Cookie header is
+// set and the handler sees a non-nil UUID in context.
+func TestMiddleware_noCookie_mintsSession(t *testing.T) {
+	sessions := sessionmock.New()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer some-clerk-session-token")
 	w := httptest.NewRecorder()
 
-	auth.Middleware(verifier, users, authedHandler(t)).ServeHTTP(w, req)
+	auth.Middleware(sessions, sessionHandler(t)).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
 	}
+
+	var found bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			found = true
+			if c.HttpOnly == false {
+				t.Error("session cookie must be HttpOnly")
+			}
+			if _, err := uuid.Parse(c.Value); err != nil {
+				t.Errorf("session cookie value is not a valid UUID: %q", c.Value)
+			}
+		}
+	}
+	if !found {
+		t.Error("expected Set-Cookie: session_id header for new session")
+	}
 }
 
-func TestMiddleware_mapsToSameLocalUserOnRepeatRequests(t *testing.T) {
-	verifier := mock.NewVerifier(auth.Identity{ClerkUserID: "user_123", Email: "alice@example.com"})
-	users := mock.NewUserStore()
+// TestMiddleware_validCookie_resumesSession verifies that a request carrying
+// a cookie for an existing session resumes that session (same UUID in
+// context) and calls Touch on the store.
+func TestMiddleware_validCookie_resumesSession(t *testing.T) {
+	sessions := sessionmock.New()
+	// Pre-create a session so GetByID succeeds.
+	sess, err := sessions.Create(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	var firstID, secondID string
+	var gotID uuid.UUID
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, _ := auth.UserIDFromContext(r.Context())
-		if firstID == "" {
-			firstID = id.String()
-		} else {
-			secondID = id.String()
-		}
+		gotID, _ = auth.UserIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	})
 
-	mw := auth.Middleware(verifier, users, handler)
-	for i := 0; i < 2; i++ {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sess.ID.String()})
+	w := httptest.NewRecorder()
+
+	auth.Middleware(sessions, handler).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	if gotID != sess.ID {
+		t.Errorf("context userID: got %v, want %v", gotID, sess.ID)
+	}
+	// Touch must have been called for the session.
+	if len(sessions.Touched) == 0 || sessions.Touched[0] != sess.ID {
+		t.Errorf("expected Touch(%v), got %v", sess.ID, sessions.Touched)
+	}
+}
+
+// TestMiddleware_sweptSession_mintsFresh verifies that a request whose
+// cookie points to a session that no longer exists (already swept) gets a
+// fresh session minted rather than an error. The swept cookie does not
+// cause the middleware to 401 or 500.
+func TestMiddleware_sweptSession_mintsFresh(t *testing.T) {
+	sessions := sessionmock.New()
+	// Create then delete a session to simulate a swept session.
+	swept, _ := sessions.Create(nil)
+	_ = sessions.Delete(nil, swept.ID)
+
+	var gotID uuid.UUID
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotID, _ = auth.UserIDFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: swept.ID.String()})
+	w := httptest.NewRecorder()
+
+	auth.Middleware(sessions, handler).ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	// Handler should receive a new session, not the swept one.
+	if gotID == swept.ID {
+		t.Error("expected a fresh session ID, not the swept one")
+	}
+	if gotID == uuid.Nil {
+		t.Error("expected a non-nil session ID for fresh session")
+	}
+	// A new Set-Cookie header should be present.
+	var found bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected Set-Cookie for fresh session after swept cookie")
+	}
+}
+
+// TestMiddleware_sameSessionAcrossRequests verifies that two requests
+// carrying the same valid cookie both resolve to the same session UUID,
+// matching the Clerk-era guarantee that session identity is stable.
+func TestMiddleware_sameSessionAcrossRequests(t *testing.T) {
+	sessions := sessionmock.New()
+	sess, _ := sessions.Create(nil)
+
+	var ids []uuid.UUID
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, _ := auth.UserIDFromContext(r.Context())
+		ids = append(ids, id)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := auth.Middleware(sessions, handler)
+	for range 2 {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set("Authorization", "Bearer tok")
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sess.ID.String()})
 		mw.ServeHTTP(httptest.NewRecorder(), req)
 	}
 
-	if firstID == "" || secondID == "" {
+	if len(ids) != 2 {
 		t.Fatal("expected both requests to reach handler")
 	}
-	if firstID != secondID {
-		t.Fatalf("expected stable local user id across requests: got %q then %q", firstID, secondID)
-	}
-}
-
-func TestMiddleware_noToken(t *testing.T) {
-	verifier := mock.NewVerifier(auth.Identity{ClerkUserID: "user_123"})
-	users := mock.NewUserStore()
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	w := httptest.NewRecorder()
-	auth.Middleware(verifier, users, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not be called")
-	})).ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
-	}
-}
-
-func TestMiddleware_invalidToken(t *testing.T) {
-	verifier := mock.NewErrorVerifier(errors.New("invalid signature"))
-	users := mock.NewUserStore()
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer not-a-real-token")
-	w := httptest.NewRecorder()
-	auth.Middleware(verifier, users, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not be called")
-	})).ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
-	}
-}
-
-func TestMiddleware_localStoreError(t *testing.T) {
-	verifier := mock.NewVerifier(auth.Identity{ClerkUserID: "user_123"})
-	users := mock.NewUserStore()
-	users.GetOrCreateErr = errors.New("db unavailable")
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set("Authorization", "Bearer tok")
-	w := httptest.NewRecorder()
-	auth.Middleware(verifier, users, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("handler should not be called")
-	})).ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
+	if ids[0] != ids[1] {
+		t.Errorf("session ID must be stable: first=%v second=%v", ids[0], ids[1])
 	}
 }

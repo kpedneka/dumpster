@@ -6,12 +6,12 @@ import (
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/document"
-	"github.com/kunalpednekar/dumpster/internal/email"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/search"
+	"github.com/kunalpednekar/dumpster/internal/session"
 )
 
 // Deps holds all dependencies required by the HTTP handlers.
@@ -20,37 +20,30 @@ type Deps struct {
 	Docs           document.Repository
 	Objects        objectstore.ObjectStore
 	Publisher      queue.Publisher
-	Manifest       manifest.Repository  // optional; used for ingestion manifest summaries on PDF/image docs
+	Manifest       manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
 	Searcher       search.Searcher
-	Verifier       auth.SessionVerifier // verifies Clerk session tokens
-	Users          auth.LocalUserStore  // maps Clerk identities to local app users
-	Emails         email.Sender         // sends lifecycle emails (welcome, etc.)
-	WebhookSecret  string               // Clerk webhook signing secret; "" disables the endpoint
-	MaxUploadBytes int64                // 0 defaults to 32 MiB
+	Sessions       session.SessionStore
+	MaxUploadBytes int64 // 0 defaults to 32 MiB
 }
 
-// NewRouter constructs the application HTTP router. POST /webhooks/clerk is
-// public (authenticated by webhook signature, not a session); all other
-// routes require a valid Clerk session Bearer token.
+// NewRouter constructs the application HTTP router. All routes (other than
+// /healthz and /openapi.yaml) are wrapped by anonymous session middleware,
+// which mints a new session cookie when none is present and never returns 401.
 func NewRouter(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /openapi.yaml", serveOpenAPI)
 
-	if deps.WebhookSecret != "" {
-		registerWebhookRoutes(mux, deps.WebhookSecret, deps.Emails)
-	}
-
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
 	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.MaxUploadBytes)
-	registerAccountRoutes(authed, deps.Users)
+	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher)
 	}
 
-	mux.Handle("/", auth.Middleware(deps.Verifier, deps.Users, authed))
+	mux.Handle("/", auth.Middleware(deps.Sessions, authed))
 
 	return mux
 }

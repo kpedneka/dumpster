@@ -6,12 +6,9 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/kunalpednekar/dumpster/internal/auth/clerk"
-	authpg "github.com/kunalpednekar/dumpster/internal/auth/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/email/resend"
 	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
@@ -24,6 +21,7 @@ import (
 	queryrouter "github.com/kunalpednekar/dumpster/internal/router"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/server"
+	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
@@ -84,16 +82,13 @@ func main() {
 	)
 
 	deps := server.Deps{
-		KBs:           kbpg.New(txRunner),
-		Docs:          docpg.New(txRunner),
-		Objects:       obj,
-		Publisher:     qpg.New(pool),
-		Manifest:      manifestpg.New(txRunner),
-		Searcher:      searcher,
-		Verifier:      clerk.New(cfg.ClerkSecretKey),
-		Users:         authpg.New(pool),
-		Emails:        resend.New(cfg.ResendAPIKey, cfg.ResendFromAddr),
-		WebhookSecret: cfg.ClerkWebhookSecret,
+		KBs:      kbpg.New(txRunner),
+		Docs:     docpg.New(txRunner),
+		Objects:  obj,
+		Publisher: qpg.New(pool),
+		Manifest: manifestpg.New(txRunner),
+		Searcher: searcher,
+		Sessions: sessionpg.New(pool),
 	}
 
 	router := server.NewRouter(deps)

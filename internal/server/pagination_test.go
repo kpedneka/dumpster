@@ -22,7 +22,7 @@ func TestKBList_Pagination(t *testing.T) {
 	}
 
 	// First page: limit=3
-	req := authedRequest(t, http.MethodGet, "/kbs?limit=3", nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs?limit=3", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -42,7 +42,7 @@ func TestKBList_Pagination(t *testing.T) {
 	}
 
 	// Second page using cursor
-	req2 := authedRequest(t, http.MethodGet, "/kbs?limit=3&after="+page1.NextCursor, nil, userID)
+	req2 := authedRequest(t, deps, http.MethodGet, "/kbs?limit=3&after="+page1.NextCursor, nil, userID)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
 
@@ -86,7 +86,7 @@ func TestDocList_Pagination(t *testing.T) {
 	}
 
 	// First page: limit=2
-	req := authedRequest(t, http.MethodGet, "/kbs/"+k.ID.String()+"/documents?limit=2", nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+k.ID.String()+"/documents?limit=2", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -106,7 +106,7 @@ func TestDocList_Pagination(t *testing.T) {
 	}
 
 	// Second page using cursor
-	req2 := authedRequest(t, http.MethodGet,
+	req2 := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+k.ID.String()+"/documents?limit=2&after="+page1.NextCursor, nil, userID)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
@@ -132,7 +132,7 @@ func TestKBList_NoNextCursorOnLastPage(t *testing.T) {
 		_, _ = kbRepo.Create(context.TODO(), userID, fmt.Sprintf("kb%d", i))
 	}
 
-	req := authedRequest(t, http.MethodGet, "/kbs", nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

@@ -5,24 +5,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/kunalpednekar/dumpster/internal/auth"
-	"github.com/kunalpednekar/dumpster/internal/email"
+	"github.com/kunalpednekar/dumpster/internal/session"
 )
 
-// TTLDays is the demo account TTL, anchored at signup (CreatedAt). Exported
-// so other packages (e.g. the in-app banner endpoint) can compute the same
-// boundary Sweep uses, rather than duplicating the value.
+// TTLDays is the demo account TTL, anchored at the session's CreatedAt.
+// Exported so other packages (e.g. the in-app banner endpoint) can compute
+// the same boundary Sweep uses, rather than duplicating the value.
 const TTLDays = 7
 
 // WarningWindowDays is when the day-6 pre-deletion warning starts.
 const WarningWindowDays = 6
-
-// AccountDeleter hard-deletes a user. Implemented by Deleter; Sweep depends
-// on the interface rather than the concrete type so it can be tested
-// without driving a real Clerk/R2/DB chain.
-type AccountDeleter interface {
-	Delete(ctx context.Context, u *auth.User) error
-}
 
 // SweepResult summarizes one Sweep.Run call.
 type SweepResult struct {
@@ -31,60 +23,51 @@ type SweepResult struct {
 	Errors  []error
 }
 
-// Sweep finds demo accounts at their day-6 (warning) and day-7 (hard-delete)
-// TTL boundaries, anchored at signup (CreatedAt), and acts on them.
+// Sweep finds demo sessions at their day-6 (warning) and day-7 (hard-delete)
+// TTL boundaries, anchored at CreatedAt, and acts on them.
 type Sweep struct {
-	users   auth.LocalUserStore
-	deleter AccountDeleter
-	emails  email.Sender
+	sessions session.SessionStore
+	deleter  AccountDeleter
 	// Now returns the current time and defaults to time.Now. Tests override
 	// it for deterministic boundary checks.
 	Now func() time.Time
 }
 
 // NewSweep returns a Sweep wired to the given stores.
-func NewSweep(users auth.LocalUserStore, deleter AccountDeleter, emails email.Sender) *Sweep {
-	return &Sweep{users: users, deleter: deleter, emails: emails, Now: time.Now}
+func NewSweep(sessions session.SessionStore, deleter AccountDeleter) *Sweep {
+	return &Sweep{sessions: sessions, deleter: deleter, Now: time.Now}
 }
 
-// Run scans every local user once and, per account:
+// Run scans every session once and, per session:
 //   - age >= 7 days since CreatedAt: hard-deletes it via the AccountDeleter.
-//     ">=" rather than "==" makes this self-healing if a run is missed — an
-//     account doesn't get permanently skipped just because the exact day-7
-//     run didn't happen.
-//   - 6 <= age < 7 days and WarningSentAt is unset: sends the day-6 warning
-//     email and stamps WarningSentAt. The window (not exact equality) means
-//     a missed day-6 run still warns before the day-7 delete fires on a
-//     later run; WarningSentAt makes repeated runs within the window
+//     ">=" rather than "==" makes this self-healing if a run is missed.
+//   - 6 <= age < 7 days and WarnedAt is unset: stamps WarnedAt. The window
+//     (not exact equality) means a missed day-6 run still marks warned before
+//     the day-7 delete fires; WarnedAt makes repeated runs within the window
 //     idempotent. The two conditions are mutually exclusive by construction.
 //
-// Per-account errors are collected into the result rather than aborting the
+// Per-session errors are collected into the result rather than aborting the
 // rest of the batch.
 func (s *Sweep) Run(ctx context.Context) (SweepResult, error) {
-	users, err := s.users.ListForSweep(ctx)
+	sessions, err := s.sessions.ListForSweep(ctx)
 	if err != nil {
-		return SweepResult{}, fmt.Errorf("account: sweep: list users: %w", err)
+		return SweepResult{}, fmt.Errorf("account: sweep: list sessions: %w", err)
 	}
 
 	now := s.Now()
 	var result SweepResult
-	for _, u := range users {
-		days := int(now.Sub(u.CreatedAt).Hours() / 24)
+	for _, sess := range sessions {
+		days := int(now.Sub(sess.CreatedAt).Hours() / 24)
 		switch {
 		case days >= TTLDays:
-			if err := s.deleter.Delete(ctx, u); err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("delete user %s: %w", u.ID, err))
+			if err := s.deleter.Delete(ctx, sess); err != nil {
+				result.Errors = append(result.Errors, fmt.Errorf("delete session %s: %w", sess.ID, err))
 				continue
 			}
 			result.Deleted++
-		case days >= WarningWindowDays && u.WarningSentAt == nil:
-			deletesAt := u.CreatedAt.AddDate(0, 0, TTLDays)
-			if err := s.emails.Send(ctx, email.WarningMessage(u.Email, deletesAt)); err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("warn user %s: %w", u.ID, err))
-				continue
-			}
-			if err := s.users.MarkWarningSent(ctx, u.ID); err != nil {
-				result.Errors = append(result.Errors, fmt.Errorf("mark warning sent for %s: %w", u.ID, err))
+		case days >= WarningWindowDays && sess.WarnedAt == nil:
+			if err := s.sessions.MarkWarned(ctx, sess.ID); err != nil {
+				result.Errors = append(result.Errors, fmt.Errorf("mark warned for %s: %w", sess.ID, err))
 				continue
 			}
 			result.Warned++

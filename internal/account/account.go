@@ -1,6 +1,6 @@
 // Package account implements the demo account lifecycle: a hard-delete
-// capability spanning Clerk, R2, and the local DB, plus (in sweep.go) the
-// day-6/day-7 TTL sweep that drives it.
+// capability spanning object storage and the local DB, plus (in sweep.go)
+// the day-6/day-7 TTL sweep that drives it.
 package account
 
 import (
@@ -11,39 +11,42 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
+	"github.com/kunalpednekar/dumpster/internal/session"
 )
 
-// IdentityDeleter removes a user's external identity. Implemented by
-// internal/auth/clerk.Deleter; defined here so account.Deleter depends on
-// an interface rather than the Clerk SDK directly.
-type IdentityDeleter interface {
-	DeleteUser(ctx context.Context, clerkUserID string) error
+// AccountDeleter hard-deletes a session and all its data. Implemented by
+// Deleter; Sweep depends on the interface rather than the concrete type so
+// it can be tested without driving a real object-store / DB chain.
+type AccountDeleter interface {
+	Delete(ctx context.Context, s *session.Session) error
 }
 
-// Deleter performs the per-user hard delete: every R2 object the user owns,
-// their Clerk identity, then their local DB row.
+// Deleter performs the per-session hard delete: every object the session
+// owns (from object storage), then the session row itself (which cascades
+// to knowledge_bases, documents, and chunks via FK ON DELETE CASCADE).
 type Deleter struct {
-	identity IdentityDeleter
+	sessions session.SessionStore
 	objects  objectstore.ObjectStore
 	docs     document.Repository
-	users    auth.LocalUserStore
 }
 
 // New returns a Deleter wired to the given stores.
-func New(identity IdentityDeleter, objects objectstore.ObjectStore, docs document.Repository, users auth.LocalUserStore) *Deleter {
-	return &Deleter{identity: identity, objects: objects, docs: docs, users: users}
+func New(sessions session.SessionStore, objects objectstore.ObjectStore, docs document.Repository) *Deleter {
+	return &Deleter{sessions: sessions, objects: objects, docs: docs}
 }
 
-// Delete hard-deletes u: every R2 object it owns, its Clerk identity, then
-// its local DB row, in that order. The local row is deleted last so that a
-// failure earlier in the sequence leaves it in place for a retry, rather
-// than orphaning Clerk/R2 state with no record left to retry against.
-func (d *Deleter) Delete(ctx context.Context, u *auth.User) error {
-	ctx = auth.WithUserID(ctx, u.ID)
+// Delete hard-deletes s: every object it owns from object storage, then
+// the session row itself. The session row is deleted last so that a failure
+// earlier in the sequence leaves it in place for a retry, rather than
+// orphaning object-store state with no record left to retry against.
+func (d *Deleter) Delete(ctx context.Context, s *session.Session) error {
+	// Place session.ID in context so RLS-gated repositories can query this
+	// session's data without a full-table scan violation.
+	ctx = auth.WithUserID(ctx, s.ID)
 
-	docs, err := d.docs.ListByUserID(ctx, u.ID)
+	docs, err := d.docs.ListByUserID(ctx, s.ID)
 	if err != nil {
-		return fmt.Errorf("account: list documents for %s: %w", u.ID, err)
+		return fmt.Errorf("account: list documents for %s: %w", s.ID, err)
 	}
 
 	var objErrs []error
@@ -53,15 +56,11 @@ func (d *Deleter) Delete(ctx context.Context, u *auth.User) error {
 		}
 	}
 	if len(objErrs) > 0 {
-		return fmt.Errorf("account: delete %s: %w", u.ID, errors.Join(objErrs...))
+		return fmt.Errorf("account: delete %s: %w", s.ID, errors.Join(objErrs...))
 	}
 
-	if err := d.identity.DeleteUser(ctx, u.ClerkUserID); err != nil {
-		return fmt.Errorf("account: delete clerk identity for %s: %w", u.ID, err)
-	}
-
-	if err := d.users.DeleteByClerkID(ctx, u.ClerkUserID); err != nil {
-		return fmt.Errorf("account: delete local user %s: %w", u.ID, err)
+	if err := d.sessions.Delete(ctx, s.ID); err != nil {
+		return fmt.Errorf("account: delete session %s: %w", s.ID, err)
 	}
 
 	return nil

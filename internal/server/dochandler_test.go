@@ -62,7 +62,7 @@ func TestDocUpload(t *testing.T) {
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	body, ct := multipartUpload(t, "notes.txt", "hello world")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -113,7 +113,7 @@ func TestDocUpload_MarkdownFile(t *testing.T) {
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	body, ct := multipartUpload(t, "readme.md", "# Title")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -132,7 +132,7 @@ func TestDocUpload_UnsupportedType(t *testing.T) {
 	// .docx is not in the accepted set.
 	body, ct := multipartUpload(t, "report.docx", "PK (office xml content)")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -150,7 +150,7 @@ func TestDocUpload_PDF_RoutesToRegionClassification(t *testing.T) {
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	body, ct := multipartUpload(t, "report.pdf", "%PDF-1.4")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -175,7 +175,7 @@ func TestDocUpload_Image_RoutesToRegionClassification(t *testing.T) {
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	body, ct := multipartUpload(t, "figure.png", "\x89PNG\r\n")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -194,7 +194,7 @@ func TestDocUpload_KBNotFound(t *testing.T) {
 	userID := uuid.New()
 
 	body, ct := multipartUpload(t, "notes.txt", "hello")
-	req := authedRequest(t, http.MethodPost, "/kbs/"+uuid.New().String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+uuid.New().String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -215,7 +215,7 @@ func TestDocUpload_PathTraversal(t *testing.T) {
 	// Filename contains directory traversal components.
 	body, ct := multipartUpload(t, "../../etc/passwd", "sensitive")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -225,7 +225,7 @@ func TestDocUpload_PathTraversal(t *testing.T) {
 	// raw path (which would have no extension and also fail).
 	// Try a traversal with a valid extension to fully exercise the sanitisation path.
 	body2, ct2 := multipartUpload(t, "../../notes.txt", "safe content")
-	req2 := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body2, userID)
+	req2 := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body2, userID)
 	req2.Header.Set("Content-Type", ct2)
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
@@ -263,7 +263,7 @@ func TestDocUpload_TooLarge(t *testing.T) {
 	// Content is larger than the cap.
 	body, ct := multipartUpload(t, "notes.txt", strings.Repeat("x", 1024))
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -290,7 +290,7 @@ func TestDocGet_WrongKB(t *testing.T) {
 	})
 
 	// Requesting it under kb2's URL must return 404.
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb2.ID.String()+"/documents/"+doc.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -318,7 +318,7 @@ func TestDocDelete_WrongKB(t *testing.T) {
 	})
 
 	// Delete via kb2 must be rejected; object must remain.
-	req := authedRequest(t, http.MethodDelete,
+	req := authedRequest(t, deps, http.MethodDelete,
 		"/kbs/"+kb2.ID.String()+"/documents/"+doc.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -343,7 +343,7 @@ func TestDocUpload_PublishError(t *testing.T) {
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	body, ct := multipartUpload(t, "notes.txt", "content")
 
-	req := authedRequest(t, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
 	req.Header.Set("Content-Type", ct)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -380,7 +380,7 @@ func TestDocList(t *testing.T) {
 		S3Key: "k2", ContentType: "text/plain", Status: document.StatusPending,
 	})
 
-	req := authedRequest(t, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -408,7 +408,7 @@ func TestDocGet(t *testing.T) {
 		S3Key: "key1", ContentType: "text/plain", Status: document.StatusPending,
 	})
 
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -442,7 +442,7 @@ func TestDocContent(t *testing.T) {
 		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
 	})
 
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String()+"/content", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -475,7 +475,7 @@ func TestDocContent_WrongKB(t *testing.T) {
 		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
 	})
 
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb2.ID.String()+"/documents/"+doc.ID.String()+"/content", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -492,7 +492,7 @@ func TestDocContent_NotFound(t *testing.T) {
 
 	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb.ID.String()+"/documents/"+uuid.New().String()+"/content", nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -502,17 +502,21 @@ func TestDocContent_NotFound(t *testing.T) {
 	}
 }
 
-func TestDocContent_Unauthorized(t *testing.T) {
+// TestDocContent_NoSession verifies that a request with no session cookie
+// gets a fresh session minted (middleware never 401s) and returns 404 since
+// the doc doesn't belong to the newly-minted session.
+func TestDocContent_NoSession(t *testing.T) {
 	deps, _, _, _, _ := defaultDeps()
 	router := NewRouter(deps)
 
-	req := httptest.NewRequest(http.MethodGet,
+	req := unauthRequest(http.MethodGet,
 		"/kbs/"+uuid.New().String()+"/documents/"+uuid.New().String()+"/content", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("status: got %d, want 401", w.Code)
+	// Middleware mints a new session; the doc doesn't exist for that session → 404.
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("no-session doc content: got %d, want 404", w.Code)
 	}
 }
 
@@ -531,7 +535,7 @@ func TestDocContent_TenantIsolation(t *testing.T) {
 		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
 	})
 
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb1.ID.String()+"/documents/"+doc.ID.String()+"/content", nil, user2)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -557,7 +561,7 @@ func TestDocDelete(t *testing.T) {
 		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusPending,
 	})
 
-	req := authedRequest(t, http.MethodDelete,
+	req := authedRequest(t, deps, http.MethodDelete,
 		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -589,7 +593,7 @@ func TestDocDelete_ObjectFirst(t *testing.T) {
 		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusPending,
 	})
 
-	req := authedRequest(t, http.MethodDelete,
+	req := authedRequest(t, deps, http.MethodDelete,
 		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -617,7 +621,7 @@ func TestDocTenantIsolation(t *testing.T) {
 		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusPending,
 	})
 
-	req := authedRequest(t, http.MethodGet,
+	req := authedRequest(t, deps, http.MethodGet,
 		"/kbs/"+kb1.ID.String()+"/documents/"+doc.ID.String(), nil, user2)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -625,7 +629,7 @@ func TestDocTenantIsolation(t *testing.T) {
 		t.Errorf("cross-tenant get: got %d, want 404", w.Code)
 	}
 
-	req = authedRequest(t, http.MethodDelete,
+	req = authedRequest(t, deps, http.MethodDelete,
 		"/kbs/"+kb1.ID.String()+"/documents/"+doc.ID.String(), nil, user2)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
