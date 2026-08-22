@@ -4,6 +4,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestLoad_defaults(t *testing.T) {
@@ -78,36 +79,17 @@ func TestGetEnv_fallback(t *testing.T) {
 	}
 }
 
-func TestLoad_resendEnvVarsPresent(t *testing.T) {
-	// Smoke-test that the Resend config block still loads from env.
-	t.Setenv("RESEND_API_KEY", "re_smoke_test")
+func TestLoad_sweepIntervalDefault(t *testing.T) {
 	c := Load()
-	if c.ResendAPIKey != "re_smoke_test" {
-		t.Errorf("ResendAPIKey: got %q, want %q", c.ResendAPIKey, "re_smoke_test")
+	if c.SweepInterval != 5*time.Minute {
+		t.Errorf("SweepInterval default: got %v, want 5m", c.SweepInterval)
 	}
 }
 
-func TestLoad_resendDefaults(t *testing.T) {
+func TestLoad_sweepIntervalFromEnv(t *testing.T) {
+	t.Setenv("SWEEP_INTERVAL", "2m")
 	c := Load()
-
-	if c.ResendAPIKey != "" {
-		t.Errorf("ResendAPIKey: got %q, want empty default", c.ResendAPIKey)
-	}
-	if c.ResendFromAddr != "noreply@example.com" {
-		t.Errorf("ResendFromAddr: got %q, want %q", c.ResendFromAddr, "noreply@example.com")
-	}
-}
-
-func TestLoad_resendFromEnv(t *testing.T) {
-	t.Setenv("RESEND_API_KEY", "re_test_abc")
-	t.Setenv("RESEND_FROM_ADDR", "demo@dumpster.example.com")
-
-	c := Load()
-
-	if c.ResendAPIKey != "re_test_abc" {
-		t.Errorf("ResendAPIKey: got %q, want %q", c.ResendAPIKey, "re_test_abc")
-	}
-	if c.ResendFromAddr != "demo@dumpster.example.com" {
-		t.Errorf("ResendFromAddr: got %q, want %q", c.ResendFromAddr, "demo@dumpster.example.com")
+	if c.SweepInterval != 2*time.Minute {
+		t.Errorf("SweepInterval: got %v, want 2m", c.SweepInterval)
 	}
 }

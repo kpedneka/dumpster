@@ -7,20 +7,18 @@ info:
 servers:
   - url: /
 
-security:
-  - bearerAuth: []
-
 components:
   securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session_id
       description: >-
-        A Clerk session token, obtained client-side via the Clerk SDK
-        after sign-up/sign-in (including social providers). The API
-        verifies it against Clerk and maps it to a local user record;
-        there is no longer an /auth/register or /auth/login endpoint.
+        An anonymous session cookie minted server-side on the first request.
+        No login or registration is required: the API automatically issues a
+        new session_id cookie whenever the request arrives without one or
+        presents an expired session. The cookie drives RLS isolation so each
+        session only sees its own knowledge bases, documents, and chunks.
 
   schemas:
     KnowledgeBase:
@@ -180,11 +178,11 @@ paths:
 
   /account/status:
     get:
-      summary: Get the authenticated user's demo-account TTL status
+      summary: Get the current session's expiry status
       description: >-
-        Backs the in-app day-6 warning banner. warning_active becomes true
-        once the account enters its day-6 TTL warning window; deletes_at is
-        when the account will be hard-deleted by the daily cleanup sweep.
+        Backs the in-app warning banner. warning_active becomes true within
+        the final warning window before the session is swept; deletes_at is
+        the earlier of the idle-timeout expiry and the hard-cap expiry.
       responses:
         "200":
           description: Account TTL status
@@ -199,12 +197,6 @@ paths:
                     type: string
                     format: date-time
                 required: [warning_active, deletes_at]
-        "401":
-          description: Unauthorized
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
 
   /kbs:
     get:

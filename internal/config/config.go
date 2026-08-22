@@ -49,10 +49,6 @@ type Config struct {
 	S3UsePathStyle bool
 	// Observability
 	MetricsPort string
-	// Email — transactional email for the demo account lifecycle, sent via Resend.
-	// Reserved for future use; sessions are anonymous and have no email address.
-	ResendAPIKey   string
-	ResendFromAddr string
 	// OllamaURL is the base URL of the local Ollama service used by the
 	// RegionClassificationHandler for VLM inference (figure description and
 	// scanned-content confirmation). Defaults to the docker-compose service
@@ -91,6 +87,9 @@ type Config struct {
 	// RateLimitWindow is the sliding window over which RateLimitRequests is
 	// counted.
 	RateLimitWindow time.Duration
+	// SweepInterval is how often the always-on worker runs the session sweep.
+	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
+	SweepInterval time.Duration
 }
 
 func Load() *Config {
@@ -114,8 +113,6 @@ func Load() *Config {
 		S3AccessKey:        getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:        getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UsePathStyle:     getEnv("S3_USE_PATH_STYLE", "true") == "true",
-		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
-		ResendFromAddr:     getEnv("RESEND_FROM_ADDR", "noreply@example.com"),
 		OllamaURL:          getEnv("OLLAMA_URL", "http://ollama:11434"),
 		OllamaVLMModel:     getEnv("OLLAMA_VLM_MODEL", "qwen2.5vl"),
 		AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),
@@ -131,6 +128,7 @@ func Load() *Config {
 		MaxDocumentsPerSession: getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
 		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
 		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
+		SweepInterval:          getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
 	}
 }
 

@@ -1,7 +1,7 @@
-// Package session defines the anonymous session identity that replaces
-// Clerk-managed authentication. Every request either presents a valid session
-// cookie or receives a freshly minted one; the session UUID is the tenant
-// identifier that drives RLS and every domain repository's user_id column.
+// Package session defines the anonymous session identity used for tenant
+// isolation. Every request either presents a valid session cookie or receives
+// a freshly minted one; the session UUID is the tenant identifier that drives
+// RLS and every domain repository's user_id column.
 package session
 
 import (
@@ -24,8 +24,8 @@ type Session struct {
 	ID           uuid.UUID
 	CreatedAt    time.Time
 	LastActiveAt time.Time
-	// WarnedAt is set by the account lifecycle sweep on the day-6 TTL
-	// boundary. Nil means the session has not yet been warned.
+	// WarnedAt is set by the account lifecycle sweep when a session enters
+	// the warning window. Nil means the session has not yet been warned.
 	WarnedAt *time.Time
 }
 
