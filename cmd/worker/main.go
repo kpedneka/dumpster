@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kunalpednekar/dumpster/internal/account"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	chunkpg "github.com/kunalpednekar/dumpster/internal/chunk/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
@@ -21,6 +25,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
+	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 	ollamavision "github.com/kunalpednekar/dumpster/internal/vision/ollama"
 	"github.com/kunalpednekar/dumpster/internal/worker"
@@ -89,11 +94,53 @@ func main() {
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
 	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)
 
+	// Session sweep runs on a ticker inside this always-on process so no
+	// external scheduler (cron, Fly Machines cron job, etc.) is required.
+	// Cadence is controlled by SWEEP_INTERVAL (default 5m).
+	go runSweepLoop(ctx, cfg.SweepInterval, pool, obj, txRunner, logger)
+
 	logger.Info("worker starting",
 		"db_host", cfg.DBHost, "db_name", cfg.DBName,
 		"entity_types", cfg.EntityTypes,
+		"sweep_interval", cfg.SweepInterval,
 	)
 	if err := w.Run(ctx); err != nil {
 		logger.Info("worker stopped", "reason", err)
+	}
+}
+
+// runSweepLoop runs the session sweep immediately on startup and then on every
+// tick of interval. It exits when ctx is cancelled (worker shutdown).
+func runSweepLoop(ctx context.Context, interval time.Duration, pool *pgxpool.Pool, obj *s3store.Store, txRunner *rls.TxRunner, logger *slog.Logger) {
+	sessions := sessionpg.New(pool)
+	deleter := account.New(sessions, obj, docpg.New(txRunner))
+	sweep := account.NewSweep(sessions, deleter)
+
+	run := func() {
+		result, err := sweep.Run(ctx)
+		if err != nil {
+			logger.Error("sweep failed", "err", err)
+			return
+		}
+		logger.Info("sweep complete",
+			"warned", result.Warned,
+			"deleted", result.Deleted,
+			"errors", len(result.Errors),
+		)
+		for _, sweepErr := range result.Errors {
+			logger.Error("sweep: per-session error", "err", sweepErr)
+		}
+	}
+
+	run() // run once immediately so a restarted worker doesn't wait a full interval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			run()
+		case <-ctx.Done():
+			return
+		}
 	}
 }

@@ -49,6 +49,10 @@ primary_region = "iad"
 # poll loop is a long-lived process, not a per-request handler.
 # count=1 sets the initial machine count; to enforce a floor after deploy run:
 #   fly scale count 1 --process-group worker --app dumpster
+#
+# Session sweep scheduling: the worker runs a time.Ticker (default 5 minutes)
+# internally, so no external scheduler (Fly cron job, GitHub Actions, etc.) is
+# required. Override with SWEEP_INTERVAL env var (e.g. "2m" for staging).
 [[vm]]
   count     = 1
   size      = "shared-cpu-1x"

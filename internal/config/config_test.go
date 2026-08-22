@@ -4,6 +4,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestLoad_defaults(t *testing.T) {
@@ -75,5 +76,20 @@ func TestGetEnv_fallback(t *testing.T) {
 	}
 	if got := getEnv("NONEXISTENT_VAR", "default"); got != "default" {
 		t.Errorf("got %q, want %q", got, "default")
+	}
+}
+
+func TestLoad_sweepIntervalDefault(t *testing.T) {
+	c := Load()
+	if c.SweepInterval != 5*time.Minute {
+		t.Errorf("SweepInterval default: got %v, want 5m", c.SweepInterval)
+	}
+}
+
+func TestLoad_sweepIntervalFromEnv(t *testing.T) {
+	t.Setenv("SWEEP_INTERVAL", "2m")
+	c := Load()
+	if c.SweepInterval != 2*time.Minute {
+		t.Errorf("SweepInterval: got %v, want 2m", c.SweepInterval)
 	}
 }

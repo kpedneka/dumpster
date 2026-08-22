@@ -87,6 +87,9 @@ type Config struct {
 	// RateLimitWindow is the sliding window over which RateLimitRequests is
 	// counted.
 	RateLimitWindow time.Duration
+	// SweepInterval is how often the always-on worker runs the session sweep.
+	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
+	SweepInterval time.Duration
 }
 
 func Load() *Config {
@@ -125,6 +128,7 @@ func Load() *Config {
 		MaxDocumentsPerSession: getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
 		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
 		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
+		SweepInterval:          getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
 	}
 }
 
