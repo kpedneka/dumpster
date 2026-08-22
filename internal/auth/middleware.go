@@ -18,8 +18,7 @@ const sessionCookieName = "session_id"
 // placed in the request context via WithUserID — the same context contract
 // every repository and the RLS TxRunner depend on.
 //
-// Unlike the former Clerk-based middleware, this handler never returns 401:
-// every request gets a valid session identity.
+// This handler never returns 401: every request gets a valid session identity.
 func Middleware(sessions session.SessionStore, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := resolveSession(r, sessions)

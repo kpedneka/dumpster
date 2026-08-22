@@ -49,10 +49,6 @@ type Config struct {
 	S3UsePathStyle bool
 	// Observability
 	MetricsPort string
-	// Email — transactional email for the demo account lifecycle, sent via Resend.
-	// Reserved for future use; sessions are anonymous and have no email address.
-	ResendAPIKey   string
-	ResendFromAddr string
 	// OllamaURL is the base URL of the local Ollama service used by the
 	// RegionClassificationHandler for VLM inference (figure description and
 	// scanned-content confirmation). Defaults to the docker-compose service
@@ -114,8 +110,6 @@ func Load() *Config {
 		S3AccessKey:        getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:        getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UsePathStyle:     getEnv("S3_USE_PATH_STYLE", "true") == "true",
-		ResendAPIKey:       getEnv("RESEND_API_KEY", ""),
-		ResendFromAddr:     getEnv("RESEND_FROM_ADDR", "noreply@example.com"),
 		OllamaURL:          getEnv("OLLAMA_URL", "http://ollama:11434"),
 		OllamaVLMModel:     getEnv("OLLAMA_VLM_MODEL", "qwen2.5vl"),
 		AnthropicAPIKey:    getEnv("ANTHROPIC_API_KEY", ""),

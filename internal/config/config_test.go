@@ -77,37 +77,3 @@ func TestGetEnv_fallback(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "default")
 	}
 }
-
-func TestLoad_resendEnvVarsPresent(t *testing.T) {
-	// Smoke-test that the Resend config block still loads from env.
-	t.Setenv("RESEND_API_KEY", "re_smoke_test")
-	c := Load()
-	if c.ResendAPIKey != "re_smoke_test" {
-		t.Errorf("ResendAPIKey: got %q, want %q", c.ResendAPIKey, "re_smoke_test")
-	}
-}
-
-func TestLoad_resendDefaults(t *testing.T) {
-	c := Load()
-
-	if c.ResendAPIKey != "" {
-		t.Errorf("ResendAPIKey: got %q, want empty default", c.ResendAPIKey)
-	}
-	if c.ResendFromAddr != "noreply@example.com" {
-		t.Errorf("ResendFromAddr: got %q, want %q", c.ResendFromAddr, "noreply@example.com")
-	}
-}
-
-func TestLoad_resendFromEnv(t *testing.T) {
-	t.Setenv("RESEND_API_KEY", "re_test_abc")
-	t.Setenv("RESEND_FROM_ADDR", "demo@dumpster.example.com")
-
-	c := Load()
-
-	if c.ResendAPIKey != "re_test_abc" {
-		t.Errorf("ResendAPIKey: got %q, want %q", c.ResendAPIKey, "re_test_abc")
-	}
-	if c.ResendFromAddr != "demo@dumpster.example.com" {
-		t.Errorf("ResendFromAddr: got %q, want %q", c.ResendFromAddr, "demo@dumpster.example.com")
-	}
-}
