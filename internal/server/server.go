@@ -14,17 +14,21 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/ratelimit"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/session"
+	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
 // Deps holds all dependencies required by the HTTP handlers.
 type Deps struct {
-	KBs            kb.Repository
-	Docs           document.Repository
-	Objects        objectstore.ObjectStore
-	Publisher      queue.Publisher
-	Manifest       manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
-	Searcher       search.Searcher
-	Sessions       session.SessionStore
+	KBs       kb.Repository
+	Docs      document.Repository
+	Objects   objectstore.ObjectStore
+	Publisher queue.Publisher
+	Manifest  manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
+	Searcher  search.Searcher
+	Sessions  session.SessionStore
+	// Instruments is optional; when nil, document upload/delete metrics are
+	// not recorded.
+	Instruments    *telemetry.Instruments
 	MaxUploadBytes int64 // 0 defaults to 32 MiB
 	// RateLimiter is applied to all non-healthz routes (including session
 	// creation) keyed by client IP. Nil disables IP rate limiting.
@@ -50,7 +54,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher)

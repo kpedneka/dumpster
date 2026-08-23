@@ -11,9 +11,9 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
-	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
+	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
@@ -29,7 +29,7 @@ func main() {
 	cfg := config.Load()
 	logger := telemetry.NewLogger(os.Stdout, "api")
 
-	_, metricsHandler, err := telemetry.Setup(context.Background())
+	instruments, metricsHandler, err := telemetry.Setup(context.Background())
 	if err != nil {
 		logger.Error("telemetry setup failed", "err", err)
 		os.Exit(1)
@@ -82,14 +82,15 @@ func main() {
 	)
 
 	deps := server.Deps{
-		KBs:      kbpg.New(txRunner),
-		Docs:     docpg.New(txRunner),
-		Objects:  obj,
-		Publisher: qpg.New(pool),
-		Manifest: manifestpg.New(txRunner),
-		Searcher: searcher,
-		Sessions: sessionpg.New(pool),
-		SPADir:   "web/dist",
+		KBs:         kbpg.New(txRunner),
+		Docs:        docpg.New(txRunner),
+		Objects:     obj,
+		Publisher:   qpg.New(pool),
+		Manifest:    manifestpg.New(txRunner),
+		Searcher:    searcher,
+		Sessions:    sessionpg.New(pool),
+		Instruments: instruments,
+		SPADir:      "web/dist",
 	}
 
 	router := server.NewRouter(deps)

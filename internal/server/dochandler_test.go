@@ -9,12 +9,14 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
 // multipartUpload builds a multipart/form-data request body for the given
@@ -671,5 +673,178 @@ func TestDocTenantIsolation(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Errorf("cross-tenant delete: got %d, want 404", w.Code)
+	}
+}
+
+// mustInstruments returns real OTel instruments and their Prometheus scrape
+// handler, so tests can assert on actual exposition output rather than
+// mocking the metrics API.
+func mustInstruments(t *testing.T) (*telemetry.Instruments, http.Handler) {
+	t.Helper()
+	inst, metricsHandler, err := telemetry.Setup(context.Background())
+	if err != nil {
+		t.Fatalf("telemetry.Setup: %v", err)
+	}
+	return inst, metricsHandler
+}
+
+func scrapeMetrics(t *testing.T, handler http.Handler) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w.Body.String()
+}
+
+// hasMetricSample reports whether body contains a Prometheus exposition line
+// for name with the given outcome label and value, regardless of what other
+// labels (e.g. OTel's otel_scope_* resource attributes) are also present.
+func hasMetricSample(body, name, outcome string, value int) bool {
+	pattern := fmt.Sprintf(`%s\{[^}]*outcome="%s"[^}]*\}\s+%d`, regexp.QuoteMeta(name), regexp.QuoteMeta(outcome), value)
+	return regexp.MustCompile(pattern).MatchString(body)
+}
+
+func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	body, ct := multipartUpload(t, "notes.txt", "hello world")
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status: got %d, want 201 — body: %s", w.Code, w.Body)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if !hasMetricSample(got, "documents_uploaded_total", "success", 1) {
+		t.Errorf("expected success upload metric, got:\n%s", got)
+	}
+}
+
+func TestDocUpload_RecordsFailureMetric(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	deps.Publisher = &failPublisher{}
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	body, ct := multipartUpload(t, "notes.txt", "content")
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500 on publish failure", w.Code)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if !hasMetricSample(got, "documents_uploaded_total", "failure", 1) {
+		t.Errorf("expected failure upload metric, got:\n%s", got)
+	}
+}
+
+// A validation/auth rejection (bad file type, missing KB, quota, etc.) never
+// reaches the persistence attempt, so it must not count as an upload outcome
+// — otherwise the metric would conflate "the system failed to store a
+// document" with "the client sent a bad request", which is a distinct signal.
+func TestDocUpload_ValidationErrorDoesNotRecordMetric(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	body, ct := multipartUpload(t, "notes.exe", "content")
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status: got %d, want 422 for unsupported type", w.Code)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if strings.Contains(got, "documents_uploaded_total") {
+		t.Errorf("validation rejection should not record an upload attempt metric, got:\n%s", got)
+	}
+}
+
+func TestDocDelete_RecordsSuccessMetric(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	s3Key := "documents/test/file.txt"
+	if err := obj.Put(context.TODO(), s3Key, bytes.NewReader([]byte("content")), 7, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	created, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "file.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusPending,
+	})
+
+	req := authedRequest(t, deps, http.MethodDelete,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d, want 204 — body: %s", w.Code, w.Body)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if !hasMetricSample(got, "documents_deleted_total", "success", 1) {
+		t.Errorf("expected success delete metric, got:\n%s", got)
+	}
+}
+
+func TestDocDelete_RecordsFailureMetric(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	s3Key := "documents/test/file.txt"
+	if err := obj.Put(context.TODO(), s3Key, bytes.NewReader([]byte("content")), 7, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	created, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "file.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusPending,
+	})
+	obj.DeleteErrFor = map[string]error{s3Key: errors.New("s3 unavailable")}
+
+	req := authedRequest(t, deps, http.MethodDelete,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500 on delete failure", w.Code)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if !hasMetricSample(got, "documents_deleted_total", "failure", 1) {
+		t.Errorf("expected failure delete metric, got:\n%s", got)
 	}
 }

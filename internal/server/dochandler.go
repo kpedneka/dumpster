@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,11 +11,15 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
 const (
@@ -44,12 +49,13 @@ var regionClassificationTypes = map[string]bool{
 }
 
 type docHandler struct {
-	kbRepo           kb.Repository
-	docRepo          document.Repository
-	objects          objectstore.ObjectStore
-	publisher        queue.Publisher
-	manifest         manifest.Repository // nil when manifest not yet available
-	maxUpload        int64
+	kbRepo            kb.Repository
+	docRepo           document.Repository
+	objects           objectstore.ObjectStore
+	publisher         queue.Publisher
+	manifest          manifest.Repository    // nil when manifest not yet available
+	instruments       *telemetry.Instruments // nil when metrics are not configured
+	maxUpload         int64
 	maxDocsPerSession int
 }
 
@@ -60,6 +66,7 @@ func registerDocRoutes(
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
 	manifestRepo manifest.Repository,
+	instruments *telemetry.Instruments,
 	maxUploadBytes int64,
 	maxDocsPerSession int,
 ) {
@@ -70,12 +77,13 @@ func registerDocRoutes(
 		maxDocsPerSession = defaultMaxDocsPerSession
 	}
 	h := &docHandler{
-		kbRepo:           kbRepo,
-		docRepo:          docRepo,
-		objects:          objects,
-		publisher:        publisher,
-		manifest:         manifestRepo,
-		maxUpload:        maxUploadBytes,
+		kbRepo:            kbRepo,
+		docRepo:           docRepo,
+		objects:           objects,
+		publisher:         publisher,
+		manifest:          manifestRepo,
+		instruments:       instruments,
+		maxUpload:         maxUploadBytes,
 		maxDocsPerSession: maxDocsPerSession,
 	}
 	mux.HandleFunc("POST /kbs/{kbID}/documents", h.upload)
@@ -156,6 +164,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 	// Stream directly from the multipart part — no io.ReadAll buffering needed.
 	if err := h.objects.Put(r.Context(), s3Key, file, header.Size, contentType); err != nil {
 		slog.Error("s3 put failed", "key", s3Key, "err", err)
+		h.recordUpload(r.Context(), "failure")
 		writeError(w, http.StatusInternalServerError, "failed to store file")
 		return
 	}
@@ -169,6 +178,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		Status:      document.StatusPending,
 	})
 	if err != nil {
+		h.recordUpload(r.Context(), "failure")
 		writeError(w, http.StatusInternalServerError, "failed to create document record")
 		return
 	}
@@ -187,11 +197,38 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		// Mark failed so the caller knows processing will not happen. The S3
 		// object and DB row are retained — the reconciliation job can retry.
 		_ = h.docRepo.UpdateStatus(r.Context(), userID, doc.ID, document.StatusFailed)
+		h.recordUpload(r.Context(), "failure")
 		writeError(w, http.StatusInternalServerError, "failed to enqueue document for processing")
 		return
 	}
 
+	h.recordUpload(r.Context(), "success")
 	writeJSON(w, http.StatusCreated, doc)
+}
+
+// recordUpload increments DocumentsUploadedTotal for the given outcome, once
+// an upload has actually begun persisting. Call sites upstream of the first
+// h.objects.Put in upload() (auth, validation, quota) must not call this —
+// those are request rejections, not upload attempts.
+func (h *docHandler) recordUpload(ctx context.Context, outcome string) {
+	if h.instruments == nil {
+		return
+	}
+	h.instruments.DocumentsUploadedTotal.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("outcome", outcome)),
+	)
+}
+
+// recordDelete increments DocumentsDeletedTotal for the given outcome, once a
+// deletion has actually begun (the document was found and its removal was
+// attempted). See recordUpload for why lookup/auth failures don't count.
+func (h *docHandler) recordDelete(ctx context.Context, outcome string) {
+	if h.instruments == nil {
+		return
+	}
+	h.instruments.DocumentsDeletedTotal.Add(ctx, 1,
+		metric.WithAttributes(attribute.String("outcome", outcome)),
+	)
 }
 
 func (h *docHandler) list(w http.ResponseWriter, r *http.Request) {
@@ -364,15 +401,18 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.objects.Delete(r.Context(), doc.S3Key); err != nil {
+		h.recordDelete(r.Context(), "failure")
 		writeError(w, http.StatusInternalServerError, "failed to remove object")
 		return
 	}
 
 	if err := h.docRepo.Delete(r.Context(), userID, docID); err != nil {
+		h.recordDelete(r.Context(), "failure")
 		writeError(w, http.StatusInternalServerError, "failed to delete document record")
 		return
 	}
 
+	h.recordDelete(r.Context(), "success")
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -28,6 +28,12 @@ primary_region = "iad"
   ENTITY_EXTRACTOR_SCRIPT = "/app/scripts/extract_entities.py"
   REGION_EXTRACTOR_SCRIPT = "/app/scripts/extract_regions.py"
 
+# Points Fly's built-in Prometheus scraper at the /metrics handler telemetry.Setup
+# already serves on METRICS_PORT, enabling Fly's Grafana dashboards with no new code.
+[metrics]
+  port = 9090
+  path = "/metrics"
+
 # HTTP service binds only to the api process group.
 # min_machines_running=1 keeps one API machine warm at all times.
 [http_service]

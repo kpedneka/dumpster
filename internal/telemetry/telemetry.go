@@ -76,10 +76,28 @@ func newInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("telemetry: job_failure_total: %w", err)
 	}
 
+	documentsUploadedTotal, err := meter.Int64Counter(
+		"documents_uploaded_total",
+		metric.WithDescription("Number of document upload attempts, labeled by outcome"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: documents_uploaded_total: %w", err)
+	}
+
+	documentsDeletedTotal, err := meter.Int64Counter(
+		"documents_deleted_total",
+		metric.WithDescription("Number of document deletion attempts, labeled by outcome"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: documents_deleted_total: %w", err)
+	}
+
 	return &Instruments{
-		SearchLatency:     searchLatency,
-		EmbeddingDuration: embeddingDuration,
-		QueueDepth:        queueDepth,
-		JobFailureTotal:   jobFailureTotal,
+		SearchLatency:          searchLatency,
+		EmbeddingDuration:      embeddingDuration,
+		QueueDepth:             queueDepth,
+		JobFailureTotal:        jobFailureTotal,
+		DocumentsUploadedTotal: documentsUploadedTotal,
+		DocumentsDeletedTotal:  documentsDeletedTotal,
 	}, nil
 }

@@ -18,4 +18,13 @@ type Instruments struct {
 	// JobFailureTotal counts jobs that have been dead-lettered after exhausting
 	// retries. A rising rate here signals a systemic processing problem.
 	JobFailureTotal metric.Int64Counter
+	// DocumentsUploadedTotal counts document upload attempts, labeled by
+	// outcome ("success"/"failure"). Only recorded once an upload has begun
+	// persisting (object storage, DB row, or enqueue) — request validation
+	// and auth rejections are not attempts and are not counted.
+	DocumentsUploadedTotal metric.Int64Counter
+	// DocumentsDeletedTotal counts document deletion attempts, labeled by
+	// outcome ("success"/"failure"), with the same validation-vs-attempt
+	// distinction as DocumentsUploadedTotal.
+	DocumentsDeletedTotal metric.Int64Counter
 }
