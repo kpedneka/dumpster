@@ -92,6 +92,15 @@ func newInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("telemetry: documents_deleted_total: %w", err)
 	}
 
+	jobDuration, err := meter.Float64Histogram(
+		"job_duration_ms",
+		metric.WithDescription("Wall-clock time from a job being claimed to its resolution, in milliseconds"),
+		metric.WithUnit("ms"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("telemetry: job_duration_ms: %w", err)
+	}
+
 	return &Instruments{
 		SearchLatency:          searchLatency,
 		EmbeddingDuration:      embeddingDuration,
@@ -99,5 +108,6 @@ func newInstruments(meter metric.Meter) (*Instruments, error) {
 		JobFailureTotal:        jobFailureTotal,
 		DocumentsUploadedTotal: documentsUploadedTotal,
 		DocumentsDeletedTotal:  documentsDeletedTotal,
+		JobDuration:            jobDuration,
 	}, nil
 }

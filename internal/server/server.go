@@ -57,7 +57,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
-		registerSearchRoutes(authed, deps.KBs, deps.Searcher)
+		registerSearchRoutes(authed, deps.KBs, deps.Searcher, deps.Instruments)
 	}
 
 	handler := auth.Middleware(deps.Sessions, authed)

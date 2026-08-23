@@ -704,6 +704,15 @@ func hasMetricSample(body, name, outcome string, value int) bool {
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
+// hasHistogramCount reports whether body contains a Prometheus _count sample
+// for the given histogram name with the given count, regardless of labels.
+// The exporter may insert a unit suffix (e.g. "_milliseconds") between name
+// and "_count", so that gap is matched loosely.
+func hasHistogramCount(body, name string, count int) bool {
+	pattern := fmt.Sprintf(`%s[a-z_]*_count\{[^}]*\}\s+%d`, regexp.QuoteMeta(name), count)
+	return regexp.MustCompile(pattern).MatchString(body)
+}
+
 func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	inst, metricsHandler := mustInstruments(t)

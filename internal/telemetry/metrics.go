@@ -27,4 +27,9 @@ type Instruments struct {
 	// outcome ("success"/"failure"), with the same validation-vs-attempt
 	// distinction as DocumentsUploadedTotal.
 	DocumentsDeletedTotal metric.Int64Counter
+	// JobDuration tracks wall-clock time from a job being claimed (Dequeue)
+	// to its resolution (Ack or Nack), in milliseconds, labeled by outcome
+	// ("success"/"failure"). The direct clearance-rate signal for deciding
+	// whether to move off the Postgres-backed queue.
+	JobDuration metric.Float64Histogram
 }
