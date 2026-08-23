@@ -9,7 +9,11 @@ import (
 	"log"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
 // Handler processes a single job.
@@ -25,6 +29,9 @@ type Config struct {
 	// PollInterval is how long the worker waits when the queue is empty.
 	// Defaults to 1 second when zero.
 	PollInterval time.Duration
+	// Instruments is optional; when nil, job duration/failure metrics are
+	// not recorded.
+	Instruments *telemetry.Instruments
 }
 
 // Worker pulls jobs from a Consumer and dispatches them to the Handler
@@ -33,9 +40,10 @@ type Config struct {
 // single queue/job-stage seam, without one stage's handler having to know
 // about the others.
 type Worker struct {
-	consumer queue.Consumer
-	handlers map[queue.JobType]Handler
-	cfg      Config
+	consumer    queue.Consumer
+	handlers    map[queue.JobType]Handler
+	cfg         Config
+	instruments *telemetry.Instruments
 }
 
 // New creates a Worker that reads from consumer and dispatches every job to
@@ -47,7 +55,7 @@ func New(consumer queue.Consumer, handler Handler, cfg Config) *Worker {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = time.Second
 	}
-	w := &Worker{consumer: consumer, handlers: make(map[queue.JobType]Handler), cfg: cfg}
+	w := &Worker{consumer: consumer, handlers: make(map[queue.JobType]Handler), cfg: cfg, instruments: cfg.Instruments}
 	w.handlers[queue.JobTypeDocumentIndexing] = handler
 	w.handlers[queue.JobType("")] = handler
 	return w
@@ -87,17 +95,20 @@ func (w *Worker) Run(ctx context.Context) error {
 			continue
 		}
 
-		w.process(ctx, job)
+		w.process(ctx, job, time.Now())
 	}
 }
 
-func (w *Worker) process(ctx context.Context, job *queue.Job) {
+func (w *Worker) process(ctx context.Context, job *queue.Job, started time.Time) {
 	handler, ok := w.handlers[job.Type]
 	if !ok {
 		log.Printf("worker: no handler registered for job %s type %q; nacking", job.ID, job.Type)
-		if _, nackErr := w.consumer.Nack(ctx, job.ID, errors.New("worker: no handler for job type "+string(job.Type))); nackErr != nil {
+		deadLettered, nackErr := w.consumer.Nack(ctx, job.ID, errors.New("worker: no handler for job type "+string(job.Type)))
+		if nackErr != nil {
 			log.Printf("worker: nack %s: %v", job.ID, nackErr)
+			return
 		}
+		w.recordResolution(ctx, started, "failure", deadLettered)
 		return
 	}
 
@@ -108,6 +119,7 @@ func (w *Worker) process(ctx context.Context, job *queue.Job) {
 			log.Printf("worker: nack %s: %v", job.ID, nackErr)
 			return
 		}
+		w.recordResolution(ctx, started, "failure", deadLettered)
 		if deadLettered {
 			log.Printf("worker: job %s dead-lettered after %d attempts", job.ID, job.MaxAttempts)
 			handler.OnFailed(ctx, job)
@@ -116,5 +128,22 @@ func (w *Worker) process(ctx context.Context, job *queue.Job) {
 	}
 	if err := w.consumer.Ack(ctx, job.ID); err != nil {
 		log.Printf("worker: ack %s: %v", job.ID, err)
+		return
+	}
+	w.recordResolution(ctx, started, "success", false)
+}
+
+// recordResolution records JobDuration for a job that has just been resolved
+// (acked or nacked), and JobFailureTotal when that resolution was a
+// dead-letter. It is a no-op when Instruments is nil.
+func (w *Worker) recordResolution(ctx context.Context, started time.Time, outcome string, deadLettered bool) {
+	if w.instruments == nil {
+		return
+	}
+	w.instruments.JobDuration.Record(ctx, float64(time.Since(started).Microseconds())/1000,
+		metric.WithAttributes(attribute.String("outcome", outcome)),
+	)
+	if deadLettered {
+		w.instruments.JobFailureTotal.Add(ctx, 1)
 	}
 }

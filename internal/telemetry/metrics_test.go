@@ -126,7 +126,10 @@ func TestSetup_JobDurationScrapeable(t *testing.T) {
 		t.Fatalf("metrics handler: got %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !hasMetricSample(body, "job_duration_ms_count", "success", 1) {
+	// The Prometheus exporter inserts a unit suffix (e.g. "_milliseconds",
+	// from WithUnit("ms")) between the metric name and "_count".
+	pattern := regexp.MustCompile(`job_duration_ms[a-z_]*_count\{[^}]*outcome="success"[^}]*\}\s+1`)
+	if !pattern.MatchString(body) {
 		t.Errorf("metrics body does not contain expected job_duration_ms sample:\n%s", body)
 	}
 }

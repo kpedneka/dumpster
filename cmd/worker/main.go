@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,10 +37,21 @@ func main() {
 	cfg := config.Load()
 	logger := telemetry.NewLogger(os.Stdout, "worker")
 
-	if _, _, err := telemetry.Setup(context.Background()); err != nil {
+	instruments, metricsHandler, err := telemetry.Setup(context.Background())
+	if err != nil {
 		logger.Error("telemetry setup failed", "err", err)
 		os.Exit(1)
 	}
+
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metricsHandler)
+	go func() {
+		addr := fmt.Sprintf(":%s", cfg.MetricsPort)
+		logger.Info("metrics endpoint starting", "addr", addr+"/metrics")
+		if err := http.ListenAndServe(addr, metricsMux); err != nil {
+			logger.Error("metrics server error", "err", err)
+		}
+	}()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -89,7 +102,7 @@ func main() {
 		WithEdgeExtractionPublisher(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
 
-	w := worker.New(q, docHandler, worker.Config{})
+	w := worker.New(q, docHandler, worker.Config{Instruments: instruments})
 	w.RegisterHandler(queue.JobTypeRegionClassification, regionHandler)
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
 	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)

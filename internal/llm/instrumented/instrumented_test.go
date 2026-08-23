@@ -33,8 +33,10 @@ func scrapeMetrics(t *testing.T, handler http.Handler) string {
 
 // hasHistogramCount reports whether body contains a Prometheus _count sample
 // for the given histogram name with the given count, regardless of labels.
+// The exporter may insert a unit suffix (e.g. "_milliseconds") between name
+// and "_count", so that gap is matched loosely.
 func hasHistogramCount(body, name string, count int) bool {
-	pattern := fmt.Sprintf(`%s_count\{[^}]*\}\s+%d`, regexp.QuoteMeta(name), count)
+	pattern := fmt.Sprintf(`%s[a-z_]*_count\{[^}]*\}\s+%d`, regexp.QuoteMeta(name), count)
 	return regexp.MustCompile(pattern).MatchString(body)
 }
 
