@@ -15,9 +15,8 @@ describe('PrivacyPage', () => {
   it('states what is collected, and that there is no email or password', () => {
     renderPrivacyPage()
     expect(screen.getByText(/uploaded documents/i)).toBeInTheDocument()
-    expect(screen.getByText(/chunks/i)).toBeInTheDocument()
-    expect(screen.getByText(/embeddings/i)).toBeInTheDocument()
-    expect(screen.getByText(/anonymous session/i)).toBeInTheDocument()
+    expect(screen.getByText(/chunks and embeddings/i)).toBeInTheDocument()
+    expect(screen.getByText(/anonymous session id/i)).toBeInTheDocument()
     expect(screen.getByText(/no email or password/i)).toBeInTheDocument()
   })
 
@@ -27,10 +26,9 @@ describe('PrivacyPage', () => {
     expect(screen.getByText(/24 hours/i)).toBeInTheDocument()
   })
 
-  it('states that deletion is a hard delete, not deactivation', () => {
+  it('states that deletion is a hard delete, explicitly contrasted with deactivation', () => {
     renderPrivacyPage()
-    expect(screen.getByText(/hard delet/i)).toBeInTheDocument()
-    expect(screen.queryByText(/deactivat/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/hard delete, not deactivation/i)).toBeInTheDocument()
   })
 
   it('lists the third parties data passes through', () => {
