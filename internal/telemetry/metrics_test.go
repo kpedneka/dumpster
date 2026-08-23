@@ -48,6 +48,9 @@ func TestSetup_InstrumentsNonNil(t *testing.T) {
 	if inst.DocumentsDeletedTotal == nil {
 		t.Error("DocumentsDeletedTotal is nil")
 	}
+	if inst.JobDuration == nil {
+		t.Error("JobDuration is nil")
+	}
 	if handler == nil {
 		t.Error("metrics HTTP handler is nil")
 	}
@@ -102,5 +105,28 @@ func TestSetup_DocumentMetricsScrapeable(t *testing.T) {
 	}
 	if !hasMetricSample(body, "documents_deleted_total", "failure", 1) {
 		t.Errorf("metrics body does not contain expected documents_deleted_total sample:\n%s", body)
+	}
+}
+
+func TestSetup_JobDurationScrapeable(t *testing.T) {
+	inst, handler, err := telemetry.Setup(context.Background())
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+
+	inst.JobDuration.Record(context.Background(), 123.4,
+		metric.WithAttributes(attribute.String("outcome", "success")),
+	)
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("metrics handler: got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !hasMetricSample(body, "job_duration_ms_count", "success", 1) {
+		t.Errorf("metrics body does not contain expected job_duration_ms sample:\n%s", body)
 	}
 }

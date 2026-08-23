@@ -146,3 +146,53 @@ func TestSearch_ServiceError(t *testing.T) {
 		t.Fatalf("status: got %d, want 500", w.Code)
 	}
 }
+
+func TestSearch_RecordsLatencyMetric(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "the answer"})
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+
+	body := strings.NewReader(`{"query":"what is the answer?"}`)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search", body, userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if !hasHistogramCount(got, "search_latency_ms", 1) {
+		t.Errorf("expected search_latency_ms sample, got:\n%s", got)
+	}
+}
+
+func TestSearch_RecordsLatencyMetric_OnError(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewErrorSearcher("index unavailable")
+	inst, metricsHandler := mustInstruments(t)
+	deps.Instruments = inst
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hello"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500", w.Code)
+	}
+
+	got := scrapeMetrics(t, metricsHandler)
+	if !hasHistogramCount(got, "search_latency_ms", 1) {
+		t.Errorf("expected search_latency_ms sample even on error, got:\n%s", got)
+	}
+}
