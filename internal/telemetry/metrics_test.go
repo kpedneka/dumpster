@@ -2,7 +2,9 @@ package telemetry_test
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -11,6 +13,14 @@ import (
 
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
+
+// hasMetricSample reports whether body contains a Prometheus exposition line
+// for name with the given outcome label and value, regardless of what other
+// labels (e.g. OTel's otel_scope_* resource attributes) are also present.
+func hasMetricSample(body, name, outcome string, value int) bool {
+	pattern := fmt.Sprintf(`%s\{[^}]*outcome="%s"[^}]*\}\s+%d`, regexp.QuoteMeta(name), regexp.QuoteMeta(outcome), value)
+	return regexp.MustCompile(pattern).MatchString(body)
+}
 
 func TestSetup_InstrumentsNonNil(t *testing.T) {
 	inst, handler, err := telemetry.Setup(context.Background())
@@ -87,10 +97,10 @@ func TestSetup_DocumentMetricsScrapeable(t *testing.T) {
 		t.Fatalf("metrics handler: got %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, `documents_uploaded_total{outcome="success"} 1`) {
+	if !hasMetricSample(body, "documents_uploaded_total", "success", 1) {
 		t.Errorf("metrics body does not contain expected documents_uploaded_total sample:\n%s", body)
 	}
-	if !strings.Contains(body, `documents_deleted_total{outcome="failure"} 1`) {
+	if !hasMetricSample(body, "documents_deleted_total", "failure", 1) {
 		t.Errorf("metrics body does not contain expected documents_deleted_total sample:\n%s", body)
 	}
 }

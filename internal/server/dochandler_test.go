@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -695,6 +696,14 @@ func scrapeMetrics(t *testing.T, handler http.Handler) string {
 	return w.Body.String()
 }
 
+// hasMetricSample reports whether body contains a Prometheus exposition line
+// for name with the given outcome label and value, regardless of what other
+// labels (e.g. OTel's otel_scope_* resource attributes) are also present.
+func hasMetricSample(body, name, outcome string, value int) bool {
+	pattern := fmt.Sprintf(`%s\{[^}]*outcome="%s"[^}]*\}\s+%d`, regexp.QuoteMeta(name), regexp.QuoteMeta(outcome), value)
+	return regexp.MustCompile(pattern).MatchString(body)
+}
+
 func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	inst, metricsHandler := mustInstruments(t)
@@ -715,7 +724,7 @@ func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
 	}
 
 	got := scrapeMetrics(t, metricsHandler)
-	if !strings.Contains(got, `documents_uploaded_total{outcome="success"} 1`) {
+	if !hasMetricSample(got, "documents_uploaded_total", "success", 1) {
 		t.Errorf("expected success upload metric, got:\n%s", got)
 	}
 }
@@ -741,7 +750,7 @@ func TestDocUpload_RecordsFailureMetric(t *testing.T) {
 	}
 
 	got := scrapeMetrics(t, metricsHandler)
-	if !strings.Contains(got, `documents_uploaded_total{outcome="failure"} 1`) {
+	if !hasMetricSample(got, "documents_uploaded_total", "failure", 1) {
 		t.Errorf("expected failure upload metric, got:\n%s", got)
 	}
 }
@@ -802,7 +811,7 @@ func TestDocDelete_RecordsSuccessMetric(t *testing.T) {
 	}
 
 	got := scrapeMetrics(t, metricsHandler)
-	if !strings.Contains(got, `documents_deleted_total{outcome="success"} 1`) {
+	if !hasMetricSample(got, "documents_deleted_total", "success", 1) {
 		t.Errorf("expected success delete metric, got:\n%s", got)
 	}
 }
@@ -835,7 +844,7 @@ func TestDocDelete_RecordsFailureMetric(t *testing.T) {
 	}
 
 	got := scrapeMetrics(t, metricsHandler)
-	if !strings.Contains(got, `documents_deleted_total{outcome="failure"} 1`) {
+	if !hasMetricSample(got, "documents_deleted_total", "failure", 1) {
 		t.Errorf("expected failure delete metric, got:\n%s", got)
 	}
 }
