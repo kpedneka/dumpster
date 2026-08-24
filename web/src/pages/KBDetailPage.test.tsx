@@ -48,10 +48,16 @@ beforeEach(() => {
 })
 
 describe('KBDetailPage', () => {
-  it('shows a warning against uploading proprietary or confidential content', async () => {
+  it('shows a warning against uploading proprietary, sensitive, or confidential content', async () => {
     renderKBDetailPage()
     await screen.findByRole('heading', { name: 'Test KB' })
-    expect(screen.getByText(/proprietary or confidential/i)).toBeInTheDocument()
+    expect(screen.getByText(/proprietary, sensitive, or confidential/i)).toBeInTheDocument()
+  })
+
+  it('links to the privacy policy from the upload warning', async () => {
+    renderKBDetailPage()
+    await screen.findByRole('heading', { name: 'Test KB' })
+    expect(screen.getByRole('link', { name: /privacy policy/i })).toHaveAttribute('href', '/privacy')
   })
 
   describe('delete knowledge base', () => {

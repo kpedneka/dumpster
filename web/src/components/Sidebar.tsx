@@ -77,12 +77,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
 
       {/* Session indicator */}
       <div className="px-4 pb-2">
-        <p className="text-xs text-muted-foreground">
-          Anonymous session ·{' '}
-          <Link to="/privacy" className="underline hover:text-foreground">
-            Privacy
-          </Link>
-        </p>
+        <p className="text-xs text-muted-foreground">Anonymous session</p>
       </div>
 
       {/* KB navigation */}
@@ -137,6 +132,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
             </Link>
           )}
         </nav>
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-border px-4 py-2.5">
+        <Link to="/privacy" className="text-[11px] text-muted-foreground hover:text-foreground">
+          Privacy
+        </Link>
       </div>
     </aside>
   )

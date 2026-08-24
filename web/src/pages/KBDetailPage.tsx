@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDropzone } from 'react-dropzone'
 import { AlertTriangle, FileText, MoreHorizontal, Trash2, Upload } from 'lucide-react'
@@ -128,8 +128,12 @@ export function KBDetailPage() {
       <div className="flex items-start gap-2 rounded-lg border border-amber-600/30 bg-amber-500/10 px-3 py-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-300">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          Do not upload proprietary or confidential information. This is a public demo and uploaded
-          content may be processed by third-party models.
+          Do not upload proprietary, sensitive, or confidential information. This is a public demo
+          and uploaded content may be processed by third-party models. Please review our{' '}
+          <Link to="/privacy" className="underline hover:text-amber-900 dark:hover:text-amber-200">
+            privacy policy
+          </Link>{' '}
+          for understanding how data is handled.
         </span>
       </div>
     </div>
