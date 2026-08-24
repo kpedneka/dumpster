@@ -35,7 +35,26 @@ describe('PrivacyPage', () => {
     renderPrivacyPage()
     expect(screen.getByText(/openai/i)).toBeInTheDocument()
     expect(screen.getByText(/anthropic/i)).toBeInTheDocument()
-    expect(screen.getByText(/cloudflare r2/i)).toBeInTheDocument()
+    expect(screen.getByText(/cloudflare/i)).toBeInTheDocument()
+    expect(screen.getByText(/r2 stores uploaded files/i)).toBeInTheDocument()
     expect(screen.getByText(/neon/i)).toBeInTheDocument()
+  })
+
+  it('links each third party to its own privacy policy, opened in a new tab', () => {
+    renderPrivacyPage()
+
+    const expectations: [name: string, href: string][] = [
+      ['OpenAI', 'https://openai.com/policies/row-privacy-policy/'],
+      ['Anthropic', 'https://privacy.anthropic.com/en/'],
+      ['Cloudflare', 'https://www.cloudflare.com/privacypolicy/'],
+      ['Neon', 'https://neon.com/privacy-policy'],
+    ]
+
+    for (const [name, href] of expectations) {
+      const link = screen.getByRole('link', { name })
+      expect(link).toHaveAttribute('href', href)
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+    }
   })
 })

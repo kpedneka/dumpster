@@ -2,6 +2,32 @@
 // IdleTimeout/HardCap constants exactly — if those change, update this page
 // in the same PR rather than letting it silently drift out of date.
 
+// Consumer-facing policy pages, not the API/business terms that technically
+// govern OpenAI's and Anthropic's API usage — linked here as the practical,
+// readable reference, consistent with this page's plain-language framing.
+const THIRD_PARTIES = [
+  {
+    name: 'OpenAI',
+    href: 'https://openai.com/policies/row-privacy-policy/',
+    role: 'generates embeddings for uploaded document text',
+  },
+  {
+    name: 'Anthropic',
+    href: 'https://privacy.anthropic.com/en/',
+    role: 'generates search answers from retrieved chunks',
+  },
+  {
+    name: 'Cloudflare',
+    href: 'https://www.cloudflare.com/privacypolicy/',
+    role: 'R2 stores uploaded files',
+  },
+  {
+    name: 'Neon',
+    href: 'https://neon.com/privacy-policy',
+    role: 'hosts the Postgres database',
+  },
+] as const
+
 export function PrivacyPage() {
   return (
     <div className="rise mx-auto max-w-3xl px-6 py-8">
@@ -48,10 +74,19 @@ export function PrivacyPage() {
           In the course of processing a request, data passes through the following third parties:
         </p>
         <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground">
-          <li>OpenAI — generates embeddings for uploaded document text</li>
-          <li>Anthropic — generates search answers from retrieved chunks</li>
-          <li>Cloudflare R2 — stores uploaded files</li>
-          <li>Neon — hosts the Postgres database</li>
+          {THIRD_PARTIES.map(({ name, href, role }) => (
+            <li key={name}>
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-foreground"
+              >
+                {name}
+              </a>{' '}
+              — {role}
+            </li>
+          ))}
         </ul>
       </section>
     </div>
