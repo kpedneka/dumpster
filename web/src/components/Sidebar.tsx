@@ -64,8 +64,12 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
 
   return (
     <aside className="flex h-full w-64 flex-col border-r border-border bg-background/70 backdrop-blur">
-      {/* Brand */}
-      <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
+      {/* Brand — links back to the KB list, so there's always a way home. */}
+      <Link
+        to="/kbs"
+        onClick={onNavigate}
+        className="flex items-center gap-2.5 px-4 pb-3 pt-4 transition-opacity hover:opacity-80"
+      >
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary font-display text-lg font-semibold text-primary-foreground shadow-sm">
           D
         </span>
@@ -73,7 +77,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
           <div className="font-display text-lg font-semibold leading-none tracking-tight">Dumpster</div>
           <div className="mt-1 text-[11px] text-muted-foreground">Multimodal knowledge base</div>
         </div>
-      </div>
+      </Link>
 
       {/* Session indicator */}
       <div className="px-4 pb-2">
@@ -132,6 +136,13 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
             </Link>
           )}
         </nav>
+      </div>
+
+      {/* Footer */}
+      <div className="border-t border-border px-4 py-2.5">
+        <Link to="/privacy" className="text-[11px] text-muted-foreground hover:text-foreground">
+          Privacy
+        </Link>
       </div>
     </aside>
   )
