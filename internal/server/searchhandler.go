@@ -89,6 +89,11 @@ type CitationResponse struct {
 	ChunkID    string `json:"chunk_id"`
 	CharStart  int    `json:"char_start"`
 	CharEnd    int    `json:"char_end"`
+	// Text is the cited chunk's own extracted content, served directly so
+	// clients never need to re-fetch and slice the original document —
+	// slicing by CharStart/CharEnd only reproduces the right span for
+	// text/markdown documents, not PDF/image region-derived chunks.
+	Text string `json:"text"`
 }
 
 func toSearchResponse(r search.Result) SearchResponse {
@@ -100,6 +105,7 @@ func toSearchResponse(r search.Result) SearchResponse {
 			ChunkID:    c.ChunkID.String(),
 			CharStart:  c.CharStart,
 			CharEnd:    c.CharEnd,
+			Text:       c.Text,
 		}
 	}
 	return SearchResponse{

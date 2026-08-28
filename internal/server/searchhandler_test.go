@@ -23,7 +23,7 @@ func TestSearch(t *testing.T) {
 	deps.Searcher = searchmock.NewSearcher(search.Result{
 		Summary: "the answer",
 		Citations: []search.Citation{
-			{Number: 1, DocumentID: docID, ChunkID: chunkID, CharStart: 0, CharEnd: 42},
+			{Number: 1, DocumentID: docID, ChunkID: chunkID, CharStart: 0, CharEnd: 42, Text: "the source text"},
 		},
 	})
 	router := NewRouter(deps)
@@ -56,6 +56,9 @@ func TestSearch(t *testing.T) {
 	}
 	if got.Citations[0].CharStart != 0 || got.Citations[0].CharEnd != 42 {
 		t.Errorf("citation range mismatch")
+	}
+	if got.Citations[0].Text != "the source text" {
+		t.Errorf("citation text: got %q, want %q", got.Citations[0].Text, "the source text")
 	}
 }
 

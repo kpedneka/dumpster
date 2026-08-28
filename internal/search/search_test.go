@@ -78,6 +78,9 @@ func TestAnswerer_WithChunks(t *testing.T) {
 	if c.CharStart != 0 || c.CharEnd != 34 {
 		t.Errorf("citation offsets: got %d-%d, want 0-34", c.CharStart, c.CharEnd)
 	}
+	if c.Text != "Go is a statically typed language." {
+		t.Errorf("citation text: got %q, want the source chunk's own text", c.Text)
+	}
 }
 
 // TestAnswerer_NoChunks verifies the guardrail: when no chunks are provided
