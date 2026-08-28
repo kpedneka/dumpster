@@ -41,6 +41,11 @@ type Deps struct {
 	// index.html for browser navigation. Leave empty to disable SPA serving
 	// (development: Vite dev server handles this instead).
 	SPADir string
+	// CookieSecure controls the Secure attribute on the session cookie
+	// (config.Config.CookieSecure). Defaults to false (the Go zero value) if
+	// unset, so callers must set it explicitly to true in any environment
+	// reached over TLS.
+	CookieSecure bool
 }
 
 // NewRouter constructs the application HTTP router. All routes (other than
@@ -60,7 +65,7 @@ func NewRouter(deps Deps) http.Handler {
 		registerSearchRoutes(authed, deps.KBs, deps.Searcher, deps.Instruments)
 	}
 
-	handler := auth.Middleware(deps.Sessions, authed)
+	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, authed)
 	if deps.RateLimiter != nil {
 		handler = ratelimit.Middleware(deps.RateLimiter, handler)
 	}

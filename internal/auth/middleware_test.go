@@ -35,7 +35,7 @@ func TestMiddleware_noCookie_mintsSession(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	auth.Middleware(sessions, sessionHandler(t)).ServeHTTP(w, req)
+	auth.Middleware(sessions, true, sessionHandler(t)).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
@@ -55,6 +55,34 @@ func TestMiddleware_noCookie_mintsSession(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected Set-Cookie: session_id header for new session")
+	}
+}
+
+// TestMiddleware_secureFlag_followsParameter verifies that the Set-Cookie
+// Secure attribute tracks the secure parameter exactly. This is the guard
+// against the local-dev bug where a hardcoded Secure:true caused browsers to
+// silently drop the cookie over plain http, minting a new session (and a new
+// tenant identity) on every request.
+func TestMiddleware_secureFlag_followsParameter(t *testing.T) {
+	for _, secure := range []bool{true, false} {
+		sessions := sessionmock.New()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		w := httptest.NewRecorder()
+
+		auth.Middleware(sessions, secure, sessionHandler(t)).ServeHTTP(w, req)
+
+		var found bool
+		for _, c := range w.Result().Cookies() {
+			if c.Name == sessionCookie {
+				found = true
+				if c.Secure != secure {
+					t.Errorf("secure=%v: cookie Secure attribute = %v, want %v", secure, c.Secure, secure)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("secure=%v: expected Set-Cookie: session_id header", secure)
+		}
 	}
 }
 
@@ -79,7 +107,7 @@ func TestMiddleware_validCookie_resumesSession(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sess.ID.String()})
 	w := httptest.NewRecorder()
 
-	auth.Middleware(sessions, handler).ServeHTTP(w, req)
+	auth.Middleware(sessions, true, handler).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
@@ -113,7 +141,7 @@ func TestMiddleware_sweptSession_mintsFresh(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: swept.ID.String()})
 	w := httptest.NewRecorder()
 
-	auth.Middleware(sessions, handler).ServeHTTP(w, req)
+	auth.Middleware(sessions, true, handler).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
@@ -151,7 +179,7 @@ func TestMiddleware_sameSessionAcrossRequests(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	mw := auth.Middleware(sessions, handler)
+	mw := auth.Middleware(sessions, true, handler)
 	for range 2 {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sess.ID.String()})
