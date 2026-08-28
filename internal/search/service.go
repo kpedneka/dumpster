@@ -10,8 +10,14 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/router"
 )
 
-// defaultK is the number of chunks retrieved per leg per query.
-const defaultK = 5
+// defaultK is the number of chunks retrieved per leg per query. Raised from 5
+// to reduce how often a section spanning multiple chunks (e.g. a multi-page
+// PDF conclusion split one region/chunk per page) gets partially cut off by
+// the retrieval cutoff — similarity ranking has no notion of section
+// contiguity, so a higher K meaningfully improves coverage even though it
+// doesn't fully solve it. See the aggregation-leg comment below for the
+// broader, still-open version of this problem.
+const defaultK = 12
 
 // Service orchestrates the full query path: route → retrieve → answer.
 // It is the single entry point that the API layer calls.
