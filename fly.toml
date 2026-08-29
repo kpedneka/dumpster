@@ -67,7 +67,14 @@ primary_region = "iad"
 [[vm]]
   count     = 1
   size      = "shared-cpu-1x"
-  memory    = "512mb"
+  # 1024mb (raised from 512mb): fly logs show extract_regions.py's "fast"
+  # unstructured.partition_pdf strategy (pdfminer + cv2 + numpy) hitting a
+  # consistent ~390MB RSS floor across every PDF that OOM-killed, regardless
+  # of file size — leaving no headroom once the Go worker process and VM
+  # baseline are added on top of a 512MB box. This is a stopgap based on one
+  # observed data point, not a profiled ceiling; see v4.6 for adding real
+  # peak-RSS instrumentation so future sizing is measured, not guessed.
+  memory    = "1024mb"
   processes = ["worker"]
 
   # Worker uses the direct Neon connection (no pooler) to support SKIP LOCKED
