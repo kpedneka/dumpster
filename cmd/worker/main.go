@@ -29,7 +29,6 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
-	ollamavision "github.com/kunalpednekar/dumpster/internal/vision/ollama"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
@@ -91,12 +90,11 @@ func main() {
 		PythonPath: cfg.EntityExtractorPython, // reuse the same Python interpreter
 		ScriptPath: cfg.RegionExtractorScript,
 	})
-	describer := ollamavision.New(cfg.OllamaURL, cfg.OllamaVLMModel)
 
 	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
 		WithEntityExtractionPublisher(q)
 	regionHandler := worker.NewRegionClassificationHandler(
-		docs, obj, chunks, manifestRepo, layoutExtractor, describer, embedder, q,
+		docs, obj, chunks, manifestRepo, layoutExtractor, embedder, q,
 	)
 	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, cfg.EntityTypes).
 		WithEdgeExtractionPublisher(q)

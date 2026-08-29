@@ -27,7 +27,6 @@ services:
       - path: .env.local
         required: false
     environment:
-      - OLLAMA_URL=http://ollama:11434
       # .env.local sets this to a host-machine virtualenv path
       # (scripts/.venv/bin/python3) for running `go run ./cmd/worker`
       # directly on the host. env_file above loads that same file for its
@@ -35,20 +34,6 @@ services:
       # too — but the container has no virtualenv; everything installs into
       # the system Python. Override back to the container-correct default
       # (matching internal/config's own default when this var is unset).
+      # This also fixes region classification, not just entity extraction:
+      # layout.Extractor reuses this same interpreter path.
       - ENTITY_EXTRACTOR_PYTHON=python3
-    depends_on:
-      - ollama
-
-  # Local VLM service for PDF region classification (figure description and
-  # scanned-content confirmation). Pull the model once before first use:
-  #   docker compose exec ollama ollama pull qwen2.5vl
-  # Or run: make ollama-pull
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-
-volumes:
-  ollama_models:

@@ -21,11 +21,11 @@ jobs:
         run: |
           go test ./...
           # pgstore, db, s3store, llm/anthropic, llm/openai, entity/gliner,
-          # manifest/layout, session/pgstore, vision/ollama require external
+          # manifest/layout, session/pgstore require external
           # services/processes; covered by integration tests, not the unit gate.
-          CORE=./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/vision,./internal/vision/mock,./internal/llm,./internal/llm/mock,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock
+          CORE=./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/llm,./internal/llm/mock,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock
           go test -coverpkg=$CORE -coverprofile=coverage.out -covermode=atomic \
-            ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/graphedge ./internal/manifest ./internal/vision/ollama ./internal/llm \
+            ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/graphedge ./internal/manifest ./internal/llm \
             ./internal/kb ./internal/document ./internal/chunk ./internal/entity \
             ./internal/objectstore ./internal/worker \
             ./internal/rls ./internal/retrieval ./internal/retrieval/memory \

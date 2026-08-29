@@ -49,14 +49,6 @@ type Config struct {
 	S3UsePathStyle bool
 	// Observability
 	MetricsPort string
-	// OllamaURL is the base URL of the local Ollama service used by the
-	// RegionClassificationHandler for VLM inference (figure description and
-	// scanned-content confirmation). Defaults to the docker-compose service
-	// name; override in .env.local for local development without Docker.
-	OllamaURL string
-	// OllamaVLMModel is the Ollama model name used for vision-language
-	// inference. Pull it once with: docker compose exec ollama ollama pull qwen2.5vl
-	OllamaVLMModel string
 	// LLM
 	AnthropicAPIKey  string
 	AnthropicModel   string
@@ -134,8 +126,6 @@ func Load() *Config {
 		S3AccessKey:       getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:       getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UsePathStyle:    getEnv("S3_USE_PATH_STYLE", "true") == "true",
-		OllamaURL:         getEnv("OLLAMA_URL", "http://ollama:11434"),
-		OllamaVLMModel:    getEnv("OLLAMA_VLM_MODEL", "qwen2.5vl"),
 		AnthropicAPIKey:   getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:    getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
 		OpenAIAPIKey:      getEnv("OPENAI_API_KEY", ""),
