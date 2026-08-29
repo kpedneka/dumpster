@@ -790,8 +790,16 @@ export interface components {
             chunk_id: string;
             char_start: number;
             char_end: number;
-            /** @description The cited chunk's own extracted text, served directly so clients never need to re-fetch and slice the original document. */
+            /** @description The cited chunk's own extracted text, served directly so clients never need to re-fetch and slice the original document. Used as the drill-down evidence behind the primary file+locator citation, not as the primary citation display itself. */
             text: string;
+            /** @description The source document's filename. This, plus locator when present, is the primary citation identity — mirroring how search engines cite the source page rather than a byte range within it. */
+            file_name: string;
+            /** @description An optional modality-native locator narrowing the citation within the file — a page number for PDF-derived chunks. Absent for plain-text/markdown chunks. Shaped so a future locator type (e.g. a video timestamp) is an additive change, not a schema rework. */
+            locator: {
+                /** @enum {string} */
+                type: "page";
+                value: number;
+            } | null;
         };
         SearchResult: {
             summary: string;
