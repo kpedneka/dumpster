@@ -1,10 +1,14 @@
+# syntax=docker/dockerfile:1
+
 FROM golang:1.25-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /bin/api ./cmd/api
-RUN CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /bin/api ./cmd/api
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
 
 # web-builder compiles the React SPA so the api binary can serve it.
 # Uses node:22-slim (Debian/glibc) rather than Alpine: esbuild (used by Vite)
@@ -12,7 +16,7 @@ RUN CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
 FROM node:22-slim AS web-builder
 WORKDIR /app/web
 COPY web/package*.json web/.npmrc ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npm run build
 
@@ -32,8 +36,13 @@ WORKDIR /app
 COPY --from=builder /bin/api    /bin/api
 COPY --from=builder /bin/worker /bin/worker
 COPY --from=web-builder /app/web/dist /app/web/dist
+# requirements.txt copied and installed before the rest of scripts/ so an
+# unrelated change to extract_regions.py/extract_entities.py doesn't bust the
+# cache for this layer — installing torch et al. from scratch is the single
+# most expensive step in this build.
+COPY scripts/requirements.txt /app/scripts/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requirements.txt
 COPY scripts/ /app/scripts/
-RUN pip install --no-cache-dir -r /app/scripts/requirements.txt
 
 # No ENTRYPOINT or CMD here: Fly.io selects the binary via [processes] in
 # fly.toml; docker-compose selects it via the `command:` key in compose.yml.

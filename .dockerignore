@@ -3,3 +3,11 @@ web/dist
 *.out
 .git
 .DS_Store
+# Local-only Python virtualenv for scripts/ (see ENTITY_EXTRACTOR_PYTHON in
+# README/.env.local) — was not excluded and was getting sent to the build
+# context and copied into images on every build. At ~1.7 GB (torch et al.
+# already installed), this was almost certainly the dominant cost in a
+# 13-minute Fly build.
+scripts/.venv
+**/__pycache__
+**/*.pyc
