@@ -644,6 +644,44 @@ func TestDocDelete_ObjectFirst(t *testing.T) {
 	}
 }
 
+// TestDocDelete_WhileProcessing_Rejected guards against deleting a document
+// out from under its in-flight worker job: the job holds a reference to the
+// S3 object and document row for the duration of Handle(), and nothing in
+// the worker checks whether either still exists mid-run. Deleting while
+// "processing" previously succeeded silently, leaving the in-flight job to
+// either dead-letter against a vanished document or write chunks for a
+// document that no longer exists.
+func TestDocDelete_WhileProcessing_Rejected(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	s3Key := "documents/test/in-flight.txt"
+	if err := obj.Put(context.TODO(), s3Key, bytes.NewReader([]byte("content")), 7, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	created, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "in-flight.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusProcessing,
+	})
+
+	req := authedRequest(t, deps, http.MethodDelete,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 — body: %s", w.Code, w.Body)
+	}
+	if _, err := obj.Get(context.TODO(), s3Key); err != nil {
+		t.Error("s3 object should not have been deleted while processing")
+	}
+	if _, err := docRepo.Get(context.TODO(), userID, created.ID); err != nil {
+		t.Error("document row should not have been deleted while processing")
+	}
+}
+
 func TestDocTenantIsolation(t *testing.T) {
 	deps, kbRepo, docRepo, obj, _ := defaultDeps()
 	router := NewRouter(deps)
