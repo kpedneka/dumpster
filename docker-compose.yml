@@ -28,6 +28,14 @@ services:
         required: false
     environment:
       - OLLAMA_URL=http://ollama:11434
+      # .env.local sets this to a host-machine virtualenv path
+      # (scripts/.venv/bin/python3) for running `go run ./cmd/worker`
+      # directly on the host. env_file above loads that same file for its
+      # DB/S3 credentials, which incidentally drags this host-only path in
+      # too — but the container has no virtualenv; everything installs into
+      # the system Python. Override back to the container-correct default
+      # (matching internal/config's own default when this var is unset).
+      - ENTITY_EXTRACTOR_PYTHON=python3
     depends_on:
       - ollama
 
