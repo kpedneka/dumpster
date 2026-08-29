@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
@@ -73,28 +75,59 @@ func NewRouter(deps Deps) http.Handler {
 	// When SPADir is set (production), serve static assets and wrap the API
 	// handler so browser navigation returns index.html instead of JSON 404s.
 	if deps.SPADir != "" {
-		spaFS := http.Dir(deps.SPADir)
-		mux.Handle("/assets/", http.FileServer(spaFS))
-		mux.Handle("/favicon.ico", http.FileServer(spaFS))
-		handler = spaFallback(handler, deps.SPADir+"/index.html")
+		handler = spaHandler(deps.SPADir, handler)
 	}
 	mux.Handle("/", handler)
 
 	return mux
 }
 
-// spaFallback serves index.html for browser navigation (GET requests that
-// include "text/html" in their Accept header) so React Router can handle
-// client-side routing. API calls from fetch() use Accept: application/json
-// or Accept: */* and pass through to the wrapped handler unchanged.
-func spaFallback(next http.Handler, indexPath string) http.Handler {
+// spaHandler serves whatever actually exists as a file under dir — the
+// bundled, hashed JS/CSS under /assets/, and anything Vite copied verbatim
+// from web/public/ (favicons, etc.) to the dist root — before falling back
+// to index.html for browser navigation (GET requests with "text/html" in
+// their Accept header) so React Router can handle client-side routes.
+// Everything else (API calls, whose Accept is application/json or */*) passes
+// through to next unchanged.
+//
+// A single existence check replaces the old approach of hardcoding "/assets/"
+// and "/favicon.ico" as the only static routes: that missed every other
+// public/ file (e.g. favicon.svg) since Accept for an <link rel="icon">
+// request is image-ish, not text/html, so those requests fell through past
+// the SPA fallback into the API mux and 404ed.
+func spaHandler(dir string, next http.Handler) http.Handler {
+	fileServer := http.FileServer(http.Dir(dir))
+	indexPath := filepath.Join(dir, "index.html")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/html") {
+		if r.Method != http.MethodGet {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if existingFile(dir, r.URL.Path) {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
 			http.ServeFile(w, r, indexPath)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// existingFile reports whether urlPath resolves to a regular file under dir,
+// rejecting any path (e.g. "/../go.mod") that would resolve outside dir.
+func existingFile(dir, urlPath string) bool {
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	candidate := filepath.Join(root, filepath.Clean("/"+urlPath))
+	if candidate != root && !strings.HasPrefix(candidate, root+string(filepath.Separator)) {
+		return false
+	}
+	info, err := os.Stat(candidate)
+	return err == nil && !info.IsDir()
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {
