@@ -111,6 +111,7 @@ export function KBDetailPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [duplicateQueue, setDuplicateQueue] = useState<File[]>([])
   const [query, setQuery] = useState(() => getDraftQuery(kbId!))
   const [submittedQuery, setSubmittedQueryState] = useState(() => getSubmittedQuery(kbId!))
   const taRef = useRef<HTMLTextAreaElement>(null)
@@ -141,7 +142,7 @@ export function KBDetailPage() {
     },
   })
 
-  const docs: Document[] = docPage?.items ?? []
+  const docs: Document[] = useMemo(() => docPage?.items ?? [], [docPage])
 
   const {
     data: result,
@@ -180,12 +181,38 @@ export function KBDetailPage() {
       toast({ variant: 'destructive', title: 'Upload failed', description: String(err) }),
   })
 
+  // A perceived "stall" (the upload request itself returns quickly; it's
+  // the async indexing that can take a while — see v4.6) is exactly the
+  // situation that invites a user to re-upload the same file, thinking the
+  // first attempt failed. That produces a real duplicate document rather
+  // than progress on the original. Same filename in the same KB gets a
+  // confirmation gate instead of uploading silently.
   const onDrop = useCallback(
     (accepted: File[]) => {
-      accepted.forEach((file) => uploadMutation.mutate(file))
+      const existingNames = new Set(docs.map((d) => d.filename))
+      const duplicates: File[] = []
+      for (const file of accepted) {
+        if (existingNames.has(file.name)) {
+          duplicates.push(file)
+        } else {
+          uploadMutation.mutate(file)
+        }
+      }
+      if (duplicates.length > 0) {
+        setDuplicateQueue((prev) => [...prev, ...duplicates])
+      }
     },
-    [uploadMutation],
+    [docs, uploadMutation],
   )
+
+  const currentDuplicate = duplicateQueue[0] ?? null
+
+  function resolveDuplicate(shouldUpload: boolean) {
+    if (shouldUpload && currentDuplicate) {
+      uploadMutation.mutate(currentDuplicate)
+    }
+    setDuplicateQueue((prev) => prev.slice(1))
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -306,6 +333,23 @@ export function KBDetailPage() {
             >
               Delete
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={currentDuplicate !== null} onOpenChange={(open) => !open && resolveDuplicate(false)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>File already exists</DialogTitle>
+            <DialogDescription>
+              A file named <strong>{currentDuplicate?.name}</strong> already exists in this
+              knowledge base. Upload anyway?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => resolveDuplicate(false)}>
+              Cancel
+            </Button>
+            <Button onClick={() => resolveDuplicate(true)}>Upload anyway</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
