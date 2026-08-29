@@ -61,18 +61,19 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requi
 # (and downstream co-occurrence-edge counts) with no error anywhere. This
 # had been running in every deployed image until caught.
 RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
-# GLiNER.from_pretrained() defaults to checking HuggingFace Hub for updates on
-# every call, even when the model is already cached locally — an
-# unauthenticated network round trip on every single entity-extraction job,
-# contradicting the "predictable per-document latency (no network tail)"
-# guarantee the local-extraction decision (spaCy + GLiNER over an LLM call)
-# was explicitly made on. Deliberately not a cache mount: the whole point is
-# for these weights to persist into the final image layer, not be discarded
-# after the build. HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE below then force every
-# from_pretrained() call at runtime to use only this baked-in copy.
-RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_mediumv2.1')"
-ENV HF_HUB_OFFLINE=1
-ENV TRANSFORMERS_OFFLINE=1
+# Previously baked the GLiNER model into this image (and forced
+# HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE) to eliminate a network round trip on
+# every entity-extraction call. That reasoning no longer holds: the model
+# weights add ~1.5GB uncompressed, and combined with this image's already
+# heavy ML dependency stack (torch, opencv, unstructured's transitive deps),
+# pushed the image over Fly's 8GB uncompressed limit — the v4.7 deploy
+# failed outright with "Not enough space to unpack image". Meanwhile v4.7
+# (the warm entity-extraction sidecar, shipped after this baking step was
+# added) already collapsed that network check from "every document" to
+# "once per worker lifetime" — the cost this was paying 1.5GB to avoid
+# shrank by orders of magnitude on its own. Not worth 1.5GB of image size
+# to save one network check per worker boot. The sidecar downloads and
+# caches the model normally (network, not offline) on its first request.
 COPY scripts/ /app/scripts/
 
 # No ENTRYPOINT or CMD here: Fly.io selects the binary via [processes] in
