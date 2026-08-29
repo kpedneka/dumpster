@@ -70,9 +70,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
         onClick={onNavigate}
         className="flex items-center gap-2.5 px-4 pb-3 pt-4 transition-opacity hover:opacity-80"
       >
-        <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary font-display text-lg font-semibold text-primary-foreground shadow-sm">
-          D
-        </span>
+        <img src="/Trash_Can.svg" alt="Dumpster" className="h-8 w-8 rounded-lg shadow-sm" />
         <div>
           <div className="font-display text-lg font-semibold leading-none tracking-tight">Dumpster</div>
           <div className="mt-1 text-[11px] text-muted-foreground">Multimodal knowledge base</div>
