@@ -61,6 +61,18 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requi
 # (and downstream co-occurrence-edge counts) with no error anywhere. This
 # had been running in every deployed image until caught.
 RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
+# GLiNER.from_pretrained() defaults to checking HuggingFace Hub for updates on
+# every call, even when the model is already cached locally — an
+# unauthenticated network round trip on every single entity-extraction job,
+# contradicting the "predictable per-document latency (no network tail)"
+# guarantee the local-extraction decision (spaCy + GLiNER over an LLM call)
+# was explicitly made on. Deliberately not a cache mount: the whole point is
+# for these weights to persist into the final image layer, not be discarded
+# after the build. HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE below then force every
+# from_pretrained() call at runtime to use only this baked-in copy.
+RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_mediumv2.1')"
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 COPY scripts/ /app/scripts/
 
 # No ENTRYPOINT or CMD here: Fly.io selects the binary via [processes] in
