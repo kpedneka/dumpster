@@ -52,6 +52,14 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 # cache for this layer — installing torch et al. from scratch is the single
 # most expensive step in this build.
 COPY scripts/requirements.txt /app/scripts/requirements.txt
+# torch (a transitive dependency of gliner) defaults to the CUDA-enabled
+# PyPI wheel on Linux, which bundles the full NVIDIA/CUDA runtime (~2.9GB
+# of nvidia-* packages) and triton (~650MB, a GPU kernel compiler) — dead
+# weight on Fly's shared-cpu-1x, which has no GPU at all (confirmed:
+# torch.cuda.is_available() is False on this exact image). Installing the
+# CPU-only build first satisfies gliner's torch dependency before pip ever
+# reaches for the GPU-enabled default.
+RUN --mount=type=cache,target=/root/.cache/pip pip install torch --index-url https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requirements.txt
 # `pip install spacy` installs only the library, not a language model —
 # en_core_web_sm is a separate download this image never ran. Without it,
