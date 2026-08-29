@@ -30,7 +30,18 @@ RUN npm run build
 # WORKDIR /app ensures the Go API resolves "web/dist" relative to /app.
 # Fly.io [processes] commands (/bin/api, /bin/worker) inherit this workdir.
 FROM python:3.11-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tzdata \
+# libgl1/libglib2.0-0/libsm6/libxext6/libxrender1/libxcb1: opencv-python (a
+# transitive dependency of unstructured[pdf], via its PDF/image pipeline)
+# dlopen()s these X11/GL libraries at import time. python:3.11-slim doesn't
+# ship them, so extract_regions.py crashes with "ImportError: libxcb.so.1:
+# cannot open shared object file" the moment it imports unstructured.partition.pdf
+# — every PDF upload dead-letters. This never surfaced locally because the
+# worker was run natively on the host during development, not through this
+# image; docker-compose's worker service builds this same Dockerfile/target,
+# so it hits the identical failure.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates tzdata \
+    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /bin/api    /bin/api
