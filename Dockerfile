@@ -59,7 +59,15 @@ COPY scripts/requirements.txt /app/scripts/requirements.txt
 # torch.cuda.is_available() is False on this exact image). Installing the
 # CPU-only build first satisfies gliner's torch dependency before pip ever
 # reaches for the GPU-enabled default.
-RUN --mount=type=cache,target=/root/.cache/pip pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# torchvision must be pinned to the same index: it ships its own compiled
+# extension that has to exactly match the torch build it's paired with.
+# Installing only torch from the CPU index and letting torchvision resolve
+# normally afterward pairs a CPU torch with a mismatched torchvision,
+# which fails at import with "operator torchvision::nms does not exist" —
+# caught by smoke-testing this image before shipping it, not by the size
+# measurement alone.
+RUN --mount=type=cache,target=/root/.cache/pip pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requirements.txt
 # `pip install spacy` installs only the library, not a language model —
 # en_core_web_sm is a separate download this image never ran. Without it,
