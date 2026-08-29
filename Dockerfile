@@ -53,6 +53,14 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 # most expensive step in this build.
 COPY scripts/requirements.txt /app/scripts/requirements.txt
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requirements.txt
+# `pip install spacy` installs only the library, not a language model —
+# en_core_web_sm is a separate download this image never ran. Without it,
+# extract_entities.py silently falls back to a naive punctuation-based
+# sentencizer (see scripts/extract_entities.py's _load_nlp), which badly
+# fragments citation/URL/abbreviation-heavy text and inflates entity counts
+# (and downstream co-occurrence-edge counts) with no error anywhere. This
+# had been running in every deployed image until caught.
+RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
 COPY scripts/ /app/scripts/
 
 # No ENTRYPOINT or CMD here: Fly.io selects the binary via [processes] in

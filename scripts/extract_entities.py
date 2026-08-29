@@ -47,23 +47,48 @@ process optimization left as a follow-up if throughput becomes a concern.
 import json
 import sys
 
+import spacy
+
+
+def _load_nlp():
+    """Loads the spaCy pipeline used for sentence segmentation, falling back
+    to a bare sentencizer if en_core_web_sm isn't installed.
+
+    That fallback found silent for months in both local dev and the
+    production Docker image (neither ever ran `python -m spacy download
+    en_core_web_sm` — `pip install spacy` only installs the library, not the
+    model). Its naive punctuation-based splitting badly fragments
+    citation/URL/abbreviation-heavy text: a real 750-token reference-list
+    chunk was shredded into 56 fragments (avg. 6.6 words, e.g. "USDA. (",
+    "2019, August 20).") instead of ~15 real sentences, and GLiNER predicting
+    independently on each fragment inflated that one chunk to 128 "entities"
+    versus a normal handful — which in turn produced a combinatorial
+    explosion of co-occurrence edges downstream. Warn loudly so a missing
+    model is never silently corrupting extraction quality again.
+    """
+    try:
+        return spacy.load("en_core_web_sm")
+    except OSError:
+        print(
+            "WARNING: en_core_web_sm not installed — falling back to naive "
+            "punctuation-based sentence splitting, which badly fragments "
+            "citation/URL/abbreviation-heavy text and inflates entity and "
+            "co-occurrence-edge counts. Fix with: "
+            "python -m spacy download en_core_web_sm",
+            file=sys.stderr,
+        )
+        nlp = spacy.blank("en")
+        nlp.add_pipe("sentencizer")
+        return nlp
+
 
 def load_pipeline():
     """Loads spaCy (for sentence splitting) and GLiNER (for zero-shot
-    entity typing). Imported lazily so this module can be imported (e.g. by
-    a future test harness) without the heavy ML dependencies installed."""
-    import spacy
+    entity typing). GLiNER is imported lazily so this module can be imported
+    (e.g. by a test harness) without its heavier ML dependencies installed."""
     from gliner import GLiNER
 
-    try:
-        nlp = spacy.load("en_core_web_sm")
-    except OSError:
-        # Fall back to a blank pipeline with just a sentencizer if the
-        # trained model isn't installed; degrades sentence segmentation
-        # quality but keeps extraction functional.
-        nlp = spacy.blank("en")
-        nlp.add_pipe("sentencizer")
-
+    nlp = _load_nlp()
     model = GLiNER.from_pretrained("urchade/gliner_mediumv2.1")
     return nlp, model
 

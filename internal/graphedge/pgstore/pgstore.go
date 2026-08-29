@@ -25,13 +25,24 @@ func New(runner db.TxRunner) graphedge.Repository {
 // BulkCreate persists edges in a single transaction. A (chunk_id,
 // entity_a_id, entity_b_id) conflict (the same pair re-derived within one
 // computation pass) is a no-op rather than an error.
+//
+// Edges are sent as a single pipelined batch rather than one round trip per
+// row: entity count per chunk is shaped by document content (a dense
+// reference list can produce 100+ entities in one chunk, and edge count
+// grows as n*(n-1)/2), so one-row-at-a-time execution over a real network
+// connection turned a single job into a multi-minute transaction that held
+// FK-referenced row locks on documents/chunks/entities the whole time —
+// long enough to block unrelated deletes on those rows. Pipelining removes
+// the per-row round-trip cost without changing the SQL or its conflict
+// semantics.
 func (s *Store) BulkCreate(ctx context.Context, edges []*graphedge.Edge) error {
 	if len(edges) == 0 {
 		return nil
 	}
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		batch := &pgx.Batch{}
 		for _, e := range edges {
-			_, err := tx.Exec(ctx,
+			batch.Queue(
 				`INSERT INTO entity_edges
 				 (document_id, kb_id, user_id, chunk_id, entity_a_id, entity_b_id, co_occurrence_count, relation_type)
 				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -39,11 +50,15 @@ func (s *Store) BulkCreate(ctx context.Context, edges []*graphedge.Edge) error {
 				e.DocumentID, e.KBID, e.UserID, e.ChunkID, e.EntityAID, e.EntityBID,
 				e.CoOccurrenceCount, e.RelationType,
 			)
-			if err != nil {
+		}
+		results := tx.SendBatch(ctx, batch)
+		for range edges {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
 				return err
 			}
 		}
-		return nil
+		return results.Close()
 	})
 	if err != nil {
 		return fmt.Errorf("graphedge: bulk create: %w", err)
