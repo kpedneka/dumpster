@@ -95,7 +95,10 @@ export function KBDetailPage() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'text/plain': ['.txt'] },
+    accept: { 
+      'text/plain': ['.txt'],
+      'application/pdf': ['.pdf']
+     },
     multiple: true,
   })
 
@@ -118,7 +121,7 @@ export function KBDetailPage() {
         ) : (
           <>
             <p className="text-sm font-medium">Drop files or click to upload</p>
-            <p className="text-xs text-muted-foreground">Supports .txt files</p>
+            <p className="text-xs text-muted-foreground">Supports .txt and .pdf files</p>
           </>
         )}
         {uploadMutation.isPending && <p className="text-xs text-muted-foreground">Uploading…</p>}
@@ -195,7 +198,7 @@ export function KBDetailPage() {
         <aside className="order-first lg:order-last">
           <div className="lg:sticky lg:top-4">
             <h2 className="mb-1 font-display text-base font-semibold">Upload documents</h2>
-            <p className="mb-3 text-xs text-muted-foreground">Add .txt files to this knowledge base.</p>
+            <p className="mb-3 text-xs text-muted-foreground">Add .txt and .pdf files to this knowledge base.</p>
             {uploadPanel}
           </div>
         </aside>

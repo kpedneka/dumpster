@@ -18,8 +18,13 @@ const sessionCookieName = "session_id"
 // placed in the request context via WithUserID — the same context contract
 // every repository and the RLS TxRunner depend on.
 //
+// secure controls the Set-Cookie Secure attribute (config.Config.CookieSecure).
+// It must be true wherever the API is served over TLS — a Secure cookie sent
+// over plain http is silently dropped by the browser, which would otherwise
+// mint a fresh session (and therefore a fresh tenant identity) on every request.
+//
 // This handler never returns 401: every request gets a valid session identity.
-func Middleware(sessions session.SessionStore, next http.Handler) http.Handler {
+func Middleware(sessions session.SessionStore, secure bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := resolveSession(r, sessions)
 		if sess == nil {
@@ -34,7 +39,7 @@ func Middleware(sessions session.SessionStore, next http.Handler) http.Handler {
 				Name:     sessionCookieName,
 				Value:    sess.ID.String(),
 				HttpOnly: true,
-				Secure:   true,
+				Secure:   secure,
 				SameSite: http.SameSiteLaxMode,
 				Path:     "/",
 			})

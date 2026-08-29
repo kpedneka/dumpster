@@ -29,3 +29,6 @@ go.work.sum
 web/node_modules/
 web/dist/
 .DS_Store
+
+# Python virtual environment
+scripts/.venv/

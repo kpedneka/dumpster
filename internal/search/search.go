@@ -36,6 +36,12 @@ type Citation struct {
 	ChunkID    uuid.UUID
 	CharStart  int
 	CharEnd    int
+	// Text is the chunk's own extracted content — the exact source span the
+	// model relied on. Serving this directly to clients (rather than having
+	// them re-fetch and slice the original document) is what makes citation
+	// display correct for PDF/image chunks, whose CharStart/CharEnd are only
+	// meaningful relative to their own region's text, not the whole document.
+	Text string
 	// PageNumber and BoundingBox are the second citation variant: set only
 	// for chunks derived from PDF/image region classification. Both are nil
 	// for text/markdown chunks.

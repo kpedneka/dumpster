@@ -1,39 +1,21 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { api } from '@/api/client'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
 import type { components } from '@/api/schema.d.ts'
 
 type Citation = components['schemas']['Citation']
 
-// How much surrounding text to show, dimmed, around the highlighted span —
-// char_start/char_end mark a whole ~3000-byte indexing chunk, not a sentence,
-// so a little context on either side helps orient the reader.
-const CONTEXT_CHARS = 100
-
 interface CitationMarkerProps {
   citation: Citation
-  kbId: string
 }
 
-export function CitationMarker({ citation, kbId }: CitationMarkerProps) {
+// Citation.text is the cited chunk's own extracted content, served directly
+// by the search response. Earlier this fetched /documents/{docId}/content and
+// sliced it by char_start/char_end, but those offsets are only meaningful
+// relative to a text/markdown document's full body — for PDF/image chunks
+// (one region's text per API call, e.g. one page) they index into the wrong
+// string entirely, and for PDFs that endpoint returns the raw binary anyway.
+export function CitationMarker({ citation }: CitationMarkerProps) {
   const [open, setOpen] = useState(false)
-
-  const { data, isFetching, isError } = useQuery({
-    queryKey: ['document-content', kbId, citation.document_id],
-    queryFn: async () => {
-      const { data, error } = await api.GET('/kbs/{kbId}/documents/{docId}/content', {
-        params: { path: { kbId, docId: citation.document_id } },
-        parseAs: 'text',
-      })
-      if (error) throw error
-      return data
-    },
-    enabled: open,
-    // The fetched document text never changes once indexed — never refetch
-    // a second citation into a document already cached for this page.
-    staleTime: Infinity,
-  })
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -42,22 +24,10 @@ export function CitationMarker({ citation, kbId }: CitationMarkerProps) {
           {`[${citation.number}]`}
         </sup>
       </PopoverTrigger>
-      <PopoverContent>
-        {isFetching && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {isError && <p className="text-sm text-destructive">Could not load source text.</p>}
-        {!isFetching && !isError && data !== undefined && (
-          <p className="text-sm leading-relaxed">
-            <span className="text-muted-foreground">
-              {data.slice(Math.max(0, citation.char_start - CONTEXT_CHARS), citation.char_start)}
-            </span>
-            <mark className="rounded bg-yellow-200 px-0.5">
-              {data.slice(citation.char_start, citation.char_end)}
-            </mark>
-            <span className="text-muted-foreground">
-              {data.slice(citation.char_end, citation.char_end + CONTEXT_CHARS)}
-            </span>
-          </p>
-        )}
+      <PopoverContent className="max-h-[min(24rem,70vh)] overflow-y-auto">
+        <p className="text-sm leading-relaxed">
+          <mark className="rounded bg-yellow-200 px-0.5">{citation.text}</mark>
+        </p>
       </PopoverContent>
     </Popover>
   )

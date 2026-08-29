@@ -24,11 +24,7 @@ function preprocessCitations(summary: string): string {
   return summary.replace(CITATION_BRACKET_RE, '{CITE_$1}')
 }
 
-function injectCitations(
-  children: React.ReactNode,
-  citations: Citation[],
-  kbId: string,
-): React.ReactNode {
+function injectCitations(children: React.ReactNode, citations: Citation[]): React.ReactNode {
   if (typeof children === 'string') {
     const parts = children.split(CITATION_PLACEHOLDER_RE)
     if (parts.length === 1) return children
@@ -36,19 +32,19 @@ function injectCitations(
       const m = part.match(/^\{CITE_(\d+)\}$/)
       if (!m) return part
       const cite = citations.find((c) => c.number === Number(m[1]))
-      return cite ? <CitationMarker key={i} citation={cite} kbId={kbId} /> : `[${m[1]}]`
+      return cite ? <CitationMarker key={i} citation={cite} /> : `[${m[1]}]`
     })
   }
   if (Array.isArray(children)) {
     return (children as React.ReactNode[]).map((child, i) => (
-      <Fragment key={i}>{injectCitations(child, citations, kbId)}</Fragment>
+      <Fragment key={i}>{injectCitations(child, citations)}</Fragment>
     ))
   }
   return children
 }
 
-function makeMarkdownComponents(citations: Citation[], kbId: string): Components {
-  const inject = (children: React.ReactNode) => injectCitations(children, citations, kbId)
+function makeMarkdownComponents(citations: Citation[]): Components {
+  const inject = (children: React.ReactNode) => injectCitations(children, citations)
   return {
     p: ({ children }) => <p className="mb-3 last:mb-0">{inject(children)}</p>,
     ul: ({ children }) => <ul className="mb-3 list-disc pl-5">{children}</ul>,
@@ -104,8 +100,8 @@ export function SearchPage() {
   })
 
   const mdComponents = useMemo(
-    () => (result ? makeMarkdownComponents(result.citations, kbId!) : {}),
-    [result, kbId],
+    () => (result ? makeMarkdownComponents(result.citations) : {}),
+    [result],
   )
 
   function autosize(el: HTMLTextAreaElement | null) {

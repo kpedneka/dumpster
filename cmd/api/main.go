@@ -83,15 +83,16 @@ func main() {
 	)
 
 	deps := server.Deps{
-		KBs:         kbpg.New(txRunner),
-		Docs:        docpg.New(txRunner),
-		Objects:     obj,
-		Publisher:   qpg.New(pool),
-		Manifest:    manifestpg.New(txRunner),
-		Searcher:    searcher,
-		Sessions:    sessionpg.New(pool),
-		Instruments: instruments,
-		SPADir:      "web/dist",
+		KBs:          kbpg.New(txRunner),
+		Docs:         docpg.New(txRunner),
+		Objects:      obj,
+		Publisher:    qpg.New(pool),
+		Manifest:     manifestpg.New(txRunner),
+		Searcher:     searcher,
+		Sessions:     sessionpg.New(pool),
+		Instruments:  instruments,
+		SPADir:       "web/dist",
+		CookieSecure: cfg.CookieSecure,
 	}
 
 	router := server.NewRouter(deps)

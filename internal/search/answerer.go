@@ -101,6 +101,7 @@ func parseResponse(resp string, chunks []retrieval.ScoredChunk) Result {
 			ChunkID:    sc.ID,
 			CharStart:  sc.CharStart,
 			CharEnd:    sc.CharEnd,
+			Text:       sc.Text,
 		}
 		if sc.PageNumber != nil {
 			c.PageNumber = sc.PageNumber

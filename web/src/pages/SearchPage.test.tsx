@@ -179,111 +179,24 @@ describe('SearchPage', () => {
   })
 
   describe('citation markers', () => {
-    function mockGetByPath(handlers: Record<string, () => unknown>) {
-      vi.mocked(api.GET).mockImplementation(((path: string) => {
-        const handler = handlers[path]
-        if (!handler) throw new Error(`unexpected api.GET call: ${path}`)
-        return Promise.resolve(handler())
-      }) as never)
-    }
-
-    async function searchAndGetMarker(label = '[1]') {
+    // Citation.text is served directly by the search response (see
+    // a08b5f4) — there's no separate content fetch to mock here anymore.
+    // That endpoint doesn't work for PDF/image chunks, whose char offsets
+    // are only meaningful within their own region's text, not the whole
+    // document.
+    it('opens a popover with the highlighted source text when clicked', async () => {
       vi.mocked(api.POST).mockResolvedValue({
         data: {
           summary: 'Paris [1] is the capital of France.',
-          citations: [{ number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 5 }],
-        },
-        error: undefined,
-      } as never)
-
-      const user = userEvent.setup()
-      renderSearchPage()
-      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
-      await user.click(screen.getByRole('button', { name: /search/i }))
-      await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument())
-
-      return { user, marker: screen.getByText(label) }
-    }
-
-    it('opens a popover with the highlighted source span when clicked', async () => {
-      mockGetByPath({
-        '/kbs/{id}': () => ({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined }),
-        '/kbs/{kbId}/documents/{docId}/content': () => ({
-          data: 'Paris is the capital of France.',
-          error: undefined,
-        }),
-      })
-
-      const { user, marker } = await searchAndGetMarker()
-      await user.click(marker)
-
-      const popover = await screen.findByRole('dialog')
-      await waitFor(() => {
-        expect(within(popover).getByText('Paris')).toBeInTheDocument()
-      })
-      expect(within(popover).getByText(/is the capital of france/i)).toBeInTheDocument()
-    })
-
-    it('shows a loading state while fetching citation content', async () => {
-      let resolveContent!: (v: unknown) => void
-      const pending = new Promise((resolve) => {
-        resolveContent = resolve
-      })
-      mockGetByPath({
-        '/kbs/{id}': () => ({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined }),
-        '/kbs/{kbId}/documents/{docId}/content': () => pending,
-      })
-
-      const { user, marker } = await searchAndGetMarker()
-      await user.click(marker)
-
-      const popover = await screen.findByRole('dialog')
-      await waitFor(() => {
-        expect(within(popover).getByText(/loading/i)).toBeInTheDocument()
-      })
-
-      resolveContent({ data: 'Paris is the capital of France.', error: undefined })
-      await waitFor(() => {
-        expect(within(popover).getByText('Paris')).toBeInTheDocument()
-      })
-    })
-
-    it('shows an error state when citation content fails to load', async () => {
-      mockGetByPath({
-        '/kbs/{id}': () => ({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined }),
-        '/kbs/{kbId}/documents/{docId}/content': () => ({
-          data: undefined,
-          error: { error: 'document not found' },
-        }),
-      })
-
-      const { user, marker } = await searchAndGetMarker()
-      await user.click(marker)
-
-      const popover = await screen.findByRole('dialog')
-      await waitFor(() => {
-        expect(within(popover).getByText(/could not load source text/i)).toBeInTheDocument()
-      })
-    })
-
-    it('reuses cached content for a second citation into the same document', async () => {
-      let contentCalls = 0
-      mockGetByPath({
-        '/kbs/{id}': () => ({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined }),
-        '/kbs/{kbId}/documents/{docId}/content': () => {
-          contentCalls += 1
-          return { data: 'Paris is the capital of France.', error: undefined }
-        },
-      })
-
-      vi.mocked(api.POST).mockResolvedValue({
-        data: {
-          summary: 'Paris [1] is the capital of France [2].',
-          // Deliberately out of marker order — citations are matched by `number`,
-          // never by array position.
           citations: [
-            { number: 2, document_id: 'doc-1', chunk_id: 'chunk-2', char_start: 6, char_end: 31 },
-            { number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 5 },
+            {
+              number: 1,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              char_start: 0,
+              char_end: 5,
+              text: 'Paris is the capital of France.',
+            },
           ],
         },
         error: undefined,
@@ -296,15 +209,36 @@ describe('SearchPage', () => {
       await waitFor(() => expect(screen.getByText('[1]')).toBeInTheDocument())
 
       await user.click(screen.getByText('[1]'))
-      await waitFor(() => expect(contentCalls).toBe(1))
+
+      const popover = await screen.findByRole('dialog')
+      expect(within(popover).getByText(/is the capital of france/i)).toBeInTheDocument()
+    })
+
+    it('matches citations to markers by number, not array position', async () => {
+      vi.mocked(api.POST).mockResolvedValue({
+        data: {
+          summary: 'Paris [1] is the capital of France [2].',
+          // Deliberately out of marker order.
+          citations: [
+            { number: 2, document_id: 'doc-1', chunk_id: 'chunk-2', char_start: 6, char_end: 31, text: 'is the capital of France' },
+            { number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 5, text: 'Paris' },
+          ],
+        },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      renderSearchPage()
+      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.click(screen.getByRole('button', { name: /search/i }))
+      await waitFor(() => expect(screen.getByText('[1]')).toBeInTheDocument())
+
+      await user.click(screen.getByText('[1]'))
+      expect(within(await screen.findByRole('dialog')).getByText('Paris')).toBeInTheDocument()
       await user.keyboard('{Escape}')
 
       await user.click(screen.getByText('[2]'))
-      const popover = await screen.findByRole('dialog')
-      await waitFor(() => {
-        expect(within(popover).getByText(/is the capital of france/i)).toBeInTheDocument()
-      })
-      expect(contentCalls).toBe(1)
+      expect(within(await screen.findByRole('dialog')).getByText(/is the capital of france/i)).toBeInTheDocument()
     })
   })
 })

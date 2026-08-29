@@ -104,7 +104,12 @@ components:
           type: integer
         char_end:
           type: integer
-      required: [number, document_id, chunk_id, char_start, char_end]
+        text:
+          type: string
+          description: >-
+            The cited chunk's own extracted text, served directly so clients
+            never need to re-fetch and slice the original document.
+      required: [number, document_id, chunk_id, char_start, char_end, text]
 
     SearchResult:
       type: object

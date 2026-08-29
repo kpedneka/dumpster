@@ -86,8 +86,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get the authenticated user's demo-account TTL status
-         * @description Backs the in-app day-6 warning banner. warning_active becomes true once the account enters its day-6 TTL warning window; deletes_at is when the account will be hard-deleted by the daily cleanup sweep.
+         * Get the current session's expiry status
+         * @description Backs the in-app warning banner. warning_active becomes true within the final warning window before the session is swept; deletes_at is the earlier of the idle-timeout expiry and the hard-cap expiry.
          */
         get: {
             parameters: {
@@ -109,15 +109,6 @@ export interface paths {
                             /** Format: date-time */
                             deletes_at: string;
                         };
-                    };
-                };
-                /** @description Unauthorized */
-                401: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["Error"];
                     };
                 };
             };
@@ -799,6 +790,8 @@ export interface components {
             chunk_id: string;
             char_start: number;
             char_end: number;
+            /** @description The cited chunk's own extracted text, served directly so clients never need to re-fetch and slice the original document. */
+            text: string;
         };
         SearchResult: {
             summary: string;
