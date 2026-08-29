@@ -24,13 +24,13 @@ func (s *Store) Create(ctx context.Context, d *document.Document) (*document.Doc
 	var result document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`INSERT INTO documents (kb_id, user_id, filename, s3_key, content_type, status)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 RETURNING id, kb_id, user_id, filename, s3_key, content_type, status, created_at, updated_at`,
-			d.KBID, d.UserID, d.Filename, d.S3Key, d.ContentType, string(d.Status),
+			`INSERT INTO documents (kb_id, user_id, filename, s3_key, content_type, size_bytes, status)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			 RETURNING id, kb_id, user_id, filename, s3_key, content_type, size_bytes, status, created_at, updated_at`,
+			d.KBID, d.UserID, d.Filename, d.S3Key, d.ContentType, d.SizeBytes, string(d.Status),
 		).Scan(
 			&result.ID, &result.KBID, &result.UserID,
-			&result.Filename, &result.S3Key, &result.ContentType,
+			&result.Filename, &result.S3Key, &result.ContentType, &result.SizeBytes,
 			&result.Status, &result.CreatedAt, &result.UpdatedAt,
 		)
 	})
@@ -44,12 +44,12 @@ func (s *Store) Get(ctx context.Context, userID, id uuid.UUID) (*document.Docume
 	var result document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT id, kb_id, user_id, filename, s3_key, content_type, status, created_at, updated_at
+			`SELECT id, kb_id, user_id, filename, s3_key, content_type, size_bytes, status, created_at, updated_at
 			 FROM documents WHERE id = $1 AND user_id = $2`,
 			id, userID,
 		).Scan(
 			&result.ID, &result.KBID, &result.UserID,
-			&result.Filename, &result.S3Key, &result.ContentType,
+			&result.Filename, &result.S3Key, &result.ContentType, &result.SizeBytes,
 			&result.Status, &result.CreatedAt, &result.UpdatedAt,
 		)
 	})
@@ -66,7 +66,7 @@ func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*docume
 	var results []*document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, kb_id, user_id, filename, s3_key, content_type, status, created_at, updated_at
+			`SELECT id, kb_id, user_id, filename, s3_key, content_type, size_bytes, status, created_at, updated_at
 			 FROM documents WHERE kb_id = $1 AND user_id = $2 ORDER BY created_at DESC`,
 			kbID, userID,
 		)
@@ -78,7 +78,7 @@ func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*docume
 			var d document.Document
 			if err := rows.Scan(
 				&d.ID, &d.KBID, &d.UserID,
-				&d.Filename, &d.S3Key, &d.ContentType,
+				&d.Filename, &d.S3Key, &d.ContentType, &d.SizeBytes,
 				&d.Status, &d.CreatedAt, &d.UpdatedAt,
 			); err != nil {
 				return err
@@ -97,7 +97,7 @@ func (s *Store) ListByUserID(ctx context.Context, userID uuid.UUID) ([]*document
 	var results []*document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, kb_id, user_id, filename, s3_key, content_type, status, created_at, updated_at
+			`SELECT id, kb_id, user_id, filename, s3_key, content_type, size_bytes, status, created_at, updated_at
 			 FROM documents WHERE user_id = $1 ORDER BY created_at DESC`,
 			userID,
 		)
@@ -109,7 +109,7 @@ func (s *Store) ListByUserID(ctx context.Context, userID uuid.UUID) ([]*document
 			var d document.Document
 			if err := rows.Scan(
 				&d.ID, &d.KBID, &d.UserID,
-				&d.Filename, &d.S3Key, &d.ContentType,
+				&d.Filename, &d.S3Key, &d.ContentType, &d.SizeBytes,
 				&d.Status, &d.CreatedAt, &d.UpdatedAt,
 			); err != nil {
 				return err

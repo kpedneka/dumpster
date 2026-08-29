@@ -53,6 +53,13 @@ type Citation struct {
 type Result struct {
 	Summary   string
 	Citations []Citation
+	// RetrievedDocuments is every document represented in the fused top-k
+	// chunk list that was handed to the answerer, ranked (best first) and
+	// deduped by first occurrence. It is a superset of the documents named
+	// in Citations: retrieval surfaces every file with a keyword/vector
+	// match, while a citation only names the subset the model actually
+	// relied on to answer.
+	RetrievedDocuments []uuid.UUID
 }
 
 // Answerer converts a set of pre-retrieved chunks into a grounded answer.

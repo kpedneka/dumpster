@@ -97,6 +97,16 @@ func (h *searchHandler) recordSearchLatency(ctx context.Context, started time.Ti
 type SearchResponse struct {
 	Summary   string             `json:"summary"`
 	Citations []CitationResponse `json:"citations"`
+	// RetrievedFiles is every file the fused top-k retrieval surfaced,
+	// ranked, independent of which subset ended up cited inline in Summary
+	// — the relevant-files surface renders this list, not just Citations.
+	RetrievedFiles []RetrievedFileResponse `json:"retrieved_files"`
+}
+
+// RetrievedFileResponse names one file from the ranked retrieval set.
+type RetrievedFileResponse struct {
+	DocumentID string `json:"document_id"`
+	FileName   string `json:"file_name"`
 }
 
 // CitationResponse is the JSON shape of a single citation. Number is the
@@ -145,9 +155,18 @@ func toSearchResponse(r search.Result, fileNames map[uuid.UUID]string) SearchRes
 			Locator:    citationLocator(c),
 		}
 	}
+	retrievedFiles := make([]RetrievedFileResponse, len(r.RetrievedDocuments))
+	for i, docID := range r.RetrievedDocuments {
+		retrievedFiles[i] = RetrievedFileResponse{
+			DocumentID: docID.String(),
+			FileName:   fileNames[docID],
+		}
+	}
+
 	return SearchResponse{
-		Summary:   r.Summary,
-		Citations: citations,
+		Summary:        r.Summary,
+		Citations:      citations,
+		RetrievedFiles: retrievedFiles,
 	}
 }
 

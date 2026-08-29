@@ -19,6 +19,7 @@ func newDoc(userID, kbID uuid.UUID) *document.Document {
 		Filename:    "report.pdf",
 		S3Key:       "uploads/" + uuid.New().String() + ".pdf",
 		ContentType: "application/pdf",
+		SizeBytes:   2048,
 		Status:      document.StatusPending,
 	}
 }
@@ -34,6 +35,9 @@ func TestDocument_CRUD(t *testing.T) {
 	}
 	if created.ID == uuid.Nil || created.Status != document.StatusPending {
 		t.Fatalf("unexpected created: %+v", created)
+	}
+	if created.SizeBytes != 2048 {
+		t.Errorf("size_bytes: got %d, want 2048", created.SizeBytes)
 	}
 
 	if err := repo.UpdateStatus(ctx, userID, created.ID, document.StatusIndexed); err != nil {

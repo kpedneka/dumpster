@@ -138,4 +138,183 @@ describe('KBDetailPage', () => {
       })
     })
   })
+
+  describe('documents panel', () => {
+    function mockDocs(items: unknown[]) {
+      vi.mocked(api.GET).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}') {
+          return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
+        }
+        if (path === '/kbs/{kbId}/documents') {
+          return Promise.resolve({ data: { items }, error: undefined })
+        }
+        throw new Error(`unexpected api.GET call: ${path}`)
+      }) as never)
+    }
+
+    it('shows the file size alongside the file name', async () => {
+      mockDocs([
+        { id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 2048 },
+      ])
+      renderKBDetailPage()
+
+      await screen.findByText('notes.txt')
+      expect(screen.getByText('2.0 KB')).toBeInTheDocument()
+    })
+
+    it('shows a retry action only for a failed (dead-lettered) document', async () => {
+      mockDocs([
+        { id: 'doc-1', filename: 'failed.txt', status: 'failed', size_bytes: 10 },
+        { id: 'doc-2', filename: 'indexed.txt', status: 'indexed', size_bytes: 10 },
+      ])
+      renderKBDetailPage()
+
+      await screen.findByText('failed.txt')
+      expect(screen.getAllByRole('button', { name: /retry indexing/i })).toHaveLength(1)
+    })
+
+    it('retries a failed document and reflects its updated status', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'failed.txt', status: 'failed', size_bytes: 10 }])
+      vi.mocked(api.POST).mockResolvedValue({
+        data: { id: 'doc-1', filename: 'failed.txt', status: 'pending', size_bytes: 10 },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      await screen.findByText('failed.txt')
+      await user.click(screen.getByRole('button', { name: /retry indexing/i }))
+
+      expect(api.POST).toHaveBeenCalledWith('/kbs/{kbId}/documents/{docId}/retry', {
+        params: { path: { kbId: 'kb-1', docId: 'doc-1' } },
+      })
+      await waitFor(() => {
+        expect(screen.getByText('Pending')).toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('search', () => {
+    it('shows a prompt before any search is submitted', async () => {
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+      expect(screen.getByText(/ask a question/i)).toBeInTheDocument()
+    })
+
+    it('submits a query and renders the cited summary', async () => {
+      vi.mocked(api.POST).mockResolvedValue({
+        data: {
+          summary: 'Paris is the capital of France [1].',
+          citations: [
+            {
+              number: 1,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              char_start: 0,
+              char_end: 10,
+              text: 'Paris is the capital of France.',
+              file_name: 'geo.txt',
+              locator: null,
+            },
+          ],
+          retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }],
+        },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
+      })
+      expect(screen.getByText('[1]')).toBeInTheDocument()
+      expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/search', {
+        params: { path: { id: 'kb-1' } },
+        body: { query: 'What is the capital of France?' },
+      })
+    })
+
+    it('lists relevant files under the answer, including files not cited inline', async () => {
+      vi.mocked(api.POST).mockResolvedValue({
+        data: {
+          summary: 'Paris is the capital of France [1].',
+          citations: [
+            {
+              number: 1,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              char_start: 0,
+              char_end: 10,
+              text: 'Paris is the capital of France.',
+              file_name: 'geo.txt',
+              locator: null,
+            },
+          ],
+          // A superset of citations — retrieval surfaced a second file that
+          // didn't end up cited in the answer.
+          retrieved_files: [
+            { document_id: 'doc-1', file_name: 'geo.txt' },
+            { document_id: 'doc-2', file_name: 'history.txt' },
+          ],
+        },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => expect(screen.getByText('geo.txt')).toBeInTheDocument())
+      expect(screen.getByText('history.txt')).toBeInTheDocument()
+    })
+
+    it('shows a "no results found" empty state when retrieval found nothing', async () => {
+      vi.mocked(api.POST).mockResolvedValue({
+        data: {
+          summary: 'I could not find relevant information to answer this question.',
+          citations: [],
+          retrieved_files: [],
+        },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'unanswerable question')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/no results found/i)).toBeInTheDocument()
+      })
+    })
+
+    it('shows an error state when the search request fails', async () => {
+      vi.mocked(api.POST).mockResolvedValue({
+        data: undefined,
+        error: { error: 'search failed' },
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'broken query')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/search failed/i)).toBeInTheDocument()
+      })
+    })
+  })
 })

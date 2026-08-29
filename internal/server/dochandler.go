@@ -91,6 +91,7 @@ func registerDocRoutes(
 	mux.HandleFunc("GET /kbs/{kbID}/documents/{docID}", h.get)
 	mux.HandleFunc("GET /kbs/{kbID}/documents/{docID}/content", h.content)
 	mux.HandleFunc("DELETE /kbs/{kbID}/documents/{docID}", h.delete)
+	mux.HandleFunc("POST /kbs/{kbID}/documents/{docID}/retry", h.retry)
 }
 
 // upload accepts a multipart/form-data file (field "file"), stores the bytes
@@ -175,6 +176,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		Filename:    filename,
 		S3Key:       s3Key,
 		ContentType: contentType,
+		SizeBytes:   header.Size,
 		Status:      document.StatusPending,
 	})
 	if err != nil {
@@ -414,6 +416,72 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 
 	h.recordDelete(r.Context(), "success")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// retry re-enqueues a dead-lettered (status "failed") document for
+// processing, reusing the object already in storage — no re-upload needed.
+// Only a failed document can be retried; anything else is a 409, since
+// retrying a document that's pending/processing/indexed either races the
+// in-flight job or silently re-processes an already-good index.
+func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	kbID, ok := parseUUID(w, r.PathValue("kbID"))
+	if !ok {
+		return
+	}
+
+	docID, ok := parseUUID(w, r.PathValue("docID"))
+	if !ok {
+		return
+	}
+
+	doc, err := h.docRepo.Get(r.Context(), userID, docID)
+	if err != nil {
+		writeDocError(w, err)
+		return
+	}
+
+	if doc.KBID != kbID {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	if doc.Status != document.StatusFailed {
+		writeError(w, http.StatusConflict, "only a failed document can be retried")
+		return
+	}
+
+	if err := h.docRepo.UpdateStatus(r.Context(), userID, docID, document.StatusPending); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset document status")
+		return
+	}
+
+	var publishErr error
+	if regionClassificationTypes[doc.ContentType] {
+		publishErr = h.publisher.PublishRegionClassification(r.Context(), queue.RegionClassificationRequested{
+			DocumentID: doc.ID, UserID: userID,
+		})
+	} else {
+		publishErr = h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{
+			DocumentID: doc.ID, UserID: userID,
+		})
+	}
+	if publishErr != nil {
+		_ = h.docRepo.UpdateStatus(r.Context(), userID, docID, document.StatusFailed)
+		writeError(w, http.StatusInternalServerError, "failed to enqueue document for reprocessing")
+		return
+	}
+
+	updated, err := h.docRepo.Get(r.Context(), userID, docID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load updated document")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // contentTypeFor returns the MIME type for the given filename based on its

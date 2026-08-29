@@ -683,6 +683,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{kbId}/documents/{docId}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kbId: string;
+                docId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-enqueue a dead-lettered (failed) document for processing
+         * @description Reuses the object already in storage — no re-upload needed. Only valid for a document whose status is "failed"; anything else returns 409.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kbId: string;
+                    docId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Document reset to pending and re-enqueued */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Document"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Document is not in a failed state */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{kbId}/documents/{docId}/content": {
         parameters: {
             query?: never;
@@ -768,6 +840,8 @@ export interface components {
             filename: string;
             s3_key: string;
             content_type: string;
+            /** Format: int64 */
+            size_bytes: number;
             /** @enum {string} */
             status: "pending" | "processing" | "indexed" | "failed";
             /** Format: date-time */
@@ -804,6 +878,13 @@ export interface components {
         SearchResult: {
             summary: string;
             citations: components["schemas"]["Citation"][];
+            /** @description Every file the fused top-k retrieval surfaced, ranked, whether or not it ended up cited inline in summary — a superset of the files named in citations. */
+            retrieved_files: components["schemas"]["RetrievedFile"][];
+        };
+        RetrievedFile: {
+            /** Format: uuid */
+            document_id: string;
+            file_name: string;
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];

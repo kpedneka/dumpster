@@ -857,3 +857,135 @@ func TestDocDelete_RecordsFailureMetric(t *testing.T) {
 		t.Errorf("expected failure delete metric, got:\n%s", got)
 	}
 }
+
+// --- v4.5: manual retry for dead-lettered (failed) documents ---
+
+func TestDocRetry(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+
+	var got document.Document
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != document.StatusPending {
+		t.Errorf("status: got %q, want pending", got.Status)
+	}
+
+	if len(pub.Events()) != 1 {
+		t.Fatalf("DocumentUploaded events: got %d, want 1", len(pub.Events()))
+	}
+	if pub.Events()[0].DocumentID != doc.ID {
+		t.Error("retry event document_id mismatch")
+	}
+}
+
+func TestDocRetry_PDF_RoutesToRegionClassification(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "report.pdf",
+		S3Key: "documents/test/report.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	if len(pub.RegionClassificationEvents()) != 1 {
+		t.Errorf("RegionClassification events: got %d, want 1", len(pub.RegionClassificationEvents()))
+	}
+	if len(pub.Events()) != 0 {
+		t.Errorf("DocumentUploaded events: got %d, want 0 for a PDF retry", len(pub.Events()))
+	}
+}
+
+func TestDocRetry_NotFailed(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 for a non-failed document", w.Code)
+	}
+	if len(pub.Events()) != 0 {
+		t.Error("should not enqueue a job for a document that wasn't dead-lettered")
+	}
+}
+
+func TestDocRetry_WrongKB(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb1, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	kb2, _ := kbRepo.Create(context.TODO(), userID, "kb2")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb1.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb2.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-KB retry: got %d, want 404", w.Code)
+	}
+}
+
+func TestDocRetry_TenantIsolation(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	user1, user2 := uuid.New(), uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), user1, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: user1, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, user2)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant retry: got %d, want 404", w.Code)
+	}
+}

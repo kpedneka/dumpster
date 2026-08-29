@@ -265,6 +265,41 @@ func TestService_SearchNotFound(t *testing.T) {
 	}
 }
 
+// TestService_Search_RetrievedDocuments verifies that Result carries every
+// document from the fused top-k chunk list, ranked and deduped — a superset
+// of Citations, since a search engine-style citation cites the source file,
+// not every chunk that contributed to retrieval.
+func TestService_Search_RetrievedDocuments(t *testing.T) {
+	docA, docB := uuid.New(), uuid.New()
+	kbID := uuid.New()
+	// docA appears twice (two chunks); docB once. docA's first occurrence
+	// should determine its rank position, and it should appear only once.
+	chunks := []retrieval.ScoredChunk{
+		makeChunk(docA, "first chunk of doc A", 0, 10),
+		makeChunk(docB, "only chunk of doc B", 0, 10),
+		makeChunk(docA, "second chunk of doc A", 10, 20),
+	}
+
+	ret := &stubRetriever{chunks: chunks}
+	gen := mock.NewGenerator("An answer [1].\nCITATIONS: 1")
+	svc := search.New(ret, search.NewAnswerer(gen))
+
+	result, err := svc.Search(authedCtx(), kbID, "a query")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []uuid.UUID{docA, docB}
+	if len(result.RetrievedDocuments) != len(want) {
+		t.Fatalf("RetrievedDocuments: got %v, want %v", result.RetrievedDocuments, want)
+	}
+	for i, id := range want {
+		if result.RetrievedDocuments[i] != id {
+			t.Errorf("RetrievedDocuments[%d]: got %s, want %s", i, result.RetrievedDocuments[i], id)
+		}
+	}
+}
+
 // TestService_RetrieverError verifies that retriever errors surface as errors.
 func TestService_RetrieverError(t *testing.T) {
 	ret := &stubRetriever{err: errors.New("pg down")}
