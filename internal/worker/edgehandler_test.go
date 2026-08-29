@@ -206,6 +206,66 @@ func TestEdgeHandler_Handle_OneEntityPerChunk_NoEdges(t *testing.T) {
 	}
 }
 
+// TestEdgeHandler_Handle_SkipsEdgesForOversizedChunk guards against a real
+// production/local pathology: a reference-list chunk found in practice
+// produced 128 "entities" (mostly citation noise — author initials, dates,
+// journal names from a broken sentence-segmentation fallback) and 8,128
+// edges on its own; across a whole document this reached 63,760 edges,
+// turning a single BulkCreate into a multi-minute transaction that held
+// locks blocking unrelated deletes. An arbitrary subset of a reference
+// list's "entities" isn't a more meaningful signal than the full set, just
+// less noise, so oversized chunks are skipped for edge derivation entirely
+// rather than truncated.
+func TestEdgeHandler_Handle_SkipsEdgesForOversizedChunk(t *testing.T) {
+	docs := docmem.New()
+	entities := entitymem.New()
+	edges := graphedgemem.New()
+
+	// One chunk with more entities than the cap allows.
+	job, userID := seedEdgeJob(t, docs, entities, 1, 30)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewEdgeHandler(docs, entities, edges)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	allEntities, _ := entities.ListByDocument(ctx, userID, job.DocumentID)
+	if len(allEntities) != 30 {
+		t.Fatalf("expected 30 seeded entities, got %d", len(allEntities))
+	}
+	for _, e := range allEntities {
+		got, _ := edges.ListByEntity(ctx, userID, e.ID)
+		if len(got) != 0 {
+			t.Errorf("entity %v: expected 0 edges for an oversized chunk, got %d", e.ID, len(got))
+		}
+	}
+}
+
+// TestEdgeHandler_Handle_NormalChunkUnaffectedByCap confirms the cap only
+// suppresses oversized chunks — a chunk just under it still gets its full
+// set of co-occurrence pairs, matching pre-cap behavior.
+func TestEdgeHandler_Handle_NormalChunkUnaffectedByCap(t *testing.T) {
+	docs := docmem.New()
+	entities := entitymem.New()
+	edges := graphedgemem.New()
+
+	// 5 entities, well under the cap → C(5,2)=10 edges, 4 touching entity 0.
+	job, userID := seedEdgeJob(t, docs, entities, 1, 5)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewEdgeHandler(docs, entities, edges)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	allEntities, _ := entities.ListByDocument(ctx, userID, job.DocumentID)
+	got, _ := edges.ListByEntity(ctx, userID, allEntities[0].ID)
+	if len(got) != 4 {
+		t.Errorf("entity[0] edges: got %d, want 4", len(got))
+	}
+}
+
 func TestEdgeHandler_Handle_UnknownDocument(t *testing.T) {
 	docs := docmem.New()
 	entities := entitymem.New()

@@ -12,6 +12,20 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/queue"
 )
 
+// maxEntitiesForEdges bounds how many entities in one chunk co-occurrence
+// edges are derived from. Edge count grows as n*(n-1)/2, so a chunk with far
+// more "entities" than a normal paragraph would contain is almost always a
+// sign of non-prose content — a reference/citation list, where extraction
+// finds mostly noise (author initials, dates, journal names) rather than
+// meaningful co-occurring concepts — not a richer one. A real chunk like
+// this produced 128 entities and 8,128 edges on its own; across one
+// document, 63,760 edges, turning a single BulkCreate into a multi-minute
+// transaction that held locks blocking unrelated deletes (see the v4.6
+// lessons-learned page). Oversized chunks are skipped entirely rather than
+// truncated: an arbitrary subset of a reference list's "entities" isn't a
+// more meaningful signal, just a smaller amount of noise.
+const maxEntitiesForEdges = 25
+
 // EdgeHandler derives co-occurrence edges between entity mentions found
 // in the same chunk and persists them to the entity_edges table. It is a
 // distinct job stage from EntityHandler: it reads entity rows that entity
@@ -57,7 +71,12 @@ func (h *EdgeHandler) Handle(ctx context.Context, job *queue.Job) error {
 
 	// Generate one edge per unique entity mention pair within each chunk.
 	var edges []*graphedge.Edge
-	for _, group := range byChunk {
+	for chunkID, group := range byChunk {
+		if len(group) > maxEntitiesForEdges {
+			log.Printf("edgehandler: skipping edge derivation for chunk %s (document %s): %d entities exceeds cap of %d, likely non-prose content (e.g. a reference list)",
+				chunkID, job.DocumentID, len(group), maxEntitiesForEdges)
+			continue
+		}
 		for i := 0; i < len(group); i++ {
 			for j := i + 1; j < len(group); j++ {
 				edges = append(edges, graphedge.NewEdge(
