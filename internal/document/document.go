@@ -30,6 +30,7 @@ type Document struct {
 	Filename    string    `json:"filename"`
 	S3Key       string    `json:"s3_key"`
 	ContentType string    `json:"content_type"`
+	SizeBytes   int64     `json:"size_bytes"`
 	Status      Status    `json:"status"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`

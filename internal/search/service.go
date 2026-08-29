@@ -108,5 +108,23 @@ func (s *Service) Search(ctx context.Context, kbID uuid.UUID, query string) (Res
 	if err != nil {
 		return Result{}, fmt.Errorf("search: answer: %w", err)
 	}
+	result.RetrievedDocuments = retrievedDocuments(chunks)
 	return result, nil
+}
+
+// retrievedDocuments returns every document represented in chunks, ranked
+// (best first, i.e. in chunks' existing fused order) and deduped by first
+// occurrence — a document with multiple chunks in the fused list is ranked
+// at its best (first) occurrence, not repeated.
+func retrievedDocuments(chunks []retrieval.ScoredChunk) []uuid.UUID {
+	seen := make(map[uuid.UUID]bool, len(chunks))
+	docs := make([]uuid.UUID, 0, len(chunks))
+	for _, c := range chunks {
+		if seen[c.DocumentID] {
+			continue
+		}
+		seen[c.DocumentID] = true
+		docs = append(docs, c.DocumentID)
+	}
+	return docs
 }

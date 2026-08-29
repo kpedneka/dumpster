@@ -146,6 +146,48 @@ func TestSearch_CitationLocator_UnknownDocument(t *testing.T) {
 	}
 }
 
+// TestSearch_RetrievedFiles verifies the response's retrieved_files list
+// covers every document retrieval surfaced, ranked, not just the subset
+// that ended up cited inline in the summary.
+func TestSearch_RetrievedFiles(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	cited, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: k.ID, UserID: userID, Filename: "cited.txt", ContentType: "text/plain",
+	})
+	uncited, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: k.ID, UserID: userID, Filename: "uncited.txt", ContentType: "text/plain",
+	})
+
+	deps.Searcher = searchmock.NewSearcher(search.Result{
+		Summary: "the answer",
+		Citations: []search.Citation{
+			{Number: 1, DocumentID: cited.ID, ChunkID: uuid.New(), CharStart: 0, CharEnd: 5, Text: "text"},
+		},
+		// Retrieval surfaced both documents; only cited.ID made it into the answer.
+		RetrievedDocuments: []uuid.UUID{cited.ID, uncited.ID},
+	})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hello"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var got SearchResponse
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RetrievedFiles) != 2 {
+		t.Fatalf("retrieved_files: got %d, want 2 (superset of citations)", len(got.RetrievedFiles))
+	}
+	if got.RetrievedFiles[0].FileName != "cited.txt" || got.RetrievedFiles[1].FileName != "uncited.txt" {
+		t.Errorf("retrieved_files order/content: got %+v", got.RetrievedFiles)
+	}
+}
+
 func TestSearch_MissingQuery(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	userID := uuid.New()
