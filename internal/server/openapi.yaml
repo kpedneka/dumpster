@@ -108,8 +108,31 @@ components:
           type: string
           description: >-
             The cited chunk's own extracted text, served directly so clients
-            never need to re-fetch and slice the original document.
-      required: [number, document_id, chunk_id, char_start, char_end, text]
+            never need to re-fetch and slice the original document. Used as
+            the drill-down evidence behind the primary file+locator citation,
+            not as the primary citation display itself.
+        file_name:
+          type: string
+          description: >-
+            The source document's filename. This, plus locator when present,
+            is the primary citation identity — mirroring how search engines
+            cite the source page rather than a byte range within it.
+        locator:
+          type: object
+          nullable: true
+          description: >-
+            An optional modality-native locator narrowing the citation within
+            the file — a page number for PDF-derived chunks. Absent for
+            plain-text/markdown chunks. Shaped so a future locator type (e.g.
+            a video timestamp) is an additive change, not a schema rework.
+          properties:
+            type:
+              type: string
+              enum: [page]
+            value:
+              type: integer
+          required: [type, value]
+      required: [number, document_id, chunk_id, char_start, char_end, text, file_name, locator]
 
     SearchResult:
       type: object

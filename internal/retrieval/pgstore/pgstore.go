@@ -4,6 +4,7 @@ package pgstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -76,7 +77,8 @@ func (s *Store) Retrieve(ctx context.Context, kbID uuid.UUID, query string, k in
 // vectorSearch returns up to k chunks ordered by cosine distance to queryVec.
 func vectorSearch(ctx context.Context, tx pgx.Tx, kbID, userID uuid.UUID, queryVec []float32, k int) ([]retrieval.ScoredChunk, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT id, document_id, kb_id, user_id, ordinal, text, token_count, char_start, char_end
+		`SELECT id, document_id, kb_id, user_id, ordinal, text, token_count, char_start, char_end,
+		        region_id, page_number, bounding_box
 		 FROM chunks
 		 WHERE kb_id = $1 AND user_id = $2 AND embedding IS NOT NULL
 		 ORDER BY embedding <=> $3::vector
@@ -94,7 +96,8 @@ func vectorSearch(ctx context.Context, tx pgx.Tx, kbID, userID uuid.UUID, queryV
 // join to avoid double evaluation across the WHERE and ORDER BY clauses.
 func keywordSearch(ctx context.Context, tx pgx.Tx, kbID, userID uuid.UUID, query string, k int) ([]retrieval.ScoredChunk, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT c.id, c.document_id, c.kb_id, c.user_id, c.ordinal, c.text, c.token_count, c.char_start, c.char_end
+		`SELECT c.id, c.document_id, c.kb_id, c.user_id, c.ordinal, c.text, c.token_count, c.char_start, c.char_end,
+		        c.region_id, c.page_number, c.bounding_box
 		 FROM (SELECT websearch_to_tsquery('english', $3) AS q) AS p,
 		      chunks c
 		 WHERE c.kb_id = $1 AND c.user_id = $2
@@ -114,11 +117,20 @@ func scanScoredChunks(rows pgx.Rows) ([]retrieval.ScoredChunk, error) {
 	var out []retrieval.ScoredChunk
 	for rows.Next() {
 		var c chunk.Chunk
+		var bboxJSON []byte
 		if err := rows.Scan(
 			&c.ID, &c.DocumentID, &c.KBID, &c.UserID,
 			&c.Ordinal, &c.Text, &c.TokenCount, &c.CharStart, &c.CharEnd,
+			&c.RegionID, &c.PageNumber, &bboxJSON,
 		); err != nil {
 			return nil, err
+		}
+		if len(bboxJSON) > 0 {
+			var bb chunk.BoundingBox
+			if err := json.Unmarshal(bboxJSON, &bb); err != nil {
+				return nil, fmt.Errorf("unmarshal bounding_box: %w", err)
+			}
+			c.BoundingBox = &bb
 		}
 		out = append(out, retrieval.ScoredChunk{Chunk: &c})
 	}

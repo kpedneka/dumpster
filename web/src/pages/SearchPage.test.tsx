@@ -179,12 +179,20 @@ describe('SearchPage', () => {
   })
 
   describe('citation markers', () => {
-    // Citation.text is served directly by the search response (see
-    // a08b5f4) — there's no separate content fetch to mock here anymore.
-    // That endpoint doesn't work for PDF/image chunks, whose char offsets
-    // are only meaningful within their own region's text, not the whole
-    // document.
-    it('opens a popover with the highlighted source text when clicked', async () => {
+    async function searchAndGetMarker(label = '[1]') {
+      const user = userEvent.setup()
+      renderSearchPage()
+      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.click(screen.getByRole('button', { name: /search/i }))
+      await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument())
+
+      return { user, marker: screen.getByText(label) }
+    }
+
+    // Citation.text is served directly by the search response (no separate
+    // content fetch — that endpoint doesn't work for PDF/image chunks, whose
+    // char offsets are only meaningful within their own region's text).
+    it('opens a popover with the file name and highlighted source text when clicked', async () => {
       vi.mocked(api.POST).mockResolvedValue({
         data: {
           summary: 'Paris [1] is the capital of France.',
@@ -196,49 +204,51 @@ describe('SearchPage', () => {
               char_start: 0,
               char_end: 5,
               text: 'Paris is the capital of France.',
+              file_name: 'geo.txt',
+              locator: null,
             },
           ],
         },
         error: undefined,
       } as never)
 
-      const user = userEvent.setup()
-      renderSearchPage()
-      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
-      await user.click(screen.getByRole('button', { name: /search/i }))
-      await waitFor(() => expect(screen.getByText('[1]')).toBeInTheDocument())
-
-      await user.click(screen.getByText('[1]'))
+      const { user, marker } = await searchAndGetMarker()
+      await user.click(marker)
 
       const popover = await screen.findByRole('dialog')
+      expect(within(popover).getByText('geo.txt')).toBeInTheDocument()
       expect(within(popover).getByText(/is the capital of france/i)).toBeInTheDocument()
     })
 
-    it('matches citations to markers by number, not array position', async () => {
+    // File + locator is the primary citation identity for a PDF-derived
+    // chunk — mirroring how search engines cite the source page rather than
+    // a byte range within it.
+    it('shows a page locator alongside the file name for a PDF-derived citation', async () => {
       vi.mocked(api.POST).mockResolvedValue({
         data: {
-          summary: 'Paris [1] is the capital of France [2].',
-          // Deliberately out of marker order.
+          summary: 'The conclusion [1] summarizes the findings.',
           citations: [
-            { number: 2, document_id: 'doc-1', chunk_id: 'chunk-2', char_start: 6, char_end: 31, text: 'is the capital of France' },
-            { number: 1, document_id: 'doc-1', chunk_id: 'chunk-1', char_start: 0, char_end: 5, text: 'Paris' },
+            {
+              number: 1,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              char_start: 0,
+              char_end: 20,
+              text: 'The findings were conclusive.',
+              file_name: 'paper.pdf',
+              locator: { type: 'page', value: 4 },
+            },
           ],
         },
         error: undefined,
       } as never)
 
-      const user = userEvent.setup()
-      renderSearchPage()
-      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
-      await user.click(screen.getByRole('button', { name: /search/i }))
-      await waitFor(() => expect(screen.getByText('[1]')).toBeInTheDocument())
+      const { user, marker } = await searchAndGetMarker()
+      await user.click(marker)
 
-      await user.click(screen.getByText('[1]'))
-      expect(within(await screen.findByRole('dialog')).getByText('Paris')).toBeInTheDocument()
-      await user.keyboard('{Escape}')
-
-      await user.click(screen.getByText('[2]'))
-      expect(within(await screen.findByRole('dialog')).getByText(/is the capital of france/i)).toBeInTheDocument()
+      const popover = await screen.findByRole('dialog')
+      expect(within(popover).getByText('paper.pdf')).toBeInTheDocument()
+      expect(within(popover).getByText(/p\.\s*4/i)).toBeInTheDocument()
     })
   })
 })

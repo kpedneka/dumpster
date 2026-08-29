@@ -9,21 +9,24 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 )
 
 func TestSearch(t *testing.T) {
-	deps, kbRepo, _, _, _ := defaultDeps()
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: k.ID, UserID: userID, Filename: "notes.txt", ContentType: "text/plain",
+	})
 
-	docID := uuid.New()
 	chunkID := uuid.New()
 	deps.Searcher = searchmock.NewSearcher(search.Result{
 		Summary: "the answer",
 		Citations: []search.Citation{
-			{Number: 1, DocumentID: docID, ChunkID: chunkID, CharStart: 0, CharEnd: 42, Text: "the source text"},
+			{Number: 1, DocumentID: doc.ID, ChunkID: chunkID, CharStart: 0, CharEnd: 42, Text: "the source text"},
 		},
 	})
 	router := NewRouter(deps)
@@ -51,7 +54,7 @@ func TestSearch(t *testing.T) {
 	if got.Citations[0].Number != 1 {
 		t.Errorf("citation number: got %d, want 1", got.Citations[0].Number)
 	}
-	if got.Citations[0].DocumentID != docID.String() {
+	if got.Citations[0].DocumentID != doc.ID.String() {
 		t.Errorf("citation document_id mismatch")
 	}
 	if got.Citations[0].CharStart != 0 || got.Citations[0].CharEnd != 42 {
@@ -59,6 +62,87 @@ func TestSearch(t *testing.T) {
 	}
 	if got.Citations[0].Text != "the source text" {
 		t.Errorf("citation text: got %q, want %q", got.Citations[0].Text, "the source text")
+	}
+	if got.Citations[0].FileName != "notes.txt" {
+		t.Errorf("citation file_name: got %q, want %q", got.Citations[0].FileName, "notes.txt")
+	}
+	if got.Citations[0].Locator != nil {
+		t.Errorf("citation locator: got %+v, want nil for a plain-text chunk", got.Citations[0].Locator)
+	}
+}
+
+// TestSearch_CitationLocator_PDFPage verifies that a citation resolved from a
+// PDF-derived chunk (PageNumber set) carries a page locator, mirroring how
+// search engines cite the source page rather than a byte range within it.
+func TestSearch_CitationLocator_PDFPage(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: k.ID, UserID: userID, Filename: "paper.pdf", ContentType: "application/pdf",
+	})
+
+	page := 4
+	deps.Searcher = searchmock.NewSearcher(search.Result{
+		Summary: "the answer",
+		Citations: []search.Citation{
+			{Number: 1, DocumentID: doc.ID, ChunkID: uuid.New(), CharStart: 0, CharEnd: 10, Text: "conclusion text", PageNumber: &page},
+		},
+	})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"what is the conclusion?"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var got SearchResponse
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Citations[0].FileName != "paper.pdf" {
+		t.Errorf("citation file_name: got %q, want %q", got.Citations[0].FileName, "paper.pdf")
+	}
+	if got.Citations[0].Locator == nil {
+		t.Fatalf("citation locator: got nil, want a page locator")
+	}
+	if got.Citations[0].Locator.Type != "page" || got.Citations[0].Locator.Value != 4 {
+		t.Errorf("citation locator: got %+v, want {type:page value:4}", got.Citations[0].Locator)
+	}
+}
+
+// TestSearch_CitationLocator_UnknownDocument verifies a citation still
+// renders (with an empty file name) if its document can't be resolved,
+// rather than failing the whole search response.
+func TestSearch_CitationLocator_UnknownDocument(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+
+	deps.Searcher = searchmock.NewSearcher(search.Result{
+		Summary: "the answer",
+		Citations: []search.Citation{
+			{Number: 1, DocumentID: uuid.New(), ChunkID: uuid.New(), CharStart: 0, CharEnd: 10, Text: "text"},
+		},
+	})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hello"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+	var got SearchResponse
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Citations[0].FileName != "" {
+		t.Errorf("citation file_name: got %q, want empty for an unresolvable document", got.Citations[0].FileName)
 	}
 }
 
