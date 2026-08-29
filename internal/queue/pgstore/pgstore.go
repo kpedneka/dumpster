@@ -190,4 +190,85 @@ func (s *Store) Nack(ctx context.Context, jobID uuid.UUID, reason error) (bool, 
 	return deadLettered, nil
 }
 
+// ReclaimStale resets jobs stuck in "processing" for longer than staleAfter
+// back to "pending" (incrementing attempts, same as a failed attempt would),
+// or dead-letters them directly if that exhausts max_attempts. This is the
+// recovery path for a job orphaned by a worker that dies or restarts
+// mid-run: Dequeue's claim-then-commit transaction is short, so a crash
+// inside Handle() never touches the jobs table again, and Nack (which
+// normally dead-letters after enough failures) only fires when Handle()
+// actually returns, which a killed process never gets the chance to do.
+//
+// Known limitation: a job dead-lettered here (rather than via a normal
+// Nack) does not trigger the handler's OnFailed callback, since that is
+// invoked by Worker.process, not by this package — a document tied to such
+// a job stays at its last known status rather than being marked failed.
+// This only matters if the exact same job orphans repeatedly across
+// multiple worker restarts, exhausting attempts purely through staleness
+// reclaims without Handle() ever running to completion or returning a real
+// error; recovering from "one crash orphans a job forever" (the bug this
+// method exists to fix) does not depend on that edge case.
+func (s *Store) ReclaimStale(ctx context.Context, staleAfter time.Duration) (reclaimed, deadLettered int, err error) {
+	cutoff := time.Now().Add(-staleAfter)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("queue: reclaim stale begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, attempts, max_attempts FROM jobs
+		 WHERE status = 'processing' AND updated_at < $1
+		 FOR UPDATE`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, 0, fmt.Errorf("queue: reclaim stale select: %w", err)
+	}
+	type staleJob struct {
+		id                    uuid.UUID
+		attempts, maxAttempts int
+	}
+	var stale []staleJob
+	for rows.Next() {
+		var j staleJob
+		if err := rows.Scan(&j.id, &j.attempts, &j.maxAttempts); err != nil {
+			rows.Close()
+			return 0, 0, fmt.Errorf("queue: reclaim stale scan: %w", err)
+		}
+		stale = append(stale, j)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, 0, fmt.Errorf("queue: reclaim stale rows: %w", err)
+	}
+
+	for _, j := range stale {
+		newAttempts := j.attempts + 1
+		if newAttempts >= j.maxAttempts {
+			if _, err := tx.Exec(ctx,
+				`UPDATE jobs SET status = 'failed', attempts = $1,
+				 last_error = 'reclaimed: worker did not complete this job within the staleness window',
+				 updated_at = NOW() WHERE id = $2`,
+				newAttempts, j.id,
+			); err != nil {
+				return 0, 0, fmt.Errorf("queue: reclaim stale dead-letter %s: %w", j.id, err)
+			}
+			deadLettered++
+		} else if _, err := tx.Exec(ctx,
+			`UPDATE jobs SET status = 'pending', attempts = $1, updated_at = NOW(), run_at = NOW()
+			 WHERE id = $2`,
+			newAttempts, j.id,
+		); err != nil {
+			return 0, 0, fmt.Errorf("queue: reclaim stale requeue %s: %w", j.id, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, 0, fmt.Errorf("queue: reclaim stale commit: %w", err)
+	}
+	return len(stale) - deadLettered, deadLettered, nil
+}
+
 var _ queue.Queue = (*Store)(nil)

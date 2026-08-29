@@ -139,6 +139,94 @@ describe('KBDetailPage', () => {
     })
   })
 
+  describe('duplicate upload warning', () => {
+    function getFileInput(container: HTMLElement): HTMLInputElement {
+      return container.querySelector('input[type="file"]')!
+    }
+
+    function mockDocs(items: unknown[]) {
+      vi.mocked(api.GET).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}') {
+          return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
+        }
+        if (path === '/kbs/{kbId}/documents') {
+          return Promise.resolve({ data: { items }, error: undefined })
+        }
+        throw new Error(`unexpected api.GET call: ${path}`)
+      }) as never)
+    }
+
+    it('warns before uploading a file whose name already exists in the KB', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 10 }])
+      const user = userEvent.setup()
+      const { container } = renderKBDetailPage()
+      await screen.findByText('notes.txt')
+
+      const file = new File(['hello again'], 'notes.txt', { type: 'text/plain' })
+      await user.upload(getFileInput(container), file)
+
+      const dialog = await screen.findByRole('dialog')
+      expect(within(dialog).getByText(/already exists in this knowledge base/i)).toBeInTheDocument()
+      expect(uploadDocument).not.toHaveBeenCalled()
+    })
+
+    it('uploads immediately, no warning, when the filename is new', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'other.txt', status: 'indexed', size_bytes: 10 }])
+      vi.mocked(uploadDocument).mockResolvedValue({
+        id: 'doc-2',
+        filename: 'notes.txt',
+        status: 'pending',
+      } as never)
+
+      const user = userEvent.setup()
+      const { container } = renderKBDetailPage()
+      await screen.findByText('other.txt')
+
+      const file = new File(['hello'], 'notes.txt', { type: 'text/plain' })
+      await user.upload(getFileInput(container), file)
+
+      await waitFor(() => expect(uploadDocument).toHaveBeenCalledWith('kb-1', file))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    it('proceeds with the upload when the duplicate warning is confirmed', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 10 }])
+      vi.mocked(uploadDocument).mockResolvedValue({
+        id: 'doc-2',
+        filename: 'notes.txt',
+        status: 'pending',
+      } as never)
+
+      const user = userEvent.setup()
+      const { container } = renderKBDetailPage()
+      await screen.findByText('notes.txt')
+
+      const file = new File(['hello again'], 'notes.txt', { type: 'text/plain' })
+      await user.upload(getFileInput(container), file)
+
+      const dialog = await screen.findByRole('dialog')
+      await user.click(within(dialog).getByRole('button', { name: /upload anyway/i }))
+
+      await waitFor(() => expect(uploadDocument).toHaveBeenCalledWith('kb-1', file))
+    })
+
+    it('does not upload when the duplicate warning is cancelled', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 10 }])
+      const user = userEvent.setup()
+      const { container } = renderKBDetailPage()
+      await screen.findByText('notes.txt')
+
+      const file = new File(['hello again'], 'notes.txt', { type: 'text/plain' })
+      await user.upload(getFileInput(container), file)
+
+      const dialog = await screen.findByRole('dialog')
+      await user.click(within(dialog).getByRole('button', { name: /cancel/i }))
+
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(uploadDocument).not.toHaveBeenCalled()
+    })
+  })
+
   describe('documents panel', () => {
     function mockDocs(items: unknown[]) {
       vi.mocked(api.GET).mockImplementation(((path: string) => {
