@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Local entity extraction sidecar for the dumpster ingestion pipeline.
 
-Run once per invocation by the Go gliner adapter (internal/entity/gliner)
-via subprocess: JSON request on stdin, JSON response on stdout. This keeps
-the extraction model (spaCy for sentence/token structure, GLiNER for
-zero-shot entity typing against a config-driven label set) local, turning a
-variable per-document LLM cost into a fixed, sunk hardware cost.
+Started once by the Go gliner adapter (internal/entity/gliner) and kept
+alive across many documents (v4.7): each line of stdin is one JSON request,
+each line written to stdout is that request's JSON response. This keeps the
+extraction model (spaCy for sentence/token structure, GLiNER for zero-shot
+entity typing against a config-driven label set) local, turning a variable
+per-document LLM cost into a fixed, sunk hardware cost.
 
-Request (stdin), one JSON object:
+Request (one line of stdin), one JSON object:
 {
   "allowed_types": ["person", "organization", ...],
   "chunks": [
@@ -16,7 +17,7 @@ Request (stdin), one JSON object:
   ]
 }
 
-Response (stdout), one JSON object:
+Response (one line of stdout), one JSON object:
 {
   "entities": [
     {
@@ -38,11 +39,14 @@ config (ENTITY_TYPES) instead of requiring a retrained/fine-tuned model per
 type-set change. spaCy is used for fast sentence segmentation so each GLiNER
 call stays within the model's effective context window.
 
-Models are loaded lazily and once per process so repeated invocations in a
-warm sidecar (rather than a fresh process per document) amortize load time;
-the current adapter still invokes this script once per document, which is
-the simplest viable wiring per the architecture notes, with sidecar/warm-
-process optimization left as a follow-up if throughput becomes a concern.
+Previously this script processed exactly one request and exited, so every
+document paid spaCy+GLiNER's model-load cost from scratch — measured at
+~17.5s regardless of document size, unrelated to and on top of whatever the
+extraction itself cost. The model is now loaded once, before the request
+loop starts, and reused for the life of the process. An unhandled error
+(e.g. malformed input) still ends the process — the Go adapter detects this
+via the closed pipe and starts a fresh one on its next call — this script
+does not try to recover mid-loop and keep serving.
 """
 import json
 import sys
@@ -113,20 +117,31 @@ def extract_chunk(nlp, model, text, allowed_types, threshold=0.5):
     return entities
 
 
-def main():
-    request = json.load(sys.stdin)
+def _handle_request(nlp, model, line):
+    """Parses one JSON request line and returns the JSON response text
+    (without a trailing newline). Isolated from main()'s I/O loop so it's
+    testable with fake nlp/model objects, without a real GLiNER model."""
+    request = json.loads(line)
     allowed_types = request.get("allowed_types", [])
     chunks = request.get("chunks", [])
 
     out_entities = []
-    if chunks and allowed_types:
-        nlp, model = load_pipeline()
-        for c in chunks:
-            for e in extract_chunk(nlp, model, c["text"], allowed_types):
-                e["chunk_id"] = c["chunk_id"]
-                out_entities.append(e)
+    for c in chunks:
+        for e in extract_chunk(nlp, model, c["text"], allowed_types):
+            e["chunk_id"] = c["chunk_id"]
+            out_entities.append(e)
 
-    json.dump({"entities": out_entities}, sys.stdout)
+    return json.dumps({"entities": out_entities})
+
+
+def main():
+    nlp, model = load_pipeline()
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        sys.stdout.write(_handle_request(nlp, model, line) + "\n")
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":

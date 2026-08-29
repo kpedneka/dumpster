@@ -9,14 +9,25 @@
 // point of this card: it converts a variable per-document API cost into a
 // fixed, sunk hardware cost. Retrieval quality is not a goal here — the
 // output is raw material for a future graph-based retrieval feature.
+//
+// The Python process is a long-lived sidecar, started once and reused
+// across many Extract calls, rather than spawned fresh per call (see v4.7):
+// spaCy+GLiNER's model load costs ~17.5s regardless of document size, and
+// spawning fresh every document meant every document paid that cost. See
+// startSidecarProcess for why the process's lifetime is deliberately not
+// tied to any single Extract call's context.
 package gliner
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os/exec"
+	"sync"
 
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/entity"
@@ -29,21 +40,40 @@ type Config struct {
 	PythonPath string
 	// ScriptPath is the path to extract_entities.py.
 	ScriptPath string
+	// Logger receives sidecar lifecycle events (start, restart after a
+	// crash). Defaults to the standard logger when nil.
+	Logger *log.Logger
 }
 
-// Extractor implements entity.Extractor by shelling out to a local
-// spaCy+GLiNER Python process once per Extract call.
+// sidecarProcess abstracts the persistent Python process so tests can
+// simulate a crash mid-request without a real Python environment.
+type sidecarProcess interface {
+	// send writes one JSON request and returns the next JSON response.
+	// Returns an error if the process has died (e.g. a broken pipe or a
+	// closed stdout).
+	send(req []byte) ([]byte, error)
+}
+
+// Extractor implements entity.Extractor by keeping one long-lived
+// spaCy+GLiNER Python process alive across many Extract calls.
 type Extractor struct {
 	cfg Config
-	// runCommand is overridable in tests so the os/exec boundary itself
+
+	mu   sync.Mutex
+	proc sidecarProcess
+	// startProcess is overridable in tests so the os/exec boundary itself
 	// (this package) can be exercised without a real Python environment.
-	runCommand func(ctx context.Context, pythonPath, scriptPath string, stdin []byte) ([]byte, error)
+	startProcess func(pythonPath, scriptPath string) (sidecarProcess, error)
 }
 
-// New returns an Extractor that invokes cfg.PythonPath cfg.ScriptPath for
-// every Extract call.
+// New returns an Extractor. The sidecar process is not started until the
+// first Extract call (lazy), so a worker instance that never needs entity
+// extraction never pays the model-load cost at all.
 func New(cfg Config) *Extractor {
-	return &Extractor{cfg: cfg, runCommand: runPython}
+	if cfg.Logger == nil {
+		cfg.Logger = log.Default()
+	}
+	return &Extractor{cfg: cfg, startProcess: startSidecarProcess}
 }
 
 type request struct {
@@ -96,9 +126,9 @@ func (e *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedT
 		return nil, fmt.Errorf("gliner: marshal request: %w", err)
 	}
 
-	stdout, err := e.runCommand(ctx, e.cfg.PythonPath, e.cfg.ScriptPath, stdin)
+	stdout, err := e.send(stdin)
 	if err != nil {
-		return nil, fmt.Errorf("gliner: run extraction script: %w", err)
+		return nil, fmt.Errorf("gliner: sidecar request: %w", err)
 	}
 
 	var resp response
@@ -129,19 +159,97 @@ func (e *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedT
 	return out, nil
 }
 
-// runPython executes pythonPath scriptPath, writing stdin to the process's
-// stdin and returning its stdout.
-func runPython(ctx context.Context, pythonPath, scriptPath string, stdin []byte) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, pythonPath, scriptPath)
-	cmd.Stdin = bytes.NewReader(stdin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+// send delivers req to the persistent sidecar, starting it on first use and
+// transparently restarting it if a previous call found it had died. A
+// failed send here still returns an error for that call — the caller's job
+// goes through the normal retry/dead-letter path — but clears e.proc so the
+// next call gets a fresh process instead of hitting the same broken one.
+func (e *Extractor) send(req []byte) ([]byte, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%w: %s", err, stderr.String())
+	if e.proc == nil {
+		e.cfg.Logger.Printf("gliner: starting entity-extraction sidecar")
+		proc, err := e.startProcess(e.cfg.PythonPath, e.cfg.ScriptPath)
+		if err != nil {
+			return nil, fmt.Errorf("start sidecar: %w", err)
+		}
+		e.proc = proc
 	}
-	return stdout.Bytes(), nil
+
+	resp, err := e.proc.send(req)
+	if err != nil {
+		e.cfg.Logger.Printf("gliner: sidecar request failed, will restart on next call: %v", err)
+		e.proc = nil
+		return nil, err
+	}
+	return resp, nil
+}
+
+// startSidecarProcess starts extract_entities.py as a long-lived process.
+//
+// Deliberately exec.Command, not exec.CommandContext: this process is
+// reused across many Extract calls, each with its own (typically
+// short-lived, per-job) context, so tying its lifetime to any single call's
+// ctx would kill the sidecar the moment that one call's context ended.
+// It shuts down naturally when this Go process exits: the pipe's write end
+// closes, extract_entities.py's stdin read loop sees EOF, and it exits on
+// its own — no explicit kill needed.
+func startSidecarProcess(pythonPath, scriptPath string) (sidecarProcess, error) {
+	cmd := exec.Command(pythonPath, scriptPath)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
+	}
+	// Reap the process in the background to avoid a zombie if it exits
+	// unexpectedly; the exit itself is surfaced to callers via send()'s I/O
+	// errors, not this goroutine.
+	go func() { _ = cmd.Wait() }()
+
+	scanner := bufio.NewScanner(stdoutPipe)
+	// A document with many chunks/entities can produce a single response
+	// line well beyond bufio.Scanner's 64KB default.
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+
+	return &realSidecarProcess{cmd: cmd, stdin: stdin, stdout: scanner, stderr: &stderr}, nil
+}
+
+// realSidecarProcess implements sidecarProcess over a real subprocess's
+// stdin/stdout pipes, using newline-delimited JSON: one request line in,
+// one response line out per send call.
+type realSidecarProcess struct {
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *bufio.Scanner
+	stderr *bytes.Buffer
+}
+
+func (p *realSidecarProcess) send(req []byte) ([]byte, error) {
+	if _, err := p.stdin.Write(req); err != nil {
+		return nil, fmt.Errorf("write request: %w", err)
+	}
+	if _, err := p.stdin.Write([]byte("\n")); err != nil {
+		return nil, fmt.Errorf("write request newline: %w", err)
+	}
+	if !p.stdout.Scan() {
+		if err := p.stdout.Err(); err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		return nil, fmt.Errorf("read response: sidecar exited: %s", p.stderr.String())
+	}
+	line := p.stdout.Bytes()
+	resp := make([]byte, len(line))
+	copy(resp, line)
+	return resp, nil
 }
 
 var _ entity.Extractor = (*Extractor)(nil)
