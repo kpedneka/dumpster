@@ -601,6 +601,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "409":
+          description: Document is being indexed and cannot be deleted yet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /kbs/{kbId}/documents/{docId}/retry:
     parameters:

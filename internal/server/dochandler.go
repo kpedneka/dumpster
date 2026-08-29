@@ -402,6 +402,16 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A document actively being indexed has an in-flight worker job holding
+	// its own reference to the S3 object and this row for the duration of
+	// Handle(); nothing in the worker re-checks either mid-run. Deleting here
+	// would either dead-letter that job against a vanished document or let it
+	// write chunks for a document that no longer exists.
+	if doc.Status == document.StatusProcessing {
+		writeError(w, http.StatusConflict, "document is being indexed and cannot be deleted yet")
+		return
+	}
+
 	if err := h.objects.Delete(r.Context(), doc.S3Key); err != nil {
 		h.recordDelete(r.Context(), "failure")
 		writeError(w, http.StatusInternalServerError, "failed to remove object")

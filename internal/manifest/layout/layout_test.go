@@ -1,8 +1,11 @@
 package layout
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +63,25 @@ func TestExtractRegions_MapsJSONResponse(t *testing.T) {
 	fig := got[1]
 	if fig.RegionType != "figure" || fig.NeedsVLM != "describe" || fig.ImageBase64 != "aGVsbG8=" {
 		t.Errorf("figure region: got %+v", fig)
+	}
+}
+
+// TestExtractRegions_LogsPeakRSS covers the v4.6 instrumentation: peak RSS
+// reported by a completed run should be logged so future machine-sizing
+// decisions can be based on a measured distribution, not a few OOM-kill log
+// lines from jobs that crashed.
+func TestExtractRegions_LogsPeakRSS(t *testing.T) {
+	var buf bytes.Buffer
+	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py", Logger: log.New(&buf, "", 0)})
+	ex.runCommand = func(_ context.Context, _, _ string, _ []byte) ([]byte, error) {
+		return []byte(`{"regions":[],"peak_rss_kb":391272}`), nil
+	}
+
+	if _, err := ex.ExtractRegions(context.Background(), []byte(fakePDF)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "391272") {
+		t.Errorf("expected log output to report peak RSS, got %q", buf.String())
 	}
 }
 

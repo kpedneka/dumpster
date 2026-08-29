@@ -162,6 +162,16 @@ describe('KBDetailPage', () => {
       expect(screen.getByText('2.0 KB')).toBeInTheDocument()
     })
 
+    it('wraps long filenames instead of truncating or scrolling', async () => {
+      const longName = 'a-genuinely-extremely-long-filename-that-would-otherwise-force-horizontal-scroll.pdf'
+      mockDocs([{ id: 'doc-1', filename: longName, status: 'indexed', size_bytes: 10 }])
+      renderKBDetailPage()
+
+      const filename = await screen.findByText(longName)
+      expect(filename.className).toContain('break-words')
+      expect(filename.className).not.toContain('truncate')
+    })
+
     it('shows a retry action only for a failed (dead-lettered) document', async () => {
       mockDocs([
         { id: 'doc-1', filename: 'failed.txt', status: 'failed', size_bytes: 10 },
@@ -192,6 +202,32 @@ describe('KBDetailPage', () => {
       await waitFor(() => {
         expect(screen.getByText('Pending')).toBeInTheDocument()
       })
+    })
+
+    it('surfaces the server message when deleting an in-flight document is rejected', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'busy.txt', status: 'processing', size_bytes: 10 }])
+      vi.mocked(api.DELETE).mockResolvedValue({
+        error: { error: 'document is being indexed and cannot be deleted yet' },
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      await screen.findByText('busy.txt')
+      await user.click(screen.getByRole('button', { name: 'Delete' }))
+      const dialog = await screen.findByRole('dialog')
+      await user.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+      await waitFor(() => {
+        expect(toast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: 'destructive',
+            description: 'document is being indexed and cannot be deleted yet',
+          }),
+        )
+      })
+      // The row is untouched — no optimistic removal on a rejected delete.
+      expect(screen.getByText('busy.txt')).toBeInTheDocument()
     })
   })
 

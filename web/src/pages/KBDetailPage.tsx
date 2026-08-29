@@ -15,7 +15,6 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -34,6 +33,7 @@ import {
 import { toast } from '@/hooks/use-toast'
 import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
+import { StatusRing } from '@/components/StatusRing'
 import { getDraftQuery, setDraftQuery, getSubmittedQuery, setSubmittedQuery } from '@/lib/search-state'
 import { cn } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
@@ -43,13 +43,6 @@ type DocStatus = Document['status']
 type Citation = components['schemas']['Citation']
 
 const TERMINAL: DocStatus[] = ['indexed', 'failed']
-
-const STATUS_LABEL: Record<DocStatus, string> = {
-  pending: 'Pending',
-  processing: 'Processing…',
-  indexed: 'Indexed',
-  failed: 'Failed',
-}
 
 // Replace [N] with {CITE_N} before passing to react-markdown so remark doesn't
 // tokenize the brackets as a potential link reference, keeping citations as a
@@ -94,11 +87,11 @@ function makeMarkdownComponents(citations: Citation[]): Components {
   }
 }
 
-function describeError(error: unknown): string {
+function describeError(error: unknown, fallback = 'Something went wrong. Try again.'): string {
   if (error && typeof error === 'object' && typeof (error as { error?: unknown }).error === 'string') {
     return (error as { error: string }).error
   }
-  return 'Search failed. Try again.'
+  return fallback
 }
 
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB']
@@ -400,7 +393,9 @@ export function KBDetailPage() {
           )}
 
           {submittedQuery && !isFetching && isError && (
-            <p className="py-16 text-center text-sm text-destructive">{describeError(error)}</p>
+            <p className="py-16 text-center text-sm text-destructive">
+              {describeError(error, 'Search failed. Try again.')}
+            </p>
           )}
 
           {submittedQuery && !isError && result && (
@@ -456,7 +451,12 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
       )
       toast({ title: `"${doc.filename}" deleted` })
     },
-    onError: () => toast({ variant: 'destructive', title: 'Failed to delete document' }),
+    onError: (error) =>
+      toast({
+        variant: 'destructive',
+        title: 'Failed to delete document',
+        description: describeError(error),
+      }),
   })
 
   const retryMutation = useMutation({
@@ -475,19 +475,16 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
     onError: () => toast({ variant: 'destructive', title: 'Failed to retry document' }),
   })
 
-  const isActive = !TERMINAL.includes(doc.status)
   const isFailed = doc.status === 'failed'
 
   return (
     <div className="lift flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm hover:border-primary/40">
       <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{doc.filename}</p>
+        <p className="break-words text-sm font-medium">{doc.filename}</p>
         <p className="text-xs text-muted-foreground">{formatSize(doc.size_bytes)}</p>
       </div>
-      <Badge variant={doc.status as DocStatus} className={cn(isActive && 'animate-pulse')}>
-        {STATUS_LABEL[doc.status]}
-      </Badge>
+      <StatusRing status={doc.status} updatedAt={doc.updated_at} />
       {isFailed && (
         <Button
           variant="ghost"
