@@ -32,3 +32,5 @@ web/dist/
 
 # Python virtual environment
 scripts/.venv/
+__pycache__/
+*.pyc

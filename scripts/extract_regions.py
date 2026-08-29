@@ -28,6 +28,7 @@ region_type semantics:
 import base64
 import io
 import json
+import resource
 import sys
 import tempfile
 import os
@@ -192,16 +193,28 @@ def extract_regions(pdf_bytes):
     return regions
 
 
+def _peak_rss_kb():
+    """Returns this process's peak resident set size in KB, for sizing
+    decisions (see v4.6): the fixed OOM floor observed in production came
+    from this exact number, but only for jobs that survive to report it —
+    a killed job's peak RSS is only visible via the OOM killer's own log
+    line, not this function. ru_maxrss is already KB on Linux (the
+    production runtime) but bytes on macOS/BSD, so normalize for local dev.
+    """
+    raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return raw // 1024 if sys.platform == "darwin" else raw
+
+
 def main():
     req = json.load(sys.stdin)
     pdf_b64 = req.get("pdf_base64", "")
     if not pdf_b64:
-        json.dump({"regions": []}, sys.stdout)
+        json.dump({"regions": [], "peak_rss_kb": _peak_rss_kb()}, sys.stdout)
         return
 
     pdf_bytes = base64.b64decode(pdf_b64)
     regions = extract_regions(pdf_bytes)
-    json.dump({"regions": regions}, sys.stdout)
+    json.dump({"regions": regions, "peak_rss_kb": _peak_rss_kb()}, sys.stdout)
 
 
 if __name__ == "__main__":

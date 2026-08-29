@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os/exec"
 )
 
@@ -25,6 +26,14 @@ type Config struct {
 	PythonPath string
 	// ScriptPath is the path to scripts/extract_regions.py.
 	ScriptPath string
+	// Logger receives per-run peak-RSS observations (see v4.6): the fixed
+	// ~390MB floor that drove the worker's 512MB->1024MB memory bump was
+	// found by reading OOM-kill log lines for jobs that crashed. This gives
+	// the other half of the picture — peak RSS for jobs that complete
+	// normally — so a future sizing decision can be based on a measured
+	// distribution instead of the handful of crashes that happened to get
+	// logged. Defaults to the standard logger when nil.
+	Logger *log.Logger
 }
 
 // RawRegion is a single classified region from the Python extraction script.
@@ -63,6 +72,9 @@ type Extractor struct {
 
 // New returns an Extractor configured to invoke cfg.PythonPath cfg.ScriptPath.
 func New(cfg Config) *Extractor {
+	if cfg.Logger == nil {
+		cfg.Logger = log.Default()
+	}
 	return &Extractor{cfg: cfg, runCommand: runPython}
 }
 
@@ -76,11 +88,14 @@ type rawRegionJSON struct {
 	BoundingBox [4]float64 `json:"bbox"`
 	Text        string     `json:"text"`
 	ImageBase64 string     `json:"image_base64"`
-	NeedsVLM   string     `json:"needs_vlm"`
+	NeedsVLM    string     `json:"needs_vlm"`
 }
 
 type response struct {
 	Regions []rawRegionJSON `json:"regions"`
+	// PeakRSSKB is the Python subprocess's own peak RSS in KB, reported only
+	// on successful completion (a killed job never reaches this point).
+	PeakRSSKB int `json:"peak_rss_kb"`
 }
 
 // ExtractRegions classifies all regions in pdfBytes and returns them in
@@ -108,6 +123,7 @@ func (e *Extractor) ExtractRegions(ctx context.Context, pdfBytes []byte) ([]*Raw
 	if err := json.Unmarshal(stdout, &resp); err != nil {
 		return nil, fmt.Errorf("layout: unmarshal response: %w", err)
 	}
+	e.cfg.Logger.Printf("layout: extraction peak RSS: %d KB", resp.PeakRSSKB)
 
 	out := make([]*RawRegion, 0, len(resp.Regions))
 	for _, r := range resp.Regions {
@@ -117,7 +133,7 @@ func (e *Extractor) ExtractRegions(ctx context.Context, pdfBytes []byte) ([]*Raw
 			BoundingBox: r.BoundingBox,
 			Text:        r.Text,
 			ImageBase64: r.ImageBase64,
-			NeedsVLM:   r.NeedsVLM,
+			NeedsVLM:    r.NeedsVLM,
 		})
 	}
 	return out, nil
