@@ -77,19 +77,28 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requi
 # (and downstream co-occurrence-edge counts) with no error anywhere. This
 # had been running in every deployed image until caught.
 RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
-# Previously baked the GLiNER model into this image (and forced
-# HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE) to eliminate a network round trip on
-# every entity-extraction call. That reasoning no longer holds: the model
-# weights add ~1.5GB uncompressed, and combined with this image's already
-# heavy ML dependency stack (torch, opencv, unstructured's transitive deps),
-# pushed the image over Fly's 8GB uncompressed limit — the v4.7 deploy
-# failed outright with "Not enough space to unpack image". Meanwhile v4.7
-# (the warm entity-extraction sidecar, shipped after this baking step was
-# added) already collapsed that network check from "every document" to
-# "once per worker lifetime" — the cost this was paying 1.5GB to avoid
-# shrank by orders of magnitude on its own. Not worth 1.5GB of image size
-# to save one network check per worker boot. The sidecar downloads and
-# caches the model normally (network, not offline) on its first request.
+# Baking the GLiNER model into the image, take three — full history, because
+# the right call kept changing as the surrounding facts changed:
+#   1. Originally baked in + forced offline, to remove a network round trip
+#      happening on every entity-extraction call.
+#   2. Reverted after the warm sidecar (v4.7) shipped: that network check
+#      dropped to once per worker lifetime, so paying 1.5GB of image size to
+#      avoid it stopped being worth it — and at the time, this image's GPU
+#      torch build had it sitting at 8GB+, with zero room to spare anyway.
+#   3. Re-added here: switching to CPU-only torch dropped this image to
+#      ~2.76GB, so the same 1.5GB now lands at ~4.26GB — comfortable
+#      headroom under Fly's 8GB cap, not the razor's edge it was before.
+#      More importantly, testing the "download on first use" behavior for
+#      real (not just against an already-warm local cache) showed the
+#      actual one-time cost is a ~2.5 minute fresh download of the model
+#      over the network, not the ~9s figure measured with a warm cache —
+#      worse than assumed when it was removed. Once per worker lifetime is
+#      infrequent, but deploys/restarts happen often enough that a 2.5
+#      minute tax each time is worth spending 1.5GB of now-available image
+#      budget to avoid.
+RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_mediumv2.1')"
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 COPY scripts/ /app/scripts/
 
 # No ENTRYPOINT or CMD here: Fly.io selects the binary via [processes] in

@@ -8,12 +8,10 @@
 #   python -m spacy download en_core_web_sm
 #
 # GLiNER.from_pretrained() also checks HuggingFace Hub for updates on every
-# call by default, even once its weights are cached. Since v4.7, this only
-# runs once per worker lifetime (a persistent sidecar, not per document), so
-# it's no longer worth baking the model into the image to avoid it (that was
-# tried and reverted — see Dockerfile history — after it pushed the image
-# over Fly's size limit). For local dev, after the model has been fetched
-# once, set these to make it fully offline too:
+# call by default, even once its weights are cached. The runtime image bakes
+# the model in and forces offline mode (see Dockerfile) so this never runs
+# there at all. For local dev, after the model has been fetched once, set
+# these to make it fully offline too:
 #   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 spacy>=3.7,<4
 gliner>=0.2,<1
