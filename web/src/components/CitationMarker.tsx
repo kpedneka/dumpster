@@ -25,12 +25,30 @@ function formatLocator(locator: Citation['locator']): string | null {
   }
 }
 
+// A locator-bearing chunk (currently: a PDF page) is much larger than a
+// text/markdown chunk, so its drill-down text is truncated behind an expand
+// control by default — otherwise the popover reintroduces the same
+// too-much-highlighted-text problem this citation model was built to avoid.
+// Plain-text citations have no locator and are never truncated: their
+// chunks are already paragraph-sized.
+const TRUNCATE_AT = 200
+
 export function CitationMarker({ citation }: CitationMarkerProps) {
   const [open, setOpen] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const locatorLabel = formatLocator(citation.locator)
 
+  const truncatable = citation.locator != null && citation.text.length > TRUNCATE_AT
+  const displayText = truncatable && !expanded ? `${citation.text.slice(0, TRUNCATE_AT)}…` : citation.text
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setExpanded(false)
+      }}
+    >
       <PopoverTrigger asChild>
         <sup className="ml-0.5 cursor-pointer rounded bg-accent px-1 py-0.5 text-xs font-medium text-accent-foreground hover:bg-accent/80">
           {`[${citation.number}]`}
@@ -42,8 +60,17 @@ export function CitationMarker({ citation }: CitationMarkerProps) {
           {locatorLabel && <span className="text-muted-foreground">{` · ${locatorLabel}`}</span>}
         </p>
         <p className="text-sm leading-relaxed">
-          <mark className="rounded bg-yellow-200 px-0.5">{citation.text}</mark>
+          <mark className="rounded bg-yellow-200 px-0.5">{displayText}</mark>
         </p>
+        {truncatable && !expanded && (
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="mt-2 text-xs font-medium text-accent-foreground underline underline-offset-2 hover:no-underline"
+          >
+            Show full page text
+          </button>
+        )}
       </PopoverContent>
     </Popover>
   )
