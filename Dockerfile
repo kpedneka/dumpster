@@ -52,6 +52,22 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 # cache for this layer — installing torch et al. from scratch is the single
 # most expensive step in this build.
 COPY scripts/requirements.txt /app/scripts/requirements.txt
+# torch (a transitive dependency of gliner) defaults to the CUDA-enabled
+# PyPI wheel on Linux, which bundles the full NVIDIA/CUDA runtime (~2.9GB
+# of nvidia-* packages) and triton (~650MB, a GPU kernel compiler) — dead
+# weight on Fly's shared-cpu-1x, which has no GPU at all (confirmed:
+# torch.cuda.is_available() is False on this exact image). Installing the
+# CPU-only build first satisfies gliner's torch dependency before pip ever
+# reaches for the GPU-enabled default.
+#
+# torchvision must be pinned to the same index: it ships its own compiled
+# extension that has to exactly match the torch build it's paired with.
+# Installing only torch from the CPU index and letting torchvision resolve
+# normally afterward pairs a CPU torch with a mismatched torchvision,
+# which fails at import with "operator torchvision::nms does not exist" —
+# caught by smoke-testing this image before shipping it, not by the size
+# measurement alone.
+RUN --mount=type=cache,target=/root/.cache/pip pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requirements.txt
 # `pip install spacy` installs only the library, not a language model —
 # en_core_web_sm is a separate download this image never ran. Without it,
@@ -61,15 +77,25 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requi
 # (and downstream co-occurrence-edge counts) with no error anywhere. This
 # had been running in every deployed image until caught.
 RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
-# GLiNER.from_pretrained() defaults to checking HuggingFace Hub for updates on
-# every call, even when the model is already cached locally — an
-# unauthenticated network round trip on every single entity-extraction job,
-# contradicting the "predictable per-document latency (no network tail)"
-# guarantee the local-extraction decision (spaCy + GLiNER over an LLM call)
-# was explicitly made on. Deliberately not a cache mount: the whole point is
-# for these weights to persist into the final image layer, not be discarded
-# after the build. HF_HUB_OFFLINE/TRANSFORMERS_OFFLINE below then force every
-# from_pretrained() call at runtime to use only this baked-in copy.
+# Baking the GLiNER model into the image, take three — full history, because
+# the right call kept changing as the surrounding facts changed:
+#   1. Originally baked in + forced offline, to remove a network round trip
+#      happening on every entity-extraction call.
+#   2. Reverted after the warm sidecar (v4.7) shipped: that network check
+#      dropped to once per worker lifetime, so paying 1.5GB of image size to
+#      avoid it stopped being worth it — and at the time, this image's GPU
+#      torch build had it sitting at 8GB+, with zero room to spare anyway.
+#   3. Re-added here: switching to CPU-only torch dropped this image to
+#      ~2.76GB, so the same 1.5GB now lands at ~4.26GB — comfortable
+#      headroom under Fly's 8GB cap, not the razor's edge it was before.
+#      More importantly, testing the "download on first use" behavior for
+#      real (not just against an already-warm local cache) showed the
+#      actual one-time cost is a ~2.5 minute fresh download of the model
+#      over the network, not the ~9s figure measured with a warm cache —
+#      worse than assumed when it was removed. Once per worker lifetime is
+#      infrequent, but deploys/restarts happen often enough that a 2.5
+#      minute tax each time is worth spending 1.5GB of now-available image
+#      budget to avoid.
 RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_mediumv2.1')"
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
