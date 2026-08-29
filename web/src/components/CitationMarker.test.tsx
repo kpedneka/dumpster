@@ -47,4 +47,53 @@ describe('CitationMarker', () => {
     expect(await screen.findByText('paper.pdf')).toBeInTheDocument()
     expect(screen.getByText(/p\.\s*4/i)).toBeInTheDocument()
   })
+
+  const longPageText = 'Paris is the capital of France. '.repeat(20).trim()
+
+  it('truncates long chunk text behind an expand control for a locator-bearing (PDF) citation', async () => {
+    const user = userEvent.setup()
+    const citation: Citation = {
+      ...baseCitation,
+      file_name: 'paper.pdf',
+      locator: { type: 'page', value: 4 },
+      text: longPageText,
+    }
+    render(<CitationMarker citation={citation} />)
+
+    await user.click(screen.getByText('[1]'))
+
+    expect(screen.queryByText(longPageText)).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /show full page text/i })).toBeInTheDocument()
+  })
+
+  it('expands to the full chunk text when the expand control is clicked', async () => {
+    const user = userEvent.setup()
+    const citation: Citation = {
+      ...baseCitation,
+      file_name: 'paper.pdf',
+      locator: { type: 'page', value: 4 },
+      text: longPageText,
+    }
+    render(<CitationMarker citation={citation} />)
+
+    await user.click(screen.getByText('[1]'))
+    await user.click(await screen.findByRole('button', { name: /show full page text/i }))
+
+    expect(screen.getByText(longPageText)).toBeInTheDocument()
+  })
+
+  it('never truncates a plain-text citation, even a long one', async () => {
+    const user = userEvent.setup()
+    const citation: Citation = {
+      ...baseCitation,
+      text: longPageText,
+      locator: null,
+    }
+    render(<CitationMarker citation={citation} />)
+
+    await user.click(screen.getByText('[1]'))
+
+    expect(await screen.findByText(longPageText)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /show full page text/i })).not.toBeInTheDocument()
+  })
 })
