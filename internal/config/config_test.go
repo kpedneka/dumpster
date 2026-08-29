@@ -93,3 +93,18 @@ func TestLoad_sweepIntervalFromEnv(t *testing.T) {
 		t.Errorf("SweepInterval: got %v, want 2m", c.SweepInterval)
 	}
 }
+
+func TestLoad_jobStaleTimeoutDefault(t *testing.T) {
+	c := Load()
+	if c.JobStaleTimeout != 15*time.Minute {
+		t.Errorf("JobStaleTimeout default: got %v, want 15m", c.JobStaleTimeout)
+	}
+}
+
+func TestLoad_jobStaleTimeoutFromEnv(t *testing.T) {
+	t.Setenv("JOB_STALE_TIMEOUT", "10m")
+	c := Load()
+	if c.JobStaleTimeout != 10*time.Minute {
+		t.Errorf("JobStaleTimeout: got %v, want 10m", c.JobStaleTimeout)
+	}
+}

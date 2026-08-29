@@ -112,6 +112,12 @@ func main() {
 	// Cadence is controlled by SWEEP_INTERVAL (default 5m).
 	go runSweepLoop(ctx, cfg.SweepInterval, pool, obj, txRunner, logger)
 
+	// Job-reclaim runs on the same cadence as the session sweep — both are
+	// periodic maintenance with no need for independent tuning at this
+	// scale. Staleness threshold is JOB_STALE_TIMEOUT (default 15m); see
+	// queue/pgstore.Store.ReclaimStale for what this recovers from.
+	go runJobReclaimLoop(ctx, cfg.SweepInterval, cfg.JobStaleTimeout, q, logger)
+
 	logger.Info("worker starting",
 		"db_host", cfg.DBHost, "db_name", cfg.DBName,
 		"entity_types", cfg.EntityTypes,
@@ -146,6 +152,36 @@ func runSweepLoop(ctx context.Context, interval time.Duration, pool *pgxpool.Poo
 	}
 
 	run() // run once immediately so a restarted worker doesn't wait a full interval
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			run()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// runJobReclaimLoop resets jobs orphaned by a dead or restarted worker
+// (stuck "processing" past staleAfter) back to "pending" immediately on
+// startup and then on every tick of interval, so this worker itself
+// recovers anything left behind by its own previous instance. Exits when
+// ctx is cancelled.
+func runJobReclaimLoop(ctx context.Context, interval, staleAfter time.Duration, q *qpg.Store, logger *slog.Logger) {
+	run := func() {
+		reclaimed, deadLettered, err := q.ReclaimStale(ctx, staleAfter)
+		if err != nil {
+			logger.Error("job reclaim failed", "err", err)
+			return
+		}
+		if reclaimed > 0 || deadLettered > 0 {
+			logger.Info("job reclaim complete", "reclaimed", reclaimed, "dead_lettered", deadLettered)
+		}
+	}
+
+	run()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

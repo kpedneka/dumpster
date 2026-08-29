@@ -98,6 +98,19 @@ type Config struct {
 	// SweepInterval is how often the always-on worker runs the session sweep.
 	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
 	SweepInterval time.Duration
+	// JobStaleTimeout is how long a job may sit claimed ("processing")
+	// before it's treated as orphaned and reclaimed back to "pending" on
+	// the same ticker as the session sweep. Guards against a job stuck
+	// forever if the worker that claimed it dies or restarts mid-run —
+	// nothing else detects that: Dequeue's claim-then-commit transaction is
+	// short, so a crash mid-Handle() never touches the jobs table again,
+	// and Nack (which normally dead-letters after enough failures) only
+	// fires when Handle() actually returns, which a killed process never
+	// gets the chance to do. Defaults to 15 minutes, generous enough that a
+	// legitimately slow job (cold GLiNER model load plus many chunks has
+	// been observed taking several minutes) isn't reclaimed out from under
+	// a worker still actively running it.
+	JobStaleTimeout time.Duration
 }
 
 func Load() *Config {
@@ -139,6 +152,7 @@ func Load() *Config {
 		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
 		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
 		SweepInterval:          getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
+		JobStaleTimeout:        getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
 	}
 }
 
