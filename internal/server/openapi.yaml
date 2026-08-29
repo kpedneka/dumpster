@@ -496,8 +496,7 @@ paths:
       summary: Upload a document
       description: >-
         Accepts .txt and .md files (text pipeline) plus .pdf, .png, .jpg (region-
-        classification pipeline: pdfplumber + unstructured.io layout analysis +
-        Ollama VLM for figures).
+        classification pipeline: pdfplumber + unstructured.io layout analysis).
       requestBody:
         required: true
         content:

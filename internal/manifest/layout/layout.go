@@ -6,8 +6,10 @@
 //
 // This adapter covers layers 1 (pdfplumber: native text/tables) and 2
 // (unstructured.io: layout segmentation of whatever pdfplumber cannot
-// resolve). Layer 3 (VLM via Ollama) runs Go-side in the
-// RegionClassificationHandler and is never called from this package.
+// resolve). A third layer, VLM-based figure description and scanned-content
+// confirmation, was scaffolded in RegionClassificationHandler but never
+// finished being wired up and has since been removed; see that handler's
+// type doc for why.
 package layout
 
 import (
@@ -55,10 +57,12 @@ type RawRegion struct {
 	// ImageBase64 is a base64-encoded PNG crop of the region, set for figure
 	// and unconfirmed_* regions that need a VLM follow-up call.
 	ImageBase64 string
-	// NeedsVLM is a directive for the Go-side handler:
-	//   "describe"      — call vision.Describer.Describe (for figures).
-	//   "confirm_scan"  — call vision.Describer.ConfirmScanned (for suspected scans).
-	//   ""              — no VLM needed (native content already resolved).
+	// NeedsVLM classifies why layers 1+2 couldn't fully resolve this region:
+	//   "describe"      — a figure/image (no VLM description; see
+	//                     RegionClassificationHandler's type doc).
+	//   "confirm_scan"  — suspected scanned content (no VLM confirmation;
+	//                     treated as skipped rather than guessed).
+	//   ""              — no follow-up needed (native content already resolved).
 	NeedsVLM string
 }
 

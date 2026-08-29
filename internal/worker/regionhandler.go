@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -16,7 +15,6 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
-	"github.com/kunalpednekar/dumpster/internal/vision"
 )
 
 // LayoutExtractor classifies PDF regions via the Python layered classifier
@@ -38,7 +36,16 @@ const extractorVersion = "v1"
 // DocumentHandler for text/markdown files.
 //
 // Image uploads are handled as a degenerate case: one figure region covering
-// the whole image, described by the VLM, no Python subprocess needed.
+// the whole image, no Python subprocess needed.
+//
+// Regions the layered classifier can't resolve on its own (figures,
+// suspected-scanned text/tables) are marked skipped rather than sent to a
+// VLM for a follow-up call: the VLM follow-up step was never fully wired up
+// (the image-cropping step that would give it real pixel data was stubbed
+// out and never finished, so every such call was already describing/
+// confirming nothing) and, independently, was measured costing 15-21s of
+// stalled latency per region. Revisit as its own card if multimodal figure
+// description becomes a real requirement.
 //
 // This handler is selected at upload time by the document upload handler
 // based on content type; DocumentHandler remains the path for text/markdown.
@@ -47,8 +54,7 @@ type RegionClassificationHandler struct {
 	objects   objectstore.ObjectStore
 	chunks    chunk.Repository
 	manifest  manifest.Repository
-	layout    LayoutExtractor   // nil for image uploads (bypassed)
-	describer vision.Describer
+	layout    LayoutExtractor // nil for image uploads (bypassed)
 	embedder  llm.Embedder
 	publisher queue.Publisher
 }
@@ -61,7 +67,6 @@ func NewRegionClassificationHandler(
 	chunks chunk.Repository,
 	manifest manifest.Repository,
 	layoutExtractor LayoutExtractor,
-	describer vision.Describer,
 	embedder llm.Embedder,
 	publisher queue.Publisher,
 ) *RegionClassificationHandler {
@@ -71,7 +76,6 @@ func NewRegionClassificationHandler(
 		chunks:    chunks,
 		manifest:  manifest,
 		layout:    layoutExtractor,
-		describer: describer,
 		embedder:  embedder,
 		publisher: publisher,
 	}
@@ -132,8 +136,7 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 			RegionType:  "figure",
 			PageNumber:  1,
 			BoundingBox: [4]float64{0, 0, 1, 1},
-			ImageBase64: base64.StdEncoding.EncodeToString(rawBytes),
-			NeedsVLM:   "describe",
+			NeedsVLM:    "describe",
 		}}
 	} else {
 		// PDF: run layered classifier (layers 1+2 via Python).
@@ -146,35 +149,21 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 		}
 	}
 
-	// Layer 3: VLM follow-up for regions that need it.
+	// Regions the layered classifier couldn't resolve on its own (figures,
+	// suspected-scanned text/tables) are marked skipped directly — no VLM
+	// follow-up call (see the type doc for why).
 	resolved := make([]resolvedRegion, 0, len(rawRegions))
 	for _, r := range rawRegions {
 		res := resolvedRegion{raw: r}
 		switch r.NeedsVLM {
 		case "describe":
-			imgBytes, _ := base64.StdEncoding.DecodeString(r.ImageBase64)
-			desc, _ := h.describer.Describe(ctx, imgBytes)
-			res.text = desc
-			if desc == "" {
-				res.status = manifest.StatusSkipped
-				res.regionType = manifest.RegionTypeScannedText
-			} else {
-				res.status = manifest.StatusIndexed
-				res.regionType = manifest.RegionTypeFigure
-			}
+			res.status = manifest.StatusSkipped
+			res.regionType = manifest.RegionTypeFigure
 		case "confirm_scan":
-			imgBytes, _ := base64.StdEncoding.DecodeString(r.ImageBase64)
-			isScanned, _ := h.describer.ConfirmScanned(ctx, imgBytes)
-			if isScanned {
-				res.status = manifest.StatusSkipped
-				if r.RegionType == "unconfirmed_table" {
-					res.regionType = manifest.RegionTypeScannedTable
-				} else {
-					res.regionType = manifest.RegionTypeScannedText
-				}
+			res.status = manifest.StatusSkipped
+			if r.RegionType == "unconfirmed_table" {
+				res.regionType = manifest.RegionTypeScannedTable
 			} else {
-				// VLM says not scanned but we have no text — mark failed.
-				res.status = manifest.StatusFailed
 				res.regionType = manifest.RegionTypeScannedText
 			}
 		default:
@@ -205,13 +194,13 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 	for _, res := range resolved {
 		bb := res.raw.BoundingBox
 		regions = append(regions, &manifest.Region{
-			DocumentID:  doc.ID,
-			KBID:        doc.KBID,
-			UserID:      doc.UserID,
-			RegionType:  res.regionType,
-			PageNumber:  res.raw.PageNumber,
-			BoundingBox: manifest.BoundingBox{X0: bb[0], Y0: bb[1], X1: bb[2], Y1: bb[3]},
-			Status:      res.status,
+			DocumentID:       doc.ID,
+			KBID:             doc.KBID,
+			UserID:           doc.UserID,
+			RegionType:       res.regionType,
+			PageNumber:       res.raw.PageNumber,
+			BoundingBox:      manifest.BoundingBox{X0: bb[0], Y0: bb[1], X1: bb[2], Y1: bb[3]},
+			Status:           res.status,
 			ExtractorVersion: extractorVersion,
 		})
 	}

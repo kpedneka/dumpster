@@ -26,21 +26,3 @@ services:
         required: false
       - path: .env.local
         required: false
-    environment:
-      - OLLAMA_URL=http://ollama:11434
-    depends_on:
-      - ollama
-
-  # Local VLM service for PDF region classification (figure description and
-  # scanned-content confirmation). Pull the model once before first use:
-  #   docker compose exec ollama ollama pull qwen2.5vl
-  # Or run: make ollama-pull
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_models:/root/.ollama
-
-volumes:
-  ollama_models:

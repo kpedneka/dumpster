@@ -17,8 +17,6 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
-	"github.com/kunalpednekar/dumpster/internal/vision"
-	visionmock "github.com/kunalpednekar/dumpster/internal/vision/mock"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
@@ -87,19 +85,19 @@ func TestRegionHandler_Image_DegenrateOneRegion(t *testing.T) {
 	chunks := chunkmem.New()
 	manifestRepo := manifestmem.New()
 	pub := qmem.New()
-	describer := visionmock.New()
-	describer.DescribeResponse = "A pie chart showing budget allocation."
 
 	job, userID := seedRegionJob(t, docs, objects, "fakeimagebytes", "image/png")
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	h := worker.NewRegionClassificationHandler(
-		docs, objects, chunks, manifestRepo, nil, describer, fakeEmbedder{}, pub,
+		docs, objects, chunks, manifestRepo, nil, fakeEmbedder{}, pub,
 	)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 
+	// Figure regions have no VLM follow-up (see regionhandler.go's type doc):
+	// detected but skipped, not described.
 	regions, _ := manifestRepo.ListByDocument(ctx, userID, job.DocumentID)
 	if len(regions) != 1 {
 		t.Fatalf("expected 1 manifest region, got %d", len(regions))
@@ -108,29 +106,24 @@ func TestRegionHandler_Image_DegenrateOneRegion(t *testing.T) {
 	if r.RegionType != manifest.RegionTypeFigure {
 		t.Errorf("region type: got %q, want %q", r.RegionType, manifest.RegionTypeFigure)
 	}
-	if r.Status != manifest.StatusIndexed {
-		t.Errorf("region status: got %q, want %q", r.Status, manifest.StatusIndexed)
+	if r.Status != manifest.StatusSkipped {
+		t.Errorf("region status: got %q, want %q", r.Status, manifest.StatusSkipped)
 	}
 
-	// One chunk should exist with the VLM description as text.
+	// No description means no chunk.
 	cs, _ := chunks.ListByDocument(ctx, userID, job.DocumentID)
-	if len(cs) == 0 {
-		t.Fatal("expected at least 1 chunk from figure description")
-	}
-	if !strings.Contains(cs[0].Text, "pie chart") {
-		t.Errorf("chunk text should contain VLM description, got %q", cs[0].Text)
-	}
-	if cs[0].PageNumber == nil || *cs[0].PageNumber != 1 {
-		t.Errorf("chunk should carry page_number=1 from image upload path")
+	if len(cs) != 0 {
+		t.Errorf("expected no chunks for an undescribed figure, got %d", len(cs))
 	}
 
-	// Document should reach Indexed.
+	// Document should still reach Indexed even with nothing to index.
 	doc, _ := docs.Get(ctx, userID, job.DocumentID)
 	if doc.Status != document.StatusIndexed {
 		t.Errorf("document status: got %q, want indexed", doc.Status)
 	}
 
-	// Entity extraction should be enqueued.
+	// Entity extraction should still be enqueued (it's unconditional on
+	// reaching Indexed, independent of whether any chunks were produced).
 	if len(pub.EntityExtractionEvents()) != 1 {
 		t.Errorf("expected 1 entity-extraction event published, got %d", len(pub.EntityExtractionEvents()))
 	}
@@ -142,23 +135,19 @@ func TestRegionHandler_PDF_MixedRegions(t *testing.T) {
 	chunks := chunkmem.New()
 	manifestRepo := manifestmem.New()
 	pub := qmem.New()
-	describer := visionmock.New()
-	describer.DescribeResponse = "A bar chart showing revenue."
 
 	// Fake layout extractor: 1 native_text, 1 figure, 1 unconfirmed_table
 	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
 		{RegionType: "native_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 0.3}, Text: "Executive summary text.", NeedsVLM: ""},
-		{RegionType: "figure", PageNumber: 1, BoundingBox: [4]float64{0, 0.4, 1, 0.7}, ImageBase64: "aW1hZ2U=", NeedsVLM: "describe"},
-		{RegionType: "unconfirmed_table", PageNumber: 2, BoundingBox: [4]float64{0, 0, 1, 0.5}, ImageBase64: "dGFibGU=", NeedsVLM: "confirm_scan"},
+		{RegionType: "figure", PageNumber: 1, BoundingBox: [4]float64{0, 0.4, 1, 0.7}, NeedsVLM: "describe"},
+		{RegionType: "unconfirmed_table", PageNumber: 2, BoundingBox: [4]float64{0, 0, 1, 0.5}, NeedsVLM: "confirm_scan"},
 	}}
-	// ConfirmScanned returns true (confirmed scanned) for the table.
-	describer.IsScanned = true
 
 	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	h := worker.NewRegionClassificationHandler(
-		docs, objects, chunks, manifestRepo, fakeExtractor, describer, fakeEmbedder{}, pub,
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, pub,
 	)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -178,13 +167,15 @@ func TestRegionHandler_PDF_MixedRegions(t *testing.T) {
 			skipped++
 		}
 	}
-	if indexed != 2 || skipped != 1 {
-		t.Errorf("summary: got indexed=%d skipped=%d, want indexed=2 skipped=1", indexed, skipped)
+	// Only the native_text region resolves without a VLM follow-up; the
+	// figure and unconfirmed_table regions are now always skipped.
+	if indexed != 1 || skipped != 2 {
+		t.Errorf("summary: got indexed=%d skipped=%d, want indexed=1 skipped=2", indexed, skipped)
 	}
 
 	cs, _ := chunks.ListByDocument(ctx, userID, job.DocumentID)
-	if len(cs) < 2 {
-		t.Fatalf("expected at least 2 chunks (native text + figure), got %d", len(cs))
+	if len(cs) == 0 {
+		t.Fatalf("expected at least 1 chunk (native text), got %d", len(cs))
 	}
 
 	doc, _ := docs.Get(ctx, userID, job.DocumentID)
@@ -199,19 +190,17 @@ func TestRegionHandler_PDF_FullyScanned_StillReachesIndexed(t *testing.T) {
 	chunks := chunkmem.New()
 	manifestRepo := manifestmem.New()
 	pub := qmem.New()
-	describer := visionmock.New()
-	describer.IsScanned = true
 
-	// All regions are scanned/unconfirmed and confirmed scanned.
+	// All regions are unconfirmed, and unconfirmed regions are always skipped.
 	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
-		{RegionType: "unconfirmed_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 1}, ImageBase64: "aW1n", NeedsVLM: "confirm_scan"},
+		{RegionType: "unconfirmed_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 1}, NeedsVLM: "confirm_scan"},
 	}}
 
 	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	h := worker.NewRegionClassificationHandler(
-		docs, objects, chunks, manifestRepo, fakeExtractor, describer, fakeEmbedder{}, pub,
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, pub,
 	)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -239,7 +228,6 @@ func TestRegionHandler_RegionTaggedOnChunks(t *testing.T) {
 	chunks := chunkmem.New()
 	manifestRepo := manifestmem.New()
 	pub := qmem.New()
-	describer := visionmock.New()
 
 	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
 		{RegionType: "native_text", PageNumber: 3, BoundingBox: [4]float64{0.1, 0.2, 0.9, 0.5}, Text: "Some text on page three.", NeedsVLM: ""},
@@ -249,7 +237,7 @@ func TestRegionHandler_RegionTaggedOnChunks(t *testing.T) {
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	h := worker.NewRegionClassificationHandler(
-		docs, objects, chunks, manifestRepo, fakeExtractor, describer, fakeEmbedder{}, pub,
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, pub,
 	)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v", err)
@@ -279,14 +267,12 @@ func TestRegionHandler_IdempotentRerun(t *testing.T) {
 	chunks := chunkmem.New()
 	manifestRepo := manifestmem.New()
 	pub := qmem.New()
-	describer := visionmock.New()
-	describer.DescribeResponse = "A diagram."
 
 	job, userID := seedRegionJob(t, docs, objects, "fakeimagebytes", "image/png")
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	h := worker.NewRegionClassificationHandler(
-		docs, objects, chunks, manifestRepo, nil, describer, fakeEmbedder{}, pub,
+		docs, objects, chunks, manifestRepo, nil, fakeEmbedder{}, pub,
 	)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("first Handle: %v", err)
@@ -314,13 +300,12 @@ func TestRegionHandler_OnFailed_MarksDocumentFailed(t *testing.T) {
 	chunks := chunkmem.New()
 	manifestRepo := manifestmem.New()
 	pub := qmem.New()
-	describer := visionmock.New()
 
 	job, userID := seedRegionJob(t, docs, objects, "bytes", "image/png")
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	h := worker.NewRegionClassificationHandler(
-		docs, objects, chunks, manifestRepo, nil, describer, fakeEmbedder{}, pub,
+		docs, objects, chunks, manifestRepo, nil, fakeEmbedder{}, pub,
 	)
 	h.OnFailed(ctx, job)
 
@@ -334,9 +319,5 @@ func TestRegionHandler_ImplementsHandler(t *testing.T) {
 	var _ worker.Handler = (*worker.RegionClassificationHandler)(nil)
 }
 
-// Ensure vision.Describer interface is correctly defined by checking mock implements it.
-var _ vision.Describer = (*visionmock.Describer)(nil)
-
 // Ensure layout extractor interface is satisfied by the fake.
 var _ worker.LayoutExtractor = (*fakeLayoutExtractor)(nil)
-

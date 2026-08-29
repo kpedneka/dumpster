@@ -30,7 +30,7 @@ const (
 	// does not touch chunks, embeddings, or entity text.
 	JobTypeEdgeExtraction JobType = "edge_extraction"
 	// JobTypeRegionClassification runs the layered PDF/image region
-	// classifier (pdfplumber + unstructured.io + Ollama VLM) and is the
+	// classifier (pdfplumber + unstructured.io) and is the
 	// alternative entry point to JobTypeDocumentIndexing for non-text
 	// file types. It produces the ingestion manifest and the document's
 	// chunks, then enqueues JobTypeEntityExtraction.
