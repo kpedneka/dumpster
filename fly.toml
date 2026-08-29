@@ -67,14 +67,17 @@ primary_region = "iad"
 [[vm]]
   count     = 1
   size      = "shared-cpu-1x"
-  # 1024mb (raised from 512mb): fly logs show extract_regions.py's "fast"
-  # unstructured.partition_pdf strategy (pdfminer + cv2 + numpy) hitting a
-  # consistent ~390MB RSS floor across every PDF that OOM-killed, regardless
-  # of file size — leaving no headroom once the Go worker process and VM
-  # baseline are added on top of a 512MB box. This is a stopgap based on one
-  # observed data point, not a profiled ceiling; see v4.6 for adding real
-  # peak-RSS instrumentation so future sizing is measured, not guessed.
-  memory    = "1024mb"
+  # 2048mb (raised from 1024mb, v4.7): the entity-extraction sidecar is now a
+  # persistent process instead of spawned fresh per document, so its ~1.3GB
+  # idle-loaded footprint (measured locally: torch + transformers + the
+  # GLiNER/DeBERTa-v3-base weights, sitting in memory doing nothing) becomes
+  # a permanent baseline for the worker's whole lifetime, not a few-seconds
+  # spike per document. Real peak is that ~1.3GB plus extract_regions.py's
+  # own ~390MB (measured in v4.6) whenever a PDF is actively parsing
+  # concurrently, plus Go binary overhead — doesn't fit in 1024mb at all.
+  # Not yet confirmed against the actual Fly Linux runtime (measured on
+  # Apple Silicon locally); revisit if real usage says otherwise.
+  memory    = "2048mb"
   processes = ["worker"]
 
   # Worker uses the direct Neon connection (no pooler) to support SKIP LOCKED
