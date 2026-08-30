@@ -3,51 +3,62 @@ package layout
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 const fakePDF = "%PDF-1.4 fake"
 
-func TestExtractRegions_EmptyInput_NoCommandRun(t *testing.T) {
+func TestExtractRegions_EmptyInput_NoRequestSent(t *testing.T) {
 	called := false
-	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py"})
-	ex.runCommand = func(_ context.Context, _, _ string, _ []byte) ([]byte, error) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
-		return nil, nil
-	}
+	}))
+	defer srv.Close()
 
+	ex := New(Config{BaseURL: srv.URL})
 	got, err := ex.ExtractRegions(context.Background(), nil)
 	if err != nil || got != nil {
 		t.Fatalf("ExtractRegions(nil): got (%v, %v), want (nil, nil)", got, err)
 	}
 	if called {
-		t.Error("runCommand should not be invoked for empty input")
+		t.Error("no HTTP request should be sent for empty input")
 	}
 }
 
-func TestExtractRegions_MapsJSONResponse(t *testing.T) {
-	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py"})
-	ex.runCommand = func(_ context.Context, pythonPath, scriptPath string, stdin []byte) ([]byte, error) {
-		if pythonPath != "python3" || scriptPath != "script.py" {
-			t.Errorf("runCommand args: got (%q, %q)", pythonPath, scriptPath)
+func TestExtractRegions_PostsToRegionsEndpointAndMapsResponse(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody request
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
 		}
-		if len(stdin) == 0 {
-			t.Error("expected non-empty stdin")
-		}
-		resp := `{"regions":[
+		_, _ = w.Write([]byte(`{"regions":[
 			{"region_type":"native_text","page_number":1,"bbox":[0,0,1,0.5],"text":"Hello world","image_base64":"","needs_vlm":""},
 			{"region_type":"figure","page_number":1,"bbox":[0,0.5,1,1],"text":"","image_base64":"aGVsbG8=","needs_vlm":"describe"}
-		]}`
-		return []byte(resp), nil
-	}
+		]}`))
+	}))
+	defer srv.Close()
 
+	ex := New(Config{BaseURL: srv.URL})
 	got, err := ex.ExtractRegions(context.Background(), []byte(fakePDF))
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	if gotPath != "/regions" || gotMethod != http.MethodPost {
+		t.Errorf("request: got %s %s, want POST /regions", gotMethod, gotPath)
+	}
+	if gotBody.PDFB64 == "" {
+		t.Error("expected non-empty pdf_base64 in request body")
+	}
+
 	if len(got) != 2 {
 		t.Fatalf("got %d regions, want 2", len(got))
 	}
@@ -71,11 +82,13 @@ func TestExtractRegions_MapsJSONResponse(t *testing.T) {
 // decisions can be based on a measured distribution, not a few OOM-kill log
 // lines from jobs that crashed.
 func TestExtractRegions_LogsPeakRSS(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"regions":[],"peak_rss_kb":391272}`))
+	}))
+	defer srv.Close()
+
 	var buf bytes.Buffer
-	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py", Logger: log.New(&buf, "", 0)})
-	ex.runCommand = func(_ context.Context, _, _ string, _ []byte) ([]byte, error) {
-		return []byte(`{"regions":[],"peak_rss_kb":391272}`), nil
-	}
+	ex := New(Config{BaseURL: srv.URL, Logger: log.New(&buf, "", 0)})
 
 	if _, err := ex.ExtractRegions(context.Background(), []byte(fakePDF)); err != nil {
 		t.Fatal(err)
@@ -85,34 +98,47 @@ func TestExtractRegions_LogsPeakRSS(t *testing.T) {
 	}
 }
 
-func TestExtractRegions_CommandError_Propagated(t *testing.T) {
-	wantErr := errors.New("script exited 1")
-	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py"})
-	ex.runCommand = func(_ context.Context, _, _ string, _ []byte) ([]byte, error) {
-		return nil, wantErr
-	}
+func TestExtractRegions_NonOKStatus_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid pdf_base64"}`))
+	}))
+	defer srv.Close()
 
+	ex := New(Config{BaseURL: srv.URL})
 	_, err := ex.ExtractRegions(context.Background(), []byte(fakePDF))
 	if err == nil {
-		t.Fatal("expected error to propagate")
+		t.Fatal("expected error for non-200 response")
 	}
 }
 
-func TestExtractRegions_InvalidJSON_ReturnsError(t *testing.T) {
-	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py"})
-	ex.runCommand = func(_ context.Context, _, _ string, _ []byte) ([]byte, error) {
-		return []byte("not json"), nil
-	}
+func TestExtractRegions_MalformedJSONResponse_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not json"))
+	}))
+	defer srv.Close()
 
+	ex := New(Config{BaseURL: srv.URL})
 	_, err := ex.ExtractRegions(context.Background(), []byte(fakePDF))
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
 	}
 }
 
-func TestNew_DefaultsToRealRunCommand(t *testing.T) {
-	ex := New(Config{PythonPath: "python3", ScriptPath: "script.py"})
-	if ex.runCommand == nil {
-		t.Fatal("expected New to wire a default runCommand")
+func TestExtractRegions_UnreachableService_ReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close() // closed before use: connections to it are refused
+
+	ex := New(Config{BaseURL: srv.URL})
+	_, err := ex.ExtractRegions(context.Background(), []byte(fakePDF))
+	if err == nil {
+		t.Fatal("expected error when the inference service is unreachable")
+	}
+}
+
+func TestNew_UsesRealHTTPClient(t *testing.T) {
+	ex := New(Config{BaseURL: "http://example.invalid"})
+	if ex.client == nil {
+		t.Fatal("expected New to wire a real HTTP client")
 	}
 }

@@ -1,5 +1,5 @@
 // Package mock provides a test double for entity.Extractor, used everywhere
-// except the real spaCy+GLiNER adapter (internal/entity/gliner).
+// except the real inference-service adapter (internal/entity/inference).
 package mock
 
 import (

@@ -71,10 +71,11 @@ type Repository interface {
 // must not mutate or re-derive chunk text/offsets — extraction reads
 // existing chunks, it never re-chunks.
 //
-// The only implementation that imports a vendor/ML dependency is
-// internal/entity/gliner, which shells out to a local spaCy+GLiNER process;
-// every other caller depends on this interface so units stay testable in
-// isolation (see internal/entity/mock for the test double).
+// The only implementation that talks to a vendor/ML dependency is
+// internal/entity/inference, which calls the consolidated ML inference
+// service's /entities endpoint over HTTP; every other caller depends on
+// this interface so units stay testable in isolation (see
+// internal/entity/mock for the test double).
 type Extractor interface {
 	// Extract returns the entities found across chunks, restricted to the
 	// given allowed entity types. The returned entities' ChunkID/DocumentID/

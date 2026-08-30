@@ -22,8 +22,11 @@ func TestLoad_defaults(t *testing.T) {
 	if !reflect.DeepEqual(c.EntityTypes, defaultEntityTypes) {
 		t.Errorf("EntityTypes: got %v, want %v", c.EntityTypes, defaultEntityTypes)
 	}
-	if c.EntityExtractorScript != "scripts/extract_entities.py" {
-		t.Errorf("EntityExtractorScript: got %q, want %q", c.EntityExtractorScript, "scripts/extract_entities.py")
+	if c.InferenceServiceURL != "http://inference:8000" {
+		t.Errorf("InferenceServiceURL: got %q, want %q", c.InferenceServiceURL, "http://inference:8000")
+	}
+	if c.WorkerConcurrency != 5 {
+		t.Errorf("WorkerConcurrency: got %d, want %d", c.WorkerConcurrency, 5)
 	}
 }
 

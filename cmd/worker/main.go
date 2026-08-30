@@ -17,7 +17,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/entity/gliner"
+	entityinference "github.com/kunalpednekar/dumpster/internal/entity/inference"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/openai"
@@ -80,16 +80,10 @@ func main() {
 	edges := graphedgepg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
 	embedder := openai.New(cfg.OpenAIAPIKey, cfg.OpenAIEmbedModel)
-	extractor := gliner.New(gliner.Config{
-		PythonPath: cfg.EntityExtractorPython,
-		ScriptPath: cfg.EntityExtractorScript,
-	})
+	extractor := entityinference.New(cfg.InferenceServiceURL)
 
 	manifestRepo := manifestpg.New(txRunner)
-	layoutExtractor := layout.New(layout.Config{
-		PythonPath: cfg.EntityExtractorPython, // reuse the same Python interpreter
-		ScriptPath: cfg.RegionExtractorScript,
-	})
+	layoutExtractor := layout.New(layout.Config{BaseURL: cfg.InferenceServiceURL})
 
 	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
 		WithEntityExtractionPublisher(q)
@@ -100,7 +94,7 @@ func main() {
 		WithEdgeExtractionPublisher(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
 
-	w := worker.New(q, docHandler, worker.Config{Instruments: instruments})
+	w := worker.New(q, docHandler, worker.Config{Instruments: instruments, Concurrency: cfg.WorkerConcurrency})
 	w.RegisterHandler(queue.JobTypeRegionClassification, regionHandler)
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
 	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)
