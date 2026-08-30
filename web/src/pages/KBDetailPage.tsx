@@ -70,16 +70,51 @@ function citedPagesFor(documentId: string, citations: Citation[]): number[] {
   return Array.from(pages).sort((a, b) => a - b)
 }
 
+const CITATION_NUMBER_RE = /^\{CITE_(\d+)\}$/
+const WHITESPACE_ONLY_RE = /^\s*$/
+
+// Adjacent citations supporting one claim (buildPrompt asks the model to
+// place them with no separator, e.g. "[1][2]") are grouped into a single
+// CitationMarker rather than rendered as one badge per number — whitespace
+// between two resolvable citation numbers doesn't break the cluster, since
+// the model isn't guaranteed to omit it even when asked to.
 function injectCitations(children: React.ReactNode, citations: Citation[]): React.ReactNode {
   if (typeof children === 'string') {
     const parts = children.split(CITATION_PLACEHOLDER_RE)
     if (parts.length === 1) return children
-    return parts.map((part, i) => {
-      const m = part.match(/^\{CITE_(\d+)\}$/)
-      if (!m) return part
-      const cite = citations.find((c) => c.number === Number(m[1]))
-      return cite ? <CitationMarker key={i} citation={cite} /> : `[${m[1]}]`
+
+    const nodes: React.ReactNode[] = []
+    let cluster: Citation[] = []
+
+    const flushCluster = (key: string) => {
+      if (cluster.length === 0) return
+      nodes.push(<CitationMarker key={key} citations={cluster} />)
+      cluster = []
+    }
+
+    parts.forEach((part, i) => {
+      const m = part.match(CITATION_NUMBER_RE)
+      if (m) {
+        const cite = citations.find((c) => c.number === Number(m[1]))
+        if (cite) {
+          cluster.push(cite)
+          return
+        }
+        // Unresolvable citation number: close any open cluster, then fall
+        // back to the literal marker text, matching prior behavior.
+        flushCluster(`c-${i}`)
+        nodes.push(`[${m[1]}]`)
+        return
+      }
+      if (cluster.length > 0 && WHITESPACE_ONLY_RE.test(part)) {
+        return
+      }
+      flushCluster(`c-${i}`)
+      nodes.push(<Fragment key={`t-${i}`}>{part}</Fragment>)
     })
+    flushCluster('c-end')
+
+    return nodes
   }
   if (Array.isArray(children)) {
     return (children as React.ReactNode[]).map((child, i) => (

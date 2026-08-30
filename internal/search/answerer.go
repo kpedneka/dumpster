@@ -67,6 +67,7 @@ func buildPrompt(query string, chunks []retrieval.ScoredChunk) string {
 	var sb strings.Builder
 	sb.WriteString("You are a knowledge-base assistant. Answer the question using ONLY the source chunks below.\n")
 	sb.WriteString("Cite every factual claim with [N] where N is the chunk number.\n")
+	sb.WriteString("When a claim is supported by more than one chunk, place their citations immediately adjacent with no space or punctuation between them, e.g. [1][2], not [1] [2] or [1, 2].\n")
 	sb.WriteString("If the chunks do not contain enough information, reply with exactly: \"" + notFoundSummary + "\"\n\n")
 	sb.WriteString("Source chunks:\n")
 	for i, sc := range chunks {
