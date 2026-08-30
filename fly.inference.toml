@@ -22,13 +22,20 @@ primary_region = "iad"
 # tax this consolidation exists to eliminate.
 [[vm]]
   count  = 1
-  size   = "shared-cpu-1x"
-  # Combined warm footprint measured locally: GLiNER (~1.49GB) + the layout
-  # classifier's dependency stack (~0.83GB) + the local embedding model,
-  # all resident simultaneously in one process — see the System
-  # Architecture page's Inference Service sub-page for the full breakdown.
-  # 4096mb gives real headroom over that idle baseline for the transient
-  # peak during active PDF parsing; revisit against actual Fly Linux
-  # measurements once deployed; the same "not yet confirmed against real
-  # Fly runtime" caveat that applied to the worker's own sizing applies here.
+  # shared-cpu-2x, not -1x: Fly caps memory at 2GB per shared vCPU
+  # (shared-cpu-1x maxes out at 2048mb — confirmed the hard way, a first
+  # deploy attempt at -1x with 4096mb failed outright with "invalid
+  # config.guest.memory_mb, cannot exceed 2048 MiB"). -2x's 2 vCPUs are
+  # also a genuine, not just incidental, benefit here: this service serving
+  # concurrent requests (worker's own concurrency, once local embeddings
+  # add query-path traffic on top of ingestion) needs more than one real
+  # core to actually run those requests in parallel rather than interleave
+  # them on a single shared core.
+  size   = "shared-cpu-2x"
+  # Combined warm footprint, measured directly from a real running
+  # container (not estimated): 2.69GB RSS with all three models loaded
+  # (GLiNER, the layout classifier's dependency stack, and the local
+  # embedding model) after processing one request of each kind. 4096mb
+  # gives ~1.3GB of headroom above that measured figure for the transient
+  # peak during active PDF parsing plus normal process overhead.
   memory = "4096mb"
