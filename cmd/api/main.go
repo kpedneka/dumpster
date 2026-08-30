@@ -10,6 +10,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
+	inquirypg "github.com/kunalpednekar/dumpster/internal/inquiry/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
@@ -89,6 +90,7 @@ func main() {
 		Publisher:    qpg.New(pool),
 		Manifest:     manifestpg.New(txRunner),
 		Searcher:     searcher,
+		Inquiries:    inquirypg.New(txRunner),
 		Sessions:     sessionpg.New(pool),
 		Instruments:  instruments,
 		SPADir:       "web/dist",
