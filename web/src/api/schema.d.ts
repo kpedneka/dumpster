@@ -392,14 +392,12 @@ export interface paths {
                 };
             };
             responses: {
-                /** @description Search result with cited summary */
+                /** @description A Server-Sent Events stream, not a single JSON body — OpenAPI has no first-class way to express this, so the shape is documented here instead of in `content`. Frames arrive in this order: exactly one "retrieved_files" event (SearchRetrievedFilesEvent) once retrieval finishes, then zero or more "delta" events (SearchDeltaEvent) as the answer is generated, then exactly one of "done" (SearchDoneEvent) or "error" (SearchErrorEvent, only possible once streaming has already started — see the 500 response for a failure before that point). Each frame is `event: <name>\ndata: <json>\n\n`. */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content: {
-                        "application/json": components["schemas"]["SearchResult"];
-                    };
+                    content?: never;
                 };
                 /** @description Bad request */
                 400: {
@@ -428,7 +426,7 @@ export interface paths {
                         "application/json": components["schemas"]["Error"];
                     };
                 };
-                /** @description Search failed */
+                /** @description Search failed before any event was streamed (e.g. retrieval itself failed) — a normal JSON error, since nothing has been written yet at this point. */
                 500: {
                     headers: {
                         [name: string]: unknown;
@@ -502,7 +500,7 @@ export interface paths {
         put?: never;
         /**
          * Upload a document
-         * @description Accepts .txt and .md files (text pipeline) plus .pdf, .png, .jpg (region- classification pipeline: pdfplumber + unstructured.io layout analysis + Ollama VLM for figures).
+         * @description Accepts .txt and .md files (text pipeline) plus .pdf, .png, .jpg (region- classification pipeline: pdfplumber + unstructured.io layout analysis).
          */
         post: {
             parameters: {
@@ -884,11 +882,23 @@ export interface components {
                 value: number;
             } | null;
         };
-        SearchResult: {
+        /** @description Payload of the "retrieved_files" SSE event: fires once, before generation begins. */
+        SearchRetrievedFilesEvent: {
+            /** @description Every file the fused top-k retrieval surfaced, ranked, whether or not it ends up cited inline in the eventual summary — a superset of the files named in the done event's citations. */
+            retrieved_files: components["schemas"]["RetrievedFile"][];
+        };
+        /** @description Payload of a "delta" SSE event: one chunk of the generated answer text, in the order generated. Zero or more of these fire between retrieved_files and done. */
+        SearchDeltaEvent: {
+            text: string;
+        };
+        /** @description Payload of the final "done" SSE event: the complete, parsed answer. retrieved_files isn't repeated here — it already went out as its own event. */
+        SearchDoneEvent: {
             summary: string;
             citations: components["schemas"]["Citation"][];
-            /** @description Every file the fused top-k retrieval surfaced, ranked, whether or not it ended up cited inline in summary — a superset of the files named in citations. */
-            retrieved_files: components["schemas"]["RetrievedFile"][];
+        };
+        /** @description Payload of an "error" SSE event, sent only when the search fails after streaming has already started (so the HTTP status can no longer change to reflect the failure). */
+        SearchErrorEvent: {
+            error: string;
         };
         RetrievedFile: {
             /** Format: uuid */

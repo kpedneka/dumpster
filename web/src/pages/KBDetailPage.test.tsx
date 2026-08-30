@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
@@ -36,6 +36,10 @@ function renderKBDetailPage(kbId = 'kb-1') {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // search-state.ts persists draft/submitted queries to sessionStorage
+  // (intentionally, for reload continuity) — clear it so one test's typed
+  // or submitted query never leaks into the next test's fresh render.
+  sessionStorage.clear()
   vi.mocked(api.GET).mockImplementation(((path: string) => {
     if (path === '/kbs/{id}') {
       return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
@@ -320,6 +324,39 @@ describe('KBDetailPage', () => {
   })
 
   describe('search', () => {
+    function sseFrame(name: string, data: unknown): string {
+      return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
+    }
+
+    function mockSearchStream(frames: string[], init: { status?: number; noBody?: boolean } = {}) {
+      // A fresh Response (and fresh ReadableStream) per call: a stream's
+      // body can only be read once, but this mock may be invoked more than
+      // once per test — e.g. a leftover submitted query restored from
+      // sessionStorage on mount fires its own search before the test's own
+      // user.click() does. mockResolvedValue would hand out the same
+      // already-drained stream to that second call; mockImplementation
+      // rebuilds it every time, like a real server would.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(() => {
+          const body = init.noBody
+            ? null
+            : new ReadableStream<Uint8Array>({
+                start(controller) {
+                  const encoder = new TextEncoder()
+                  for (const frame of frames) controller.enqueue(encoder.encode(frame))
+                  controller.close()
+                },
+              })
+          return Promise.resolve(new Response(body, { status: init.status ?? 200 }))
+        }),
+      )
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
     it('shows a prompt before any search is submitted', async () => {
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
@@ -327,8 +364,10 @@ describe('KBDetailPage', () => {
     })
 
     it('submits a query and renders the cited summary', async () => {
-      vi.mocked(api.POST).mockResolvedValue({
-        data: {
+      mockSearchStream([
+        sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
+        sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
+        sseFrame('done', {
           summary: 'Paris is the capital of France [1].',
           citations: [
             {
@@ -342,10 +381,8 @@ describe('KBDetailPage', () => {
               locator: null,
             },
           ],
-          retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }],
-        },
-        error: undefined,
-      } as never)
+        }),
+      ])
 
       const user = userEvent.setup()
       renderKBDetailPage()
@@ -358,15 +395,64 @@ describe('KBDetailPage', () => {
         expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
       })
       expect(screen.getByText('[1]')).toBeInTheDocument()
-      expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/search', {
-        params: { path: { id: 'kb-1' } },
-        body: { query: 'What is the capital of France?' },
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/kbs/kb-1/search'),
+        expect.objectContaining({ body: JSON.stringify({ query: 'What is the capital of France?' }) }),
+      )
+    })
+
+    it('renders the answer incrementally as delta events arrive, before the done event', async () => {
+      let resolveSecondDelta: () => void = () => {}
+      const secondDeltaGate = new Promise<void>((resolve) => {
+        resolveSecondDelta = resolve
+      })
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const encoder = new TextEncoder()
+          controller.enqueue(
+            encoder.encode(
+              sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
+            ),
+          )
+          controller.enqueue(encoder.encode(sseFrame('delta', { text: 'Partial answer only' })))
+          await secondDeltaGate
+          controller.enqueue(
+            encoder.encode(sseFrame('done', { summary: 'Partial answer only, complete.', citations: [] })),
+          )
+          controller.close()
+        },
+      })
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })))
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'a question')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText('Partial answer only')).toBeInTheDocument()
+      })
+
+      resolveSecondDelta()
+      await waitFor(() => {
+        expect(screen.getByText('Partial answer only, complete.')).toBeInTheDocument()
       })
     })
 
     it('lists relevant files under the answer, including files not cited inline', async () => {
-      vi.mocked(api.POST).mockResolvedValue({
-        data: {
+      mockSearchStream([
+        sseFrame('retrieved_files', {
+          // A superset of citations — retrieval surfaced a second file that
+          // didn't end up cited in the answer.
+          retrieved_files: [
+            { document_id: 'doc-1', file_name: 'geo.txt' },
+            { document_id: 'doc-2', file_name: 'history.txt' },
+          ],
+        }),
+        sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
+        sseFrame('done', {
           summary: 'Paris is the capital of France [1].',
           citations: [
             {
@@ -380,15 +466,8 @@ describe('KBDetailPage', () => {
               locator: null,
             },
           ],
-          // A superset of citations — retrieval surfaced a second file that
-          // didn't end up cited in the answer.
-          retrieved_files: [
-            { document_id: 'doc-1', file_name: 'geo.txt' },
-            { document_id: 'doc-2', file_name: 'history.txt' },
-          ],
-        },
-        error: undefined,
-      } as never)
+        }),
+      ])
 
       const user = userEvent.setup()
       renderKBDetailPage()
@@ -402,14 +481,14 @@ describe('KBDetailPage', () => {
     })
 
     it('shows a "no results found" empty state when retrieval found nothing', async () => {
-      vi.mocked(api.POST).mockResolvedValue({
-        data: {
+      mockSearchStream([
+        sseFrame('retrieved_files', { retrieved_files: [] }),
+        sseFrame('delta', { text: 'I could not find relevant information to answer this question.' }),
+        sseFrame('done', {
           summary: 'I could not find relevant information to answer this question.',
           citations: [],
-          retrieved_files: [],
-        },
-        error: undefined,
-      } as never)
+        }),
+      ])
 
       const user = userEvent.setup()
       renderKBDetailPage()
@@ -423,11 +502,8 @@ describe('KBDetailPage', () => {
       })
     })
 
-    it('shows an error state when the search request fails', async () => {
-      vi.mocked(api.POST).mockResolvedValue({
-        data: undefined,
-        error: { error: 'search failed' },
-      } as never)
+    it('shows an error state when the search request fails outright', async () => {
+      mockSearchStream([], { status: 500 })
 
       const user = userEvent.setup()
       renderKBDetailPage()
@@ -438,6 +514,25 @@ describe('KBDetailPage', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/search failed/i)).toBeInTheDocument()
+      })
+    })
+
+    it('shows the server error message when the stream fails mid-answer', async () => {
+      mockSearchStream([
+        sseFrame('retrieved_files', { retrieved_files: [] }),
+        sseFrame('delta', { text: 'partial' }),
+        sseFrame('error', { error: 'generation failed' }),
+      ])
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'a question')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => {
+        expect(screen.getByText(/generation failed/i)).toBeInTheDocument()
       })
     })
   })

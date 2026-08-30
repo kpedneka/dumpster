@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDropzone } from 'react-dropzone'
@@ -15,6 +15,7 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
+import { searchStream } from '@/api/searchStream'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -41,6 +42,7 @@ import type { components } from '@/api/schema.d.ts'
 type Document = components['schemas']['Document']
 type DocStatus = Document['status']
 type Citation = components['schemas']['Citation']
+type RetrievedFile = components['schemas']['RetrievedFile']
 
 const TERMINAL: DocStatus[] = ['indexed', 'failed']
 
@@ -144,29 +146,76 @@ export function KBDetailPage() {
 
   const docs: Document[] = useMemo(() => docPage?.items ?? [], [docPage])
 
-  const {
-    data: result,
-    isFetching,
-    isError,
-    error,
-  } = useQuery({
-    queryKey: ['search', kbId, submittedQuery],
-    queryFn: async () => {
-      const { data, error } = await api.POST('/kbs/{id}/search', {
-        params: { path: { id: kbId! } },
-        body: { query: submittedQuery },
-      })
-      if (error) throw error
-      return data
-    },
-    enabled: !!kbId && !!submittedQuery,
-    staleTime: Infinity,
-  })
+  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [summary, setSummary] = useState('')
+  const [citations, setCitations] = useState<Citation[]>([])
+  const [retrievedFiles, setRetrievedFiles] = useState<RetrievedFile[]>([])
+  const [searchError, setSearchError] = useState<unknown>(null)
 
-  const mdComponents = useMemo(
-    () => (result ? makeMarkdownComponents(result.citations) : {}),
-    [result],
-  )
+  // Streaming (not react-query) because the response arrives incrementally
+  // as Server-Sent Events, not as one resolved value — see api/searchStream.
+  // Re-runs whenever the submitted query changes; an in-flight stream for a
+  // now-stale query is aborted so its late events can't clobber a newer one.
+  useEffect(() => {
+    // Nothing to search: every render path below is already gated on
+    // `submittedQuery &&`, so searchStatus's stale value is simply never
+    // read in that case — no need to reset it here.
+    if (!kbId || !submittedQuery) {
+      return
+    }
+
+    const controller = new AbortController()
+    /* eslint-disable react-hooks/set-state-in-effect -- resetting local
+       render state before kicking off the async fetch is the standard
+       "synchronize with an external system" effect pattern documented at
+       react.dev/learn/synchronizing-with-effects#fetching-data; this rule
+       doesn't special-case it. */
+    setSearchStatus('loading')
+    setSummary('')
+    setCitations([])
+    setRetrievedFiles([])
+    setSearchError(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
+
+    searchStream(
+      kbId,
+      submittedQuery,
+      (event) => {
+        switch (event.type) {
+          case 'retrieved_files':
+            setRetrievedFiles(event.retrieved_files)
+            break
+          case 'delta':
+            // Live-typing preview. The done event below replaces this
+            // wholesale with the authoritative parsed summary — see
+            // footerFilter's doc comment on why the two can rarely diverge
+            // for the tail of a response, and why that's fine.
+            setSummary((prev) => prev + event.text)
+            break
+          case 'done':
+            setSummary(event.summary)
+            setCitations(event.citations)
+            setSearchStatus('success')
+            break
+          case 'error':
+            // Shaped like the API's usual {error: string} body so the
+            // shared describeError helper below renders it the same way.
+            setSearchError({ error: event.error })
+            setSearchStatus('error')
+            break
+        }
+      },
+      controller.signal,
+    ).catch((err) => {
+      if (controller.signal.aborted) return
+      setSearchError(err)
+      setSearchStatus('error')
+    })
+
+    return () => controller.abort()
+  }, [kbId, submittedQuery])
+
+  const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
 
   const deleteKBMutation = useDeleteKB({ onSuccess: () => navigate('/kbs') })
 
@@ -288,7 +337,7 @@ export function KBDetailPage() {
   )
 
   const noResults =
-    !!result && result.citations.length === 0 && result.retrieved_files.length === 0
+    searchStatus === 'success' && citations.length === 0 && retrievedFiles.length === 0
 
   return (
     <div className="rise mx-auto max-w-6xl px-6 py-8">
@@ -420,7 +469,7 @@ export function KBDetailPage() {
                 )}
               />
             </div>
-            <Button type="submit" disabled={!query.trim() || isFetching} className="lift">
+            <Button type="submit" disabled={!query.trim() || searchStatus === 'loading'} className="lift">
               <SearchIcon className="h-4 w-4" />
               Search
             </Button>
@@ -432,32 +481,33 @@ export function KBDetailPage() {
             </p>
           )}
 
-          {submittedQuery && isFetching && !result && (
+          {submittedQuery && searchStatus === 'loading' && summary === '' && (
             <p className="py-16 text-center text-sm text-muted-foreground">Searching…</p>
           )}
 
-          {submittedQuery && !isFetching && isError && (
+          {submittedQuery && searchStatus === 'error' && (
             <p className="py-16 text-center text-sm text-destructive">
-              {describeError(error, 'Search failed. Try again.')}
+              {describeError(searchError, 'Search failed. Try again.')}
             </p>
           )}
 
-          {submittedQuery && !isError && result && (
-            noResults ? (
+          {submittedQuery &&
+            searchStatus !== 'error' &&
+            searchStatus !== 'idle' &&
+            (searchStatus === 'loading' || summary !== '') &&
+            (noResults ? (
               <p className="py-16 text-center text-sm text-muted-foreground">No results found.</p>
             ) : (
               <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
-                <ReactMarkdown components={mdComponents}>
-                  {preprocessCitations(result.summary)}
-                </ReactMarkdown>
+                <ReactMarkdown components={mdComponents}>{preprocessCitations(summary)}</ReactMarkdown>
 
-                {result.retrieved_files.length > 0 && (
+                {retrievedFiles.length > 0 && (
                   <div className="mt-4 border-t border-border pt-3">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                       Relevant files
                     </span>
                     <ul className="mt-2 flex flex-col gap-1.5">
-                      {result.retrieved_files.map((f) => (
+                      {retrievedFiles.map((f) => (
                         <li
                           key={f.document_id}
                           className="flex items-center gap-2 text-sm text-muted-foreground"
@@ -470,8 +520,7 @@ export function KBDetailPage() {
                   </div>
                 )}
               </div>
-            )
-          )}
+            ))}
         </section>
       </div>
     </div>
