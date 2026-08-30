@@ -482,7 +482,7 @@ describe('KBDetailPage', () => {
       expect(items).toEqual(['history.txt', 'geo.txt'])
     })
 
-    it('shows a "no results found" empty state when retrieval found nothing', async () => {
+    it('shows the not-found summary and an empty relevant-files state when retrieval found nothing', async () => {
       mockSearchStream([
         sseFrame('retrieved_files', { retrieved_files: [] }),
         sseFrame('delta', { text: 'I could not find relevant information to answer this question.' }),
@@ -500,8 +500,41 @@ describe('KBDetailPage', () => {
       await user.click(screen.getByRole('button', { name: /^search$/i }))
 
       await waitFor(() => {
-        expect(screen.getByText(/no results found/i)).toBeInTheDocument()
+        expect(screen.getByText(/could not find relevant information/i)).toBeInTheDocument()
       })
+      expect(screen.getByText(/no relevant files found/i)).toBeInTheDocument()
+      expect(screen.getByText(/found 0 files in \d+ms/i)).toBeInTheDocument()
+    })
+
+    it('shows placeholder text before the retrieved_files and done events arrive', async () => {
+      let releaseStream: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        releaseStream = resolve
+      })
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          await gate
+          controller.enqueue(new TextEncoder().encode(sseFrame('retrieved_files', { retrieved_files: [] })))
+          controller.enqueue(
+            new TextEncoder().encode(sseFrame('done', { summary: 'the answer', citations: [] })),
+          )
+          controller.close()
+        },
+      })
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })))
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'a question')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => expect(screen.getByText(/awaiting llm summarization/i)).toBeInTheDocument())
+      expect(screen.getByText(/finding relevant files/i)).toBeInTheDocument()
+
+      releaseStream()
+      await waitFor(() => expect(screen.getByText('the answer')).toBeInTheDocument())
     })
 
     it('shows an error state when the search request fails outright', async () => {

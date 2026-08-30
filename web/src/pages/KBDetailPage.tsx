@@ -162,6 +162,11 @@ export function KBDetailPage() {
   const [summary, setSummary] = useState('')
   const [citations, setCitations] = useState<Citation[]>([])
   const [retrievedFiles, setRetrievedFiles] = useState<RetrievedFile[]>([])
+  // How long retrieval took, in ms, measured client-side from the moment the
+  // search request went out to the retrieved_files event arriving — not a
+  // server-reported figure. null means "not back yet"; that's also what
+  // gates the "Finding relevant files…" vs. "Found N file(s) in Xms" text.
+  const [retrievalMs, setRetrievalMs] = useState<number | null>(null)
   const [searchError, setSearchError] = useState<unknown>(null)
 
   // Streaming (not react-query) because the response arrives incrementally
@@ -186,8 +191,10 @@ export function KBDetailPage() {
     setSummary('')
     setCitations([])
     setRetrievedFiles([])
+    setRetrievalMs(null)
     setSearchError(null)
     /* eslint-enable react-hooks/set-state-in-effect */
+    const startedAt = performance.now()
 
     searchStream(
       kbId,
@@ -196,6 +203,7 @@ export function KBDetailPage() {
         switch (event.type) {
           case 'retrieved_files':
             setRetrievedFiles(event.retrieved_files)
+            setRetrievalMs(Math.round(performance.now() - startedAt))
             break
           case 'delta':
             // Live-typing preview. The done event below replaces this
@@ -351,21 +359,13 @@ export function KBDetailPage() {
     </div>
   )
 
-  const noResults =
-    searchStatus === 'success' && citations.length === 0 && retrievedFiles.length === 0
-
   return (
     <div className="rise mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl font-semibold tracking-tight">{kb?.name ?? '—'}</h1>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-          onClick={() => setDeleteOpen(true)}
-        >
+        <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
           <Trash2 className="h-4 w-4" />
-          <span className="sr-only">Delete knowledge base</span>
+          Delete knowledge base
         </Button>
       </div>
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -488,46 +488,52 @@ export function KBDetailPage() {
             </p>
           )}
 
-          {submittedQuery && searchStatus === 'loading' && summary === '' && (
-            <p className="py-16 text-center text-sm text-muted-foreground">Searching…</p>
-          )}
-
           {submittedQuery && searchStatus === 'error' && (
             <p className="py-16 text-center text-sm text-destructive">
               {describeError(searchError, 'Search failed. Try again.')}
             </p>
           )}
 
-          {submittedQuery &&
-            searchStatus !== 'error' &&
-            searchStatus !== 'idle' &&
-            (searchStatus === 'loading' || summary !== '') &&
-            (noResults ? (
-              <p className="py-16 text-center text-sm text-muted-foreground">No results found.</p>
-            ) : (
-              <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
+          {submittedQuery && searchStatus !== 'error' && searchStatus !== 'idle' && (
+            <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
+              {summary === '' ? (
+                <p className="text-muted-foreground">Awaiting LLM summarization…</p>
+              ) : (
                 <ReactMarkdown components={mdComponents}>{preprocessCitations(summary)}</ReactMarkdown>
+              )}
 
-                {retrievedFiles.length > 0 && (
-                  <div className="mt-4 border-t border-border pt-3">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Relevant files
+              <div className="mt-4 border-t border-border pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Relevant files
+                  </span>
+                  {retrievalMs !== null && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in{' '}
+                      {retrievalMs}ms
                     </span>
-                    <ul className="mt-2 flex flex-col gap-1.5">
-                      {retrievedFiles.map((f) => (
-                        <li
-                          key={f.document_id}
-                          className="flex items-center gap-2 text-sm text-muted-foreground"
-                        >
-                          <FileText className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{f.file_name}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                  )}
+                </div>
+                {retrievalMs === null ? (
+                  <p className="mt-2 text-xs text-muted-foreground">Finding relevant files…</p>
+                ) : retrievedFiles.length === 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">No relevant files found.</p>
+                ) : (
+                  <ul className="mt-2 flex flex-col gap-1.5">
+                    {retrievedFiles.map((f) => (
+                      <li
+                        key={f.document_id}
+                        className="flex items-center gap-2 text-sm text-muted-foreground"
+                      >
+                        <FileText className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate">{f.file_name}</span>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
-            ))}
+            </div>
+          )}
         </section>
       </div>
     </div>
