@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -483,17 +483,17 @@ describe('KBDetailPage', () => {
       expect(screen.getByText(/ranked most to least relevant/i)).toBeInTheDocument()
     })
 
-    it('cross-highlights a citation and its source file on hover, in both directions', async () => {
+    it('shows the cited page numbers next to a relevant file, aggregated from its citations', async () => {
       mockSearchStream([
         sseFrame('retrieved_files', {
           retrieved_files: [
-            { document_id: 'doc-2', file_name: 'history.txt' },
-            { document_id: 'doc-1', file_name: 'geo.txt' },
+            { document_id: 'doc-1', file_name: 'report.pdf' },
+            { document_id: 'doc-2', file_name: 'uncited.txt' },
           ],
         }),
-        sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
+        sseFrame('delta', { text: 'The findings span several pages [1][2].' }),
         sseFrame('done', {
-          summary: 'Paris is the capital of France [1].',
+          summary: 'The findings span several pages [1][2].',
           citations: [
             {
               number: 1,
@@ -501,9 +501,21 @@ describe('KBDetailPage', () => {
               chunk_id: 'chunk-1',
               char_start: 0,
               char_end: 10,
-              text: 'Paris is the capital of France.',
-              file_name: 'geo.txt',
-              locator: null,
+              text: 'chunk one',
+              file_name: 'report.pdf',
+              locator: { type: 'page', value: 12 },
+            },
+            // Same file, a different (and out-of-order, to check sorting)
+            // page — and a duplicate of citation 1's page, to check dedup.
+            {
+              number: 2,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-2',
+              char_start: 0,
+              char_end: 10,
+              text: 'chunk two',
+              file_name: 'report.pdf',
+              locator: { type: 'page', value: 3 },
             },
           ],
         }),
@@ -513,37 +525,15 @@ describe('KBDetailPage', () => {
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
 
-      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.type(screen.getByRole('textbox'), 'what does the report say?')
       await user.click(screen.getByRole('button', { name: /^search$/i }))
-      await waitFor(() => expect(screen.getByText('geo.txt')).toBeInTheDocument())
 
-      // Re-query fresh before each interaction, and use fireEvent rather
-      // than userEvent.hover/unhover: ReactMarkdown recreates the citation
-      // marker's DOM node on every render where mdComponents' identity
-      // changes (which happens on every hover, since it depends on
-      // hoveredDocumentId) — confirmed via a throwaway repro that the node
-      // reference genuinely changes and the old one leaves the DOM.
-      // userEvent's hover/unhover tracks pointer state against the specific
-      // node hover() was called on, so calling unhover() on the
-      // post-remount node doesn't register as "leaving" what was hovered.
-      // Plain fireEvent has no such statefulness and isn't affected.
-      const geoItem = () => screen.getByText('geo.txt').closest('li')!
-      const historyItem = () => screen.getByText('history.txt').closest('li')!
-      const citationMarker = () => screen.getByText('[1]')
-
-      // Hovering the citation highlights its source (geo.txt), not the
-      // other file (history.txt), which the citation has nothing to do with.
-      fireEvent.mouseEnter(citationMarker())
-      expect(geoItem().className).toContain('bg-accent')
-      expect(historyItem().className).not.toContain('bg-accent')
-      fireEvent.mouseLeave(citationMarker())
-      expect(geoItem().className).not.toContain('bg-accent')
-
-      // And the reverse: hovering the file highlights its citation marker.
-      fireEvent.mouseEnter(geoItem())
-      expect(citationMarker().className).toContain('bg-primary')
-      fireEvent.mouseLeave(geoItem())
-      expect(citationMarker().className).not.toContain('bg-primary')
+      await waitFor(() => expect(screen.getByText('uncited.txt')).toBeInTheDocument())
+      // Sorted ascending and deduped, not insertion order (12 then 3 in the
+      // citations array above).
+      expect(screen.getByText(/p\.\s*3,\s*12/)).toBeInTheDocument()
+      // A relevant-but-never-cited file has no locator to show.
+      expect(screen.getByText('uncited.txt').textContent).toBe('uncited.txt')
     })
 
     it('shows the not-found summary and an empty relevant-files state when retrieval found nothing', async () => {

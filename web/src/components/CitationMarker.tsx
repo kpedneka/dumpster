@@ -1,21 +1,11 @@
 import { useState } from 'react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
 
 type Citation = components['schemas']['Citation']
 
 interface CitationMarkerProps {
   citation: Citation
-  // Lets a caller (KBDetailPage) cross-highlight this marker with its
-  // source's entry in the relevant-files list on hover/focus — the same
-  // "hover a citation, its source lights up elsewhere" pattern search
-  // engines use, chosen over numbering the file list to match citation
-  // numbers: those two lists are numbered on different things (citations
-  // index chunks; relevant files are deduped to documents), so a shared
-  // numeral would occasionally point at the wrong-looking rank.
-  highlighted?: boolean
-  onHoverChange?: (documentId: string | null) => void
 }
 
 // The inline marker stays a compact [N] badge rather than the file name
@@ -43,7 +33,7 @@ function formatLocator(locator: Citation['locator']): string | null {
 // chunks are already paragraph-sized.
 const TRUNCATE_AT = 200
 
-export function CitationMarker({ citation, highlighted, onHoverChange }: CitationMarkerProps) {
+export function CitationMarker({ citation }: CitationMarkerProps) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const locatorLabel = formatLocator(citation.locator)
@@ -60,22 +50,22 @@ export function CitationMarker({ citation, highlighted, onHoverChange }: Citatio
       }}
     >
       <PopoverTrigger asChild>
-        {/* tabIndex makes this a real keyboard tab stop: <sup> isn't
-            focusable by default, and asChild doesn't inject one for a
-            non-button element — without it, neither the popover itself nor
-            this marker's onFocus/onBlur highlighting were keyboard-reachable. */}
+        {/* tabIndex makes this a real keyboard tab stop, and onKeyDown makes
+            it operable once reached: <sup> isn't focusable by default, and
+            asChild's ARIA/behavioral props (aria-haspopup, etc.) don't
+            include a browser's native Enter/Space-triggers-click behavior —
+            that only comes for free on an actual <button>. Both are missing
+            without this; confirmed by testing Enter on a tabIndex-only
+            version and finding the popover simply never opened. */}
         <sup
           tabIndex={0}
-          className={cn(
-            'ml-0.5 cursor-pointer rounded px-1 py-0.5 text-xs font-medium transition-colors',
-            highlighted
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-accent text-accent-foreground hover:bg-accent/80',
-          )}
-          onMouseEnter={() => onHoverChange?.(citation.document_id)}
-          onMouseLeave={() => onHoverChange?.(null)}
-          onFocus={() => onHoverChange?.(citation.document_id)}
-          onBlur={() => onHoverChange?.(null)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              e.currentTarget.click()
+            }
+          }}
+          className="ml-0.5 cursor-pointer rounded bg-accent px-1 py-0.5 text-xs font-medium text-accent-foreground hover:bg-accent/80"
         >
           {`[${citation.number}]`}
         </sup>

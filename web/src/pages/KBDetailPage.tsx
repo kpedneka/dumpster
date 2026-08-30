@@ -49,12 +49,28 @@ function preprocessCitations(summary: string): string {
   return summary.replace(CITATION_BRACKET_RE, '{CITE_$1}')
 }
 
-function injectCitations(
-  children: React.ReactNode,
-  citations: Citation[],
-  hoveredDocumentId: string | null,
-  onHoverChange: (documentId: string | null) => void,
-): React.ReactNode {
+// Surfaces exactly where in a source to look, for the subset of relevant
+// files the model actually cited — computed from data already on the page
+// (Citation.document_id + Citation.locator), no extra request. A file with
+// several cited pages shows all of them, deduped and in page order; a
+// relevant-but-never-cited file, or a non-paginated one (plain text), shows
+// none — there's no locator to show either way. Chosen over cross-highlight
+// hover/focus between citations and this list: that broke down the moment
+// the answer was long enough to scroll (a very likely case, and the whole
+// point of "which page do I check" is most valuable for long documents),
+// and doesn't work on mobile at all. This has no such dependency — it's
+// static text, always visible, answering the same question up front.
+function citedPagesFor(documentId: string, citations: Citation[]): number[] {
+  const pages = new Set<number>()
+  for (const c of citations) {
+    if (c.document_id === documentId && c.locator?.type === 'page') {
+      pages.add(c.locator.value)
+    }
+  }
+  return Array.from(pages).sort((a, b) => a - b)
+}
+
+function injectCitations(children: React.ReactNode, citations: Citation[]): React.ReactNode {
   if (typeof children === 'string') {
     const parts = children.split(CITATION_PLACEHOLDER_RE)
     if (parts.length === 1) return children
@@ -62,33 +78,19 @@ function injectCitations(
       const m = part.match(/^\{CITE_(\d+)\}$/)
       if (!m) return part
       const cite = citations.find((c) => c.number === Number(m[1]))
-      return cite ? (
-        <CitationMarker
-          key={i}
-          citation={cite}
-          highlighted={hoveredDocumentId === cite.document_id}
-          onHoverChange={onHoverChange}
-        />
-      ) : (
-        `[${m[1]}]`
-      )
+      return cite ? <CitationMarker key={i} citation={cite} /> : `[${m[1]}]`
     })
   }
   if (Array.isArray(children)) {
     return (children as React.ReactNode[]).map((child, i) => (
-      <Fragment key={i}>{injectCitations(child, citations, hoveredDocumentId, onHoverChange)}</Fragment>
+      <Fragment key={i}>{injectCitations(child, citations)}</Fragment>
     ))
   }
   return children
 }
 
-function makeMarkdownComponents(
-  citations: Citation[],
-  hoveredDocumentId: string | null,
-  onHoverChange: (documentId: string | null) => void,
-): Components {
-  const inject = (children: React.ReactNode) =>
-    injectCitations(children, citations, hoveredDocumentId, onHoverChange)
+function makeMarkdownComponents(citations: Citation[]): Components {
+  const inject = (children: React.ReactNode) => injectCitations(children, citations)
   return {
     p: ({ children }) => <p className="mb-3 last:mb-0">{inject(children)}</p>,
     ul: ({ children }) => <ul className="mb-3 list-disc pl-5">{children}</ul>,
@@ -187,11 +189,6 @@ export function KBDetailPage() {
   // gates the "Finding relevant files…" vs. "Found N file(s) in Xms" text.
   const [retrievalMs, setRetrievalMs] = useState<number | null>(null)
   const [searchError, setSearchError] = useState<unknown>(null)
-  // Cross-highlights a citation marker with its source's entry in the
-  // relevant-files list on hover/focus, in either direction — see
-  // CitationMarker's doc comment for why this replaces shared numbering
-  // between the two lists.
-  const [hoveredDocumentId, setHoveredDocumentId] = useState<string | null>(null)
 
   // Streaming (not react-query) because the response arrives incrementally
   // as Server-Sent Events, not as one resolved value — see api/searchStream.
@@ -259,10 +256,7 @@ export function KBDetailPage() {
     return () => controller.abort()
   }, [kbId, submittedQuery, searchNonce])
 
-  const mdComponents = useMemo(
-    () => makeMarkdownComponents(citations, hoveredDocumentId, setHoveredDocumentId),
-    [citations, hoveredDocumentId],
-  )
+  const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
 
   const deleteKBMutation = useDeleteKB({ onSuccess: () => navigate('/kbs') })
 
@@ -551,20 +545,25 @@ export function KBDetailPage() {
                       Ranked most to least relevant
                     </p>
                     <ul className="mt-2 flex flex-col gap-1.5">
-                      {retrievedFiles.map((f) => (
-                        <li
-                          key={f.document_id}
-                          onMouseEnter={() => setHoveredDocumentId(f.document_id)}
-                          onMouseLeave={() => setHoveredDocumentId(null)}
-                          className={cn(
-                            'flex items-center gap-2 rounded-md px-1.5 py-1 text-sm text-muted-foreground transition-colors',
-                            hoveredDocumentId === f.document_id && 'bg-accent text-accent-foreground',
-                          )}
-                        >
-                          <FileText className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{f.file_name}</span>
-                        </li>
-                      ))}
+                      {retrievedFiles.map((f) => {
+                        const pages = citedPagesFor(f.document_id, citations)
+                        return (
+                          <li
+                            key={f.document_id}
+                            className="flex items-center gap-2 text-sm text-muted-foreground"
+                          >
+                            <FileText className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">
+                              {f.file_name}
+                              {pages.length > 0 && (
+                                <span className="text-muted-foreground/70">
+                                  {` · p. ${pages.join(', ')}`}
+                                </span>
+                              )}
+                            </span>
+                          </li>
+                        )
+                      })}
                     </ul>
                   </>
                 )}
