@@ -124,9 +124,6 @@ func TestSearch_DoneEventCarriesSummaryAndCitations(t *testing.T) {
 	if c.Number != 1 || c.DocumentID != doc.ID.String() || c.CharStart != 0 || c.CharEnd != 42 {
 		t.Errorf("citation mismatch: %+v", c)
 	}
-	if c.Text != "the source text" {
-		t.Errorf("citation text: got %q, want %q", c.Text, "the source text")
-	}
 	if c.FileName != "notes.txt" {
 		t.Errorf("citation file_name: got %q, want %q", c.FileName, "notes.txt")
 	}

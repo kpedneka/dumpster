@@ -374,7 +374,6 @@ describe('KBDetailPage', () => {
               chunk_id: 'chunk-1',
               char_start: 0,
               char_end: 10,
-              text: 'Paris is the capital of France.',
               file_name: 'geo.txt',
               locator: null,
             },
@@ -392,7 +391,12 @@ describe('KBDetailPage', () => {
       await waitFor(() => {
         expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
       })
-      expect(screen.getByText('[1]')).toBeInTheDocument()
+      // The citation marker now renders the file name inline (not "[1]"),
+      // so "geo.txt" appears twice on the page: once as the inline citation
+      // marker, once in the relevant-files list. Assert the marker
+      // specifically by tag, since a bare getByText would be ambiguous.
+      const markers = screen.getAllByText('geo.txt').filter((el) => el.tagName === 'SUP')
+      expect(markers).toHaveLength(1)
       expect(fetch).toHaveBeenCalledWith(
         expect.stringContaining('/kbs/kb-1/search'),
         expect.objectContaining({ body: JSON.stringify({ query: 'What is the capital of France?' }) }),
@@ -462,7 +466,6 @@ describe('KBDetailPage', () => {
               chunk_id: 'chunk-1',
               char_start: 0,
               char_end: 10,
-              text: 'Paris is the capital of France.',
               file_name: 'geo.txt',
               locator: null,
             },
@@ -477,7 +480,10 @@ describe('KBDetailPage', () => {
       await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
       await user.click(screen.getByRole('button', { name: /^search$/i }))
 
-      await waitFor(() => expect(screen.getByText('geo.txt')).toBeInTheDocument())
+      // "geo.txt" now also renders as the inline citation marker (not
+      // "[1]"), so wait on the relevant-files list itself rather than an
+      // ambiguous text match.
+      await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(2))
       const items = screen.getAllByRole('listitem').map((li) => li.textContent)
       expect(items).toEqual(['history.txt', 'geo.txt'])
       expect(screen.getByText(/ranked most to least relevant/i)).toBeInTheDocument()
@@ -501,7 +507,6 @@ describe('KBDetailPage', () => {
               chunk_id: 'chunk-1',
               char_start: 0,
               char_end: 10,
-              text: 'chunk one',
               file_name: 'report.pdf',
               locator: { type: 'page', value: 12 },
             },
@@ -513,7 +518,6 @@ describe('KBDetailPage', () => {
               chunk_id: 'chunk-2',
               char_start: 0,
               char_end: 10,
-              text: 'chunk two',
               file_name: 'report.pdf',
               locator: { type: 'page', value: 3 },
             },

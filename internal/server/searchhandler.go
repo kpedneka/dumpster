@@ -198,23 +198,20 @@ type RetrievedFileResponse struct {
 // must match a marker to a citation by Number, not by array position, since
 // this slice is sparse whenever the model didn't cite every numbered chunk.
 //
-// FileName + Locator (when present) are the primary citation identity,
-// mirroring how search engines cite the source page rather than a byte
-// range within it. Text remains the drill-down evidence behind that
-// citation, not the primary display.
+// FileName + Locator (when present) are the entire citation identity: the
+// client groups adjacent markers by FileName and shows a page locator when
+// one applies, mirroring how search engines cite the source page rather
+// than a byte range within it. There is no chunk-text field — the raw
+// source span is no longer surfaced to clients (see CitationMarker on the
+// frontend), only which file (and page) it came from.
 type CitationResponse struct {
-	Number     int    `json:"number"`
-	DocumentID string `json:"document_id"`
-	ChunkID    string `json:"chunk_id"`
-	CharStart  int    `json:"char_start"`
-	CharEnd    int    `json:"char_end"`
-	// Text is the cited chunk's own extracted content, served directly so
-	// clients never need to re-fetch and slice the original document —
-	// slicing by CharStart/CharEnd only reproduces the right span for
-	// text/markdown documents, not PDF/image region-derived chunks.
-	Text     string           `json:"text"`
-	FileName string           `json:"file_name"`
-	Locator  *CitationLocator `json:"locator"`
+	Number     int              `json:"number"`
+	DocumentID string           `json:"document_id"`
+	ChunkID    string           `json:"chunk_id"`
+	CharStart  int              `json:"char_start"`
+	CharEnd    int              `json:"char_end"`
+	FileName   string           `json:"file_name"`
+	Locator    *CitationLocator `json:"locator"`
 }
 
 // CitationLocator narrows a citation within its file. Value is an int today
@@ -234,7 +231,6 @@ func buildCitations(cs []search.Citation, fileNames map[uuid.UUID]string) []Cita
 			ChunkID:    c.ChunkID.String(),
 			CharStart:  c.CharStart,
 			CharEnd:    c.CharEnd,
-			Text:       c.Text,
 			FileName:   fileNames[c.DocumentID],
 			Locator:    citationLocator(c),
 		}
