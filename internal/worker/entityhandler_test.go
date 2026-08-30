@@ -80,7 +80,7 @@ func TestEntityHandler_Handle_PersistsExtractedEntities(t *testing.T) {
 	}
 
 	// A real Extractor populates DocumentID/KBID/ChunkID from the input
-	// chunk (see internal/entity/gliner); mimic that contract here.
+	// chunk (see internal/entity/inference); mimic that contract here.
 	extractor := entitymock.NewFixed([]*entity.Entity{
 		{
 			DocumentID: job.DocumentID,

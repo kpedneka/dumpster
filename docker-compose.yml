@@ -26,14 +26,16 @@ services:
         required: false
       - path: .env.local
         required: false
-    environment:
-      # .env.local sets this to a host-machine virtualenv path
-      # (scripts/.venv/bin/python3) for running `go run ./cmd/worker`
-      # directly on the host. env_file above loads that same file for its
-      # DB/S3 credentials, which incidentally drags this host-only path in
-      # too — but the container has no virtualenv; everything installs into
-      # the system Python. Override back to the container-correct default
-      # (matching internal/config's own default when this var is unset).
-      # This also fixes region classification, not just entity extraction:
-      # layout.Extractor reuses this same interpreter path.
-      - ENTITY_EXTRACTOR_PYTHON=python3
+    depends_on:
+      - inference
+
+  # inference is the consolidated, always-on ML service: entity
+  # extraction, PDF region classification, and local embeddings behind one
+  # HTTP API. api and worker both call it over the network instead of
+  # embedding their own warm Python subprocess (the pattern this replaces).
+  inference:
+    build:
+      context: .
+      target: inference
+    ports:
+      - "8000:8000"

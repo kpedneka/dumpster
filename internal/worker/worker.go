@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -32,6 +33,23 @@ type Config struct {
 	// Instruments is optional; when nil, job duration/failure metrics are
 	// not recorded.
 	Instruments *telemetry.Instruments
+	// Concurrency is how many jobs Run processes at once, each dequeued and
+	// handled independently. Defaults to 1 (today's serial behavior) when
+	// zero or negative.
+	//
+	// Raising this above 1 used to be unsafe (see the System Architecture
+	// page's Inference Service sub-page): concurrent jobs used to mean
+	// concurrent warm Python subprocesses (GLiNER, the layout classifier)
+	// stacking memory inside this same process. Now that those calls go out
+	// over HTTP to a separately-scaled inference service instead, that risk
+	// is gone — concurrency here only costs goroutines.
+	//
+	// Safe because Postgres's SKIP LOCKED dequeue and the
+	// jobs (document_id, job_type) uniqueness constraint already guarantee
+	// exclusive, non-duplicate processing across concurrent consumers,
+	// regardless of whether those consumers are separate goroutines in one
+	// process or separate machines.
+	Concurrency int
 }
 
 // Worker pulls jobs from a Consumer and dispatches them to the Handler
@@ -67,9 +85,35 @@ func (w *Worker) RegisterHandler(jobType queue.JobType, handler Handler) {
 	w.handlers[jobType] = handler
 }
 
-// Run starts the worker loop. It blocks until ctx is cancelled, then returns
-// ctx.Err(). On ErrNoJobs the worker sleeps PollInterval before retrying.
+// Run starts the worker loop(s), as many as w.cfg.Concurrency (default 1).
+// It blocks until ctx is cancelled, then returns ctx.Err() once every loop
+// has exited.
 func (w *Worker) Run(ctx context.Context) error {
+	concurrency := w.cfg.Concurrency
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, concurrency)
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = w.runLoop(ctx)
+		}(i)
+	}
+	wg.Wait()
+
+	// Every loop exits for the same reason (ctx cancellation) at shutdown;
+	// any one of them represents that reason.
+	return errs[0]
+}
+
+// runLoop is one independent dequeue-process-repeat loop. With
+// Concurrency > 1, multiple runLoop instances run concurrently, each
+// dequeuing from the same queue.Consumer.
+func (w *Worker) runLoop(ctx context.Context) error {
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
 

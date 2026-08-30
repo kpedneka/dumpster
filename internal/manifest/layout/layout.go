@@ -1,8 +1,10 @@
-// Package layout is the vendor adapter for PDF region extraction. It is the
-// only place a dependency on the pdfplumber+unstructured Python stack may be
-// touched: this adapter shells out to scripts/extract_regions.py via
-// os/exec, passing the base64-encoded PDF on stdin and reading back the
-// classified region list as JSON on stdout.
+// Package layout is the vendor adapter for PDF region extraction. It
+// implements region classification by calling the consolidated ML
+// inference service's /regions endpoint over HTTP — previously
+// this shelled out to scripts/extract_regions.py as its own warm
+// subprocess embedded inside cmd/worker; see the System Architecture
+// page's Inference Service sub-page for the full design and why that
+// changed.
 //
 // This adapter covers layers 1 (pdfplumber: native text/tables) and 2
 // (unstructured.io: layout segmentation of whatever pdfplumber cannot
@@ -18,16 +20,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"os/exec"
+	"net/http"
+	"strings"
 )
 
 // Config configures an Extractor.
 type Config struct {
-	// PythonPath is the interpreter used to run ScriptPath.
-	PythonPath string
-	// ScriptPath is the path to scripts/extract_regions.py.
-	ScriptPath string
+	// BaseURL is the inference service's base URL (e.g.
+	// "http://inference.internal:8000").
+	BaseURL string
 	// Logger receives per-run peak-RSS observations (see v4.6): the fixed
 	// ~390MB floor that drove the worker's 512MB->1024MB memory bump was
 	// found by reading OOM-kill log lines for jobs that crashed. This gives
@@ -38,10 +41,9 @@ type Config struct {
 	Logger *log.Logger
 }
 
-// RawRegion is a single classified region from the Python extraction script.
+// RawRegion is a single classified region from the inference service.
 // The RegionClassificationHandler routes each RawRegion through additional
-// Go-side steps (VLM calls for figures and suspected-scanned content) before
-// persisting it to the ingestion manifest.
+// Go-side steps before persisting it to the ingestion manifest.
 type RawRegion struct {
 	// RegionType is the coarse label assigned by the layered classifier:
 	// "native_text", "native_table", "figure", "unconfirmed_text", or
@@ -66,20 +68,19 @@ type RawRegion struct {
 	NeedsVLM string
 }
 
-// Extractor implements region extraction by shelling out to the Python script.
+// Extractor implements region extraction via HTTP against the inference
+// service's /regions endpoint.
 type Extractor struct {
-	cfg Config
-	// runCommand is overridable in tests to exercise the JSON I/O contract
-	// without a real Python environment.
-	runCommand func(ctx context.Context, pythonPath, scriptPath string, stdin []byte) ([]byte, error)
+	cfg    Config
+	client *http.Client
 }
 
-// New returns an Extractor configured to invoke cfg.PythonPath cfg.ScriptPath.
+// New returns an Extractor calling the inference service at cfg.BaseURL.
 func New(cfg Config) *Extractor {
 	if cfg.Logger == nil {
 		cfg.Logger = log.Default()
 	}
-	return &Extractor{cfg: cfg, runCommand: runPython}
+	return &Extractor{cfg: cfg, client: &http.Client{}}
 }
 
 type request struct {
@@ -97,8 +98,12 @@ type rawRegionJSON struct {
 
 type response struct {
 	Regions []rawRegionJSON `json:"regions"`
-	// PeakRSSKB is the Python subprocess's own peak RSS in KB, reported only
-	// on successful completion (a killed job never reaches this point).
+	// PeakRSSKB is the inference service process's peak resident set size
+	// in KB at the time of this request. That process is now shared and
+	// always-on, so this is no longer a per-job figure the way it was
+	// under the old per-document subprocess model — kept for continuity of
+	// the sizing signal, but treat it as "the service's RSS so far", not
+	// "this document's incremental cost".
 	PeakRSSKB int `json:"peak_rss_kb"`
 }
 
@@ -113,18 +118,18 @@ func (e *Extractor) ExtractRegions(ctx context.Context, pdfBytes []byte) ([]*Raw
 	}
 
 	req := request{PDFB64: base64.StdEncoding.EncodeToString(pdfBytes)}
-	stdin, err := json.Marshal(req)
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("layout: marshal request: %w", err)
 	}
 
-	stdout, err := e.runCommand(ctx, e.cfg.PythonPath, e.cfg.ScriptPath, stdin)
+	respBody, err := e.post(ctx, body)
 	if err != nil {
-		return nil, fmt.Errorf("layout: run extraction script: %w", err)
+		return nil, fmt.Errorf("layout: regions request: %w", err)
 	}
 
 	var resp response
-	if err := json.Unmarshal(stdout, &resp); err != nil {
+	if err := json.Unmarshal(respBody, &resp); err != nil {
 		return nil, fmt.Errorf("layout: unmarshal response: %w", err)
 	}
 	e.cfg.Logger.Printf("layout: extraction peak RSS: %d KB", resp.PeakRSSKB)
@@ -143,17 +148,28 @@ func (e *Extractor) ExtractRegions(ctx context.Context, pdfBytes []byte) ([]*Raw
 	return out, nil
 }
 
-// runPython executes pythonPath scriptPath, writing stdin to the process's
-// stdin and returning its stdout.
-func runPython(ctx context.Context, pythonPath, scriptPath string, stdin []byte) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, pythonPath, scriptPath)
-	cmd.Stdin = bytes.NewReader(stdin)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("%w: %s", err, stderr.String())
+// post issues a POST /regions request to the inference service, returning
+// the response body on a 200 and an error otherwise.
+func (e *Extractor) post(ctx context.Context, body []byte) ([]byte, error) {
+	url := strings.TrimRight(e.cfg.BaseURL, "/") + "/regions"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
 	}
-	return stdout.Bytes(), nil
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := e.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("do request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, respBody)
+	}
+	return respBody, nil
 }

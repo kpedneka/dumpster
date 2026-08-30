@@ -59,15 +59,13 @@ type Config struct {
 	// types the extractor is allowed to emit. It is config, not code: add
 	// or remove a type by changing ENTITY_TYPES, no migration required.
 	EntityTypes []string
-	// EntityExtractorScript is the path to the Python script the gliner
-	// adapter invokes via os/exec to run local spaCy+GLiNER extraction.
-	EntityExtractorScript string
-	// EntityExtractorPython is the Python interpreter used to run
-	// EntityExtractorScript (and RegionExtractorScript).
-	EntityExtractorPython string
-	// RegionExtractorScript is the path to scripts/extract_regions.py, the
-	// PDF region classifier invoked by the RegionClassificationHandler.
-	RegionExtractorScript string
+	// InferenceServiceURL is the base URL of the consolidated ML inference
+	// service: entity extraction, PDF region classification, and local
+	// embeddings, called over HTTP by both cmd/api and cmd/worker
+	// instead of each embedding its own warm Python subprocess. Defaults to
+	// the docker-compose service name; override for local dev without Docker
+	// or to point at a different deployment.
+	InferenceServiceURL string
 
 	// CookieSecure controls the Secure attribute on the session cookie.
 	// Must stay true wherever the API is reached over TLS (e.g. behind
@@ -90,6 +88,12 @@ type Config struct {
 	// SweepInterval is how often the always-on worker runs the session sweep.
 	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
 	SweepInterval time.Duration
+	// WorkerConcurrency is how many jobs the worker processes at once.
+	// Defaults to 5. Safe to run above 1 now that entity extraction and
+	// region classification call the inference service over HTTP instead of
+	// embedding a warm Python subprocess in this process — see
+	// worker.Config.Concurrency's doc for why raising this used to be unsafe.
+	WorkerConcurrency int
 	// JobStaleTimeout is how long a job may sit claimed ("processing")
 	// before it's treated as orphaned and reclaimed back to "pending" on
 	// the same ticker as the session sweep. Guards against a job stuck
@@ -131,10 +135,8 @@ func Load() *Config {
 		OpenAIAPIKey:      getEnv("OPENAI_API_KEY", ""),
 		OpenAIEmbedModel:  getEnv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
 
-		EntityTypes:           getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
-		EntityExtractorScript: getEnv("ENTITY_EXTRACTOR_SCRIPT", "scripts/extract_entities.py"),
-		EntityExtractorPython: getEnv("ENTITY_EXTRACTOR_PYTHON", "python3"),
-		RegionExtractorScript: getEnv("REGION_EXTRACTOR_SCRIPT", "scripts/extract_regions.py"),
+		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
+		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 
@@ -143,6 +145,7 @@ func Load() *Config {
 		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
 		SweepInterval:          getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
 		JobStaleTimeout:        getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
+		WorkerConcurrency:      getEnvInt("WORKER_CONCURRENCY", 5),
 	}
 }
 

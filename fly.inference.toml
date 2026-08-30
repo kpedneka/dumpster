@@ -1,0 +1,34 @@
+# Separate Fly app for the consolidated ML inference service.
+#
+# This can't be a process group on the main "dumpster" app (fly.toml):
+# process groups within one Fly app share a single built image, and this
+# service needs a completely different base (python:3.11-slim + the ML
+# stack) from api/worker's lean Go/Alpine runtime image. A separate app in
+# the same Fly organization is the standard way to run a second image,
+# reachable from api/worker over Fly's private network (WireGuard-based
+# 6PN) as "dumpster-inference.internal:8000" — no public exposure needed or
+# configured here, since nothing outside this Fly org ever calls it
+# directly. Deploy with: fly deploy --config fly.inference.toml
+app           = "dumpster-inference"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  target     = "inference"
+
+# Always-on, never scale-to-zero: the whole point of this service is to
+# keep GLiNER, the layout classifier, and the local embedding model warm.
+# A cold start here reintroduces exactly the multi-second-to-multi-minute
+# tax this consolidation exists to eliminate.
+[[vm]]
+  count  = 1
+  size   = "shared-cpu-1x"
+  # Combined warm footprint measured locally: GLiNER (~1.49GB) + the layout
+  # classifier's dependency stack (~0.83GB) + the local embedding model,
+  # all resident simultaneously in one process — see the System
+  # Architecture page's Inference Service sub-page for the full breakdown.
+  # 4096mb gives real headroom over that idle baseline for the transient
+  # peak during active PDF parsing; revisit against actual Fly Linux
+  # measurements once deployed; the same "not yet confirmed against real
+  # Fly runtime" caveat that applied to the worker's own sizing applies here.
+  memory = "4096mb"

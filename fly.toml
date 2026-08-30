@@ -22,11 +22,10 @@ primary_region = "iad"
   # Cloudflare R2 S3-compatible endpoint (account-specific, set as secret).
   # S3_ENDPOINT = "https://<account-id>.r2.cloudflarestorage.com"
   S3_USE_PATH_STYLE = "false"
-  # Python ML scripts for entity extraction and PDF region classification.
-  # These paths match the COPY destinations in the runtime Dockerfile stage.
-  ENTITY_EXTRACTOR_PYTHON = "python3"
-  ENTITY_EXTRACTOR_SCRIPT = "/app/scripts/extract_entities.py"
-  REGION_EXTRACTOR_SCRIPT = "/app/scripts/extract_regions.py"
+  # Base URL of the consolidated ML inference service, deployed as its own
+  # Fly app — see fly.inference.toml. Reached over Fly's private network,
+  # not the public internet.
+  INFERENCE_SERVICE_URL = "http://dumpster-inference.internal:8000"
 
 # Points Fly's built-in Prometheus scraper at the /metrics handler telemetry.Setup
 # already serves on METRICS_PORT, enabling Fly's Grafana dashboards with no new code.
@@ -67,17 +66,14 @@ primary_region = "iad"
 [[vm]]
   count     = 1
   size      = "shared-cpu-1x"
-  # 2048mb (raised from 1024mb, v4.7): the entity-extraction sidecar is now a
-  # persistent process instead of spawned fresh per document, so its ~1.3GB
-  # idle-loaded footprint (measured locally: torch + transformers + the
-  # GLiNER/DeBERTa-v3-base weights, sitting in memory doing nothing) becomes
-  # a permanent baseline for the worker's whole lifetime, not a few-seconds
-  # spike per document. Real peak is that ~1.3GB plus extract_regions.py's
-  # own ~390MB (measured in v4.6) whenever a PDF is actively parsing
-  # concurrently, plus Go binary overhead — doesn't fit in 1024mb at all.
-  # Not yet confirmed against the actual Fly Linux runtime (measured on
-  # Apple Silicon locally); revisit if real usage says otherwise.
-  memory    = "2048mb"
+  # 256mb (lowered from 2048mb): the worker no longer embeds any ML model —
+  # entity extraction and region classification now call the separate,
+  # dedicated inference service (fly.inference.toml) over HTTP instead of
+  # running a warm Python subprocess in this process. What's left is a
+  # plain Go binary plus in-process job concurrency (default 5 goroutines)
+  # — no reason for this to carry multi-GB memory anymore. Revisit if real
+  # usage says otherwise; not yet confirmed against actual Fly Linux traffic.
+  memory    = "256mb"
   processes = ["worker"]
 
   # Worker uses the direct Neon connection (no pooler) to support SKIP LOCKED

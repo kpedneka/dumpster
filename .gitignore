@@ -34,3 +34,7 @@ web/dist/
 scripts/.venv/
 __pycache__/
 *.pyc
+
+# Local scratch files for manual testing (sample documents, etc.) — not
+# meant to be checked in.
+examples/
