@@ -32,6 +32,10 @@ func (m *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, erro
 // Generator is a test double for llm.Generator.
 type Generator struct {
 	GenerateFn func(ctx context.Context, prompt string) (string, error)
+	// GenerateStreamFn overrides GenerateStream's default behavior (calling
+	// GenerateFn and delivering its result as a single delta). Set this in
+	// tests that need to exercise multi-delta streaming behavior.
+	GenerateStreamFn func(ctx context.Context, prompt string, onDelta func(string)) (string, error)
 }
 
 func NewGenerator(response string) *Generator {
@@ -52,4 +56,18 @@ func NewErrorGenerator(msg string) *Generator {
 
 func (m *Generator) Generate(ctx context.Context, prompt string) (string, error) {
 	return m.GenerateFn(ctx, prompt)
+}
+
+// GenerateStream delegates to GenerateStreamFn if set, otherwise falls back
+// to calling GenerateFn and delivering the whole result as a single delta.
+func (m *Generator) GenerateStream(ctx context.Context, prompt string, onDelta func(string)) (string, error) {
+	if m.GenerateStreamFn != nil {
+		return m.GenerateStreamFn(ctx, prompt, onDelta)
+	}
+	text, err := m.GenerateFn(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+	onDelta(text)
+	return text, nil
 }

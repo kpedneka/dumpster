@@ -53,12 +53,21 @@ func New(r retrieval.Retriever, a Answerer, opts ...Option) *Service {
 	return s
 }
 
-// Search executes the full query pipeline:
+// Search executes the full query pipeline and returns once the complete
+// Result is ready. It is a convenience wrapper around SearchStream for
+// callers that don't need incremental events.
+func (s *Service) Search(ctx context.Context, kbID uuid.UUID, query string) (Result, error) {
+	return s.SearchStream(ctx, kbID, query, func(StreamEvent) {})
+}
+
+// SearchStream executes the full query pipeline:
 //  1. Route the query to decide which legs to activate (normal / aggregation / multi-hop).
 //  2. Always run the hybrid (vector + keyword) leg.
 //  3. If the router selected a graph path and a GraphRetriever is wired in,
 //     run the appropriate graph leg alongside the hybrid leg.
-//  4. Merge all legs via RRF, then generate a cited answer.
+//  4. Merge all legs via RRF, emit the ranked retrieval set via onEvent,
+//     then generate a cited answer, forwarding each generated text chunk
+//     via onEvent as it arrives.
 //
 // When no router is configured the Service behaves exactly as before
 // v2.7 — the graph legs are never activated and existing callers need
@@ -69,7 +78,7 @@ func New(r retrieval.Retriever, a Answerer, opts ...Option) *Service {
 // a top-k RRF merge can silently drop correctly-found entities. This will be
 // revisited once real usage shows whether the truncation costs anything
 // observable rather than forcing a premature answer now.
-func (s *Service) Search(ctx context.Context, kbID uuid.UUID, query string) (Result, error) {
+func (s *Service) SearchStream(ctx context.Context, kbID uuid.UUID, query string, onEvent func(StreamEvent)) (Result, error) {
 	qt := router.Normal
 	if s.router != nil {
 		var err error
@@ -104,11 +113,16 @@ func (s *Service) Search(ctx context.Context, kbID uuid.UUID, query string) (Res
 	}
 
 	chunks := retrieval.RRFMerge(defaultK, legs...)
-	result, err := s.answerer.Answer(ctx, kbID, query, chunks)
+	docs := retrievedDocuments(chunks)
+	onEvent(StreamEvent{Type: EventRetrievedFiles, RetrievedDocuments: docs})
+
+	result, err := s.answerer.AnswerStream(ctx, kbID, query, chunks, func(delta string) {
+		onEvent(StreamEvent{Type: EventDelta, Delta: delta})
+	})
 	if err != nil {
 		return Result{}, fmt.Errorf("search: answer: %w", err)
 	}
-	result.RetrievedDocuments = retrievedDocuments(chunks)
+	result.RetrievedDocuments = docs
 	return result, nil
 }
 
