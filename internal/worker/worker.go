@@ -37,12 +37,12 @@ type Config struct {
 	// handled independently. Defaults to 1 (today's serial behavior) when
 	// zero or negative.
 	//
-	// Raising this above 1 was unsafe before v4.9/v4.10 (see the System
-	// Architecture page's Inference Service sub-page): concurrent jobs used
-	// to mean concurrent warm Python subprocesses (GLiNER, the layout
-	// classifier) stacking memory inside this same process. Now that those
-	// calls go out over HTTP to a separately-scaled inference service
-	// instead, that risk is gone — concurrency here only costs goroutines.
+	// Raising this above 1 used to be unsafe (see the System Architecture
+	// page's Inference Service sub-page): concurrent jobs used to mean
+	// concurrent warm Python subprocesses (GLiNER, the layout classifier)
+	// stacking memory inside this same process. Now that those calls go out
+	// over HTTP to a separately-scaled inference service instead, that risk
+	// is gone — concurrency here only costs goroutines.
 	//
 	// Safe because Postgres's SKIP LOCKED dequeue and the
 	// jobs (document_id, job_type) uniqueness constraint already guarantee

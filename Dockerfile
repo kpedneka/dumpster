@@ -36,7 +36,7 @@ COPY --from=builder /bin/api    /bin/api
 COPY --from=builder /bin/worker /bin/worker
 COPY --from=web-builder /app/web/dist /app/web/dist
 
-# inference (v4.8) is the standalone, always-on ML inference service: entity
+# inference is the standalone, always-on ML inference service: entity
 # extraction, PDF region classification, and local embeddings behind one
 # HTTP API. Built from python:3.11-slim (Debian/glibc), not Alpine: PyTorch
 # (a GLiNER dependency) does not publish musl/Alpine wheels, so installing

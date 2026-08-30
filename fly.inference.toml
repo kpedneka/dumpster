@@ -1,4 +1,4 @@
-# Separate Fly app for the consolidated ML inference service (v4.8).
+# Separate Fly app for the consolidated ML inference service.
 #
 # This can't be a process group on the main "dumpster" app (fly.toml):
 # process groups within one Fly app share a single built image, and this

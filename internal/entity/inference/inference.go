@@ -1,5 +1,5 @@
 // Package inference is the HTTP-client adapter for the consolidated ML
-// inference service (v4.8). It implements entity.Extractor by calling that
+// inference service. It implements entity.Extractor by calling that
 // service's /entities endpoint over HTTP, replacing the os/exec-based
 // subprocess sidecar (internal/entity/gliner, retired by this change) that
 // used to embed a warm Python process inside cmd/worker itself. See the

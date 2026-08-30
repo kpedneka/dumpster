@@ -1,5 +1,5 @@
 """Local embedding model for scripts/inference_service.py's /embeddings
-endpoint (v4.8).
+endpoint.
 
 Model choice: BAAI/bge-small-en-v1.5, via sentence-transformers. Picked for
 this specific trade-off: small enough (~130MB, 384 dims) to fit comfortably
@@ -14,9 +14,9 @@ BGE's documented convention: prepend a fixed instruction string to *query*
 text before embedding it, but not to document/passage text. Skipping this
 for queries measurably hurts retrieval quality with this model family. The
 is_query flag on embed() exists specifically to apply it correctly — the
-caller (the Go llm.Embedder adapter, see v4.4) is responsible for saying
-which case it's in, since this module has no way to infer it from the text
-alone.
+caller (the Go llm.Embedder adapter that will wire local embeddings into
+the query and ingestion paths) is responsible for saying which case it's
+in, since this module has no way to infer it from the text alone.
 """
 _MODEL_NAME = "BAAI/bge-small-en-v1.5"
 _DIMS = 384

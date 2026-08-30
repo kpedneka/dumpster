@@ -22,9 +22,9 @@ primary_region = "iad"
   # Cloudflare R2 S3-compatible endpoint (account-specific, set as secret).
   # S3_ENDPOINT = "https://<account-id>.r2.cloudflarestorage.com"
   S3_USE_PATH_STYLE = "false"
-  # Base URL of the consolidated ML inference service (v4.8), deployed as
-  # its own Fly app — see fly.inference.toml. Reached over Fly's private
-  # network, not the public internet.
+  # Base URL of the consolidated ML inference service, deployed as its own
+  # Fly app — see fly.inference.toml. Reached over Fly's private network,
+  # not the public internet.
   INFERENCE_SERVICE_URL = "http://dumpster-inference.internal:8000"
 
 # Points Fly's built-in Prometheus scraper at the /metrics handler telemetry.Setup
@@ -66,14 +66,13 @@ primary_region = "iad"
 [[vm]]
   count     = 1
   size      = "shared-cpu-1x"
-  # 256mb (lowered from 2048mb, v4.9/v4.10): the worker no longer embeds any
-  # ML model — entity extraction and region classification now call the
-  # separate, dedicated inference service (fly.inference.toml) over HTTP
-  # instead of running a warm Python subprocess in this process. What's left
-  # is a plain Go binary plus in-process job concurrency (v4.11, default 5
-  # goroutines) — no reason for this to carry multi-GB memory anymore.
-  # Revisit if real usage says otherwise; not yet confirmed against actual
-  # Fly Linux traffic.
+  # 256mb (lowered from 2048mb): the worker no longer embeds any ML model —
+  # entity extraction and region classification now call the separate,
+  # dedicated inference service (fly.inference.toml) over HTTP instead of
+  # running a warm Python subprocess in this process. What's left is a
+  # plain Go binary plus in-process job concurrency (default 5 goroutines)
+  # — no reason for this to carry multi-GB memory anymore. Revisit if real
+  # usage says otherwise; not yet confirmed against actual Fly Linux traffic.
   memory    = "256mb"
   processes = ["worker"]
 

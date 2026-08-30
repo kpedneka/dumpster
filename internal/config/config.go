@@ -60,8 +60,8 @@ type Config struct {
 	// or remove a type by changing ENTITY_TYPES, no migration required.
 	EntityTypes []string
 	// InferenceServiceURL is the base URL of the consolidated ML inference
-	// service (v4.8): entity extraction, PDF region classification, and
-	// local embeddings, called over HTTP by both cmd/api and cmd/worker
+	// service: entity extraction, PDF region classification, and local
+	// embeddings, called over HTTP by both cmd/api and cmd/worker
 	// instead of each embedding its own warm Python subprocess. Defaults to
 	// the docker-compose service name; override for local dev without Docker
 	// or to point at a different deployment.
@@ -88,7 +88,7 @@ type Config struct {
 	// SweepInterval is how often the always-on worker runs the session sweep.
 	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
 	SweepInterval time.Duration
-	// WorkerConcurrency is how many jobs the worker processes at once (v4.11).
+	// WorkerConcurrency is how many jobs the worker processes at once.
 	// Defaults to 5. Safe to run above 1 now that entity extraction and
 	// region classification call the inference service over HTTP instead of
 	// embedding a warm Python subprocess in this process — see

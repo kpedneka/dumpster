@@ -1,6 +1,6 @@
 // Package layout is the vendor adapter for PDF region extraction. It
 // implements region classification by calling the consolidated ML
-// inference service's /regions endpoint over HTTP (v4.10) — previously
+// inference service's /regions endpoint over HTTP — previously
 // this shelled out to scripts/extract_regions.py as its own warm
 // subprocess embedded inside cmd/worker; see the System Architecture
 // page's Inference Service sub-page for the full design and why that
@@ -99,8 +99,8 @@ type rawRegionJSON struct {
 type response struct {
 	Regions []rawRegionJSON `json:"regions"`
 	// PeakRSSKB is the inference service process's peak resident set size
-	// in KB at the time of this request. Since v4.8 that process is shared
-	// and always-on, this is no longer a per-job figure the way it was
+	// in KB at the time of this request. That process is now shared and
+	// always-on, so this is no longer a per-job figure the way it was
 	// under the old per-document subprocess model — kept for continuity of
 	// the sizing signal, but treat it as "the service's RSS so far", not
 	// "this document's incremental cost".

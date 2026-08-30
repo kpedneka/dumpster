@@ -1,4 +1,4 @@
-"""Consolidated ML inference service (v4.8).
+"""Consolidated ML inference service.
 
 Wraps three CPU-bound Python capabilities behind one always-on HTTP
 service, so cmd/api and cmd/worker call over the network instead of each

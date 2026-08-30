@@ -350,10 +350,10 @@ func TestWorker_DefaultConcurrencyIsSerial(t *testing.T) {
 }
 
 // TestWorker_ConcurrencyProcessesJobsInParallel is the core property of
-// v4.11: raising Concurrency must result in jobs genuinely overlapping in
-// time, not just N calls eventually happening — this is why the test
-// measures both peak in-flight count and real wall-clock elapsed time,
-// rather than only counting completed jobs.
+// in-process worker concurrency: raising Concurrency must result in jobs
+// genuinely overlapping in time, not just N calls eventually happening —
+// this is why the test measures both peak in-flight count and real
+// wall-clock elapsed time, rather than only counting completed jobs.
 func TestWorker_ConcurrencyProcessesJobsInParallel(t *testing.T) {
 	const n = 5
 	const delay = 50 * time.Millisecond
@@ -393,7 +393,7 @@ func TestWorker_ConcurrencyProcessesJobsInParallel(t *testing.T) {
 // concurrent processing of jobs belonging to different tenants (and
 // documents) at once, confirming every job is still individually acked
 // exactly once with no cross-job interference — the correctness half of
-// v4.11's acceptance criteria, alongside the timing half above.
+// concurrency's requirements, alongside the timing half above.
 func TestWorker_ConcurrentJobsAcrossTenants_NoCorrectnessRegression(t *testing.T) {
 	const n = 8
 	jobs := make([]*queue.Job, n)

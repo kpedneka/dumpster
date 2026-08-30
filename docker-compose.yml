@@ -29,7 +29,7 @@ services:
     depends_on:
       - inference
 
-  # inference (v4.8) is the consolidated, always-on ML service: entity
+  # inference is the consolidated, always-on ML service: entity
   # extraction, PDF region classification, and local embeddings behind one
   # HTTP API. api and worker both call it over the network instead of
   # embedding their own warm Python subprocess (the pattern this replaces).
