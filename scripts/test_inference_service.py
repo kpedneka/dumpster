@@ -6,7 +6,9 @@ GLiNER/unstructured/sentence-transformers dependencies installed. Run with:
 """
 import base64
 import json
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from unittest import mock
 
@@ -143,6 +145,89 @@ class EmbeddingsEndpointTests(InferenceServiceTestCase):
     def test_missing_texts_field_returns_422(self):
         resp = self.client.post("/embeddings", json={})
         self.assertEqual(resp.status_code, 422)
+
+
+class ConcurrencyTests(InferenceServiceTestCase):
+    """Regression tests for the production incident where /regions and
+    /entities ran their actual (slow) work directly on the event loop:
+    one document's extraction call would silently freeze every other
+    in-flight request — including an unrelated /embeddings call for a
+    search query — for its entire duration, not just slow it down.
+
+    TestClient's underlying httpx.Client is safe to call from multiple
+    threads at once, which is what lets these tests fire two requests that
+    genuinely overlap in wall-clock time rather than one waiting for the
+    other's synchronous call to complete first."""
+
+    def test_regions_does_not_block_a_concurrent_regions_request(self):
+        def slow_extract(_pdf_bytes):
+            time.sleep(0.2)
+            return []
+
+        with mock.patch.object(
+            inference_service.extract_regions, "extract_regions", side_effect=slow_extract
+        ), mock.patch.object(inference_service.extract_regions, "_peak_rss_kb", return_value=1):
+            body = {"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
+            started = time.monotonic()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(self.client.post, "/regions", json=body) for _ in range(2)]
+                responses = [f.result(timeout=5) for f in futures]
+            elapsed = time.monotonic() - started
+
+        for resp in responses:
+            self.assertEqual(resp.status_code, 200)
+        # Two 0.2s extractions running concurrently should take close to
+        # 0.2s total. Before dispatching via run_in_threadpool, the second
+        # request couldn't even start until the first's direct, synchronous
+        # call returned, so this would take closer to 0.4s.
+        self.assertLess(elapsed, 0.35, "requests ran serially, not concurrently")
+
+    def test_regions_does_not_block_a_concurrent_healthz_request(self):
+        # The more visible symptom in production: an unrelated, cheap
+        # request (here /healthz; in production, an /embeddings call for a
+        # search query) stalling behind a single slow /regions call.
+        def slow_extract(_pdf_bytes):
+            time.sleep(0.2)
+            return []
+
+        with mock.patch.object(
+            inference_service.extract_regions, "extract_regions", side_effect=slow_extract
+        ), mock.patch.object(inference_service.extract_regions, "_peak_rss_kb", return_value=1):
+            body = {"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                regions_future = pool.submit(self.client.post, "/regions", json=body)
+                # Give the /regions request a head start so it's genuinely
+                # in flight before /healthz is sent.
+                time.sleep(0.05)
+                started = time.monotonic()
+                healthz_resp = pool.submit(self.client.get, "/healthz").result(timeout=5)
+                healthz_elapsed = time.monotonic() - started
+                regions_future.result(timeout=5)
+
+        self.assertEqual(healthz_resp.status_code, 200)
+        # /healthz does no work at all — if it took anywhere near as long as
+        # the /regions call still in flight, it was blocked behind it.
+        self.assertLess(healthz_elapsed, 0.1, "/healthz stalled behind an unrelated /regions call")
+
+    def test_entities_does_not_block_a_concurrent_healthz_request(self):
+        def slow_handle_request(_nlp, _model, _raw):
+            time.sleep(0.2)
+            return json.dumps({"entities": []})
+
+        with mock.patch.object(
+            inference_service.extract_entities, "_handle_request", side_effect=slow_handle_request
+        ):
+            body = {"allowed_types": ["person"], "chunks": [{"chunk_id": "1", "text": "hi"}]}
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                entities_future = pool.submit(self.client.post, "/entities", json=body)
+                time.sleep(0.05)
+                started = time.monotonic()
+                healthz_resp = pool.submit(self.client.get, "/healthz").result(timeout=5)
+                healthz_elapsed = time.monotonic() - started
+                entities_future.result(timeout=5)
+
+        self.assertEqual(healthz_resp.status_code, 200)
+        self.assertLess(healthz_elapsed, 0.1, "/healthz stalled behind an unrelated /entities call")
 
 
 if __name__ == "__main__":

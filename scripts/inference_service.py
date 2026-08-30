@@ -23,6 +23,14 @@ Endpoints:
                        lifespan startup below returns, so no endpoint can
                        ever serve against a partially-warm process regardless.
 
+/entities and /regions dispatch their actual (slow, CPU-bound) work via
+run_in_threadpool rather than calling it directly. uvicorn runs a single,
+single-threaded event loop by default; a synchronous multi-second call made
+directly in one of these coroutines would stop that one thread from making
+progress on anything else at all — not just this request, every request,
+including an unrelated /embeddings call for a search query — for its whole
+duration. See each handler's inline comment for the specifics.
+
 Run with: uvicorn inference_service:app --host 0.0.0.0 --port 8000
 """
 import base64
@@ -30,6 +38,7 @@ import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -84,8 +93,21 @@ def _parse_json_object(raw: bytes) -> dict:
 async def entities(request: Request):
     try:
         body = _parse_json_object(await request.body())
-        response_line = extract_entities._handle_request(
-            _pipelines["nlp"], _pipelines["entity_model"], json.dumps(body)
+        # run_in_threadpool, not a direct call: _handle_request runs spaCy +
+        # GLiNER inference, which can take seconds for a large batch of
+        # chunks. Calling it directly here would block this process's one
+        # asyncio event loop for that whole duration — uvicorn is
+        # single-threaded by default, so every other in-flight request
+        # (including an unrelated /embeddings call for a search query)
+        # would simply stop making progress until this one call returned,
+        # not just slow down. The threadpool dispatch is the same mechanism
+        # FastAPI already uses automatically for a plain `def` endpoint
+        # (see /embeddings below) — using it explicitly here keeps this
+        # async endpoint (needed for `await request.body()`, for the
+        # custom validation-friendly JSON parsing above) from being worse
+        # off than a sync one for the actual CPU-bound work.
+        response_line = await run_in_threadpool(
+            extract_entities._handle_request, _pipelines["nlp"], _pipelines["entity_model"], json.dumps(body)
         )
     except (ValueError, KeyError, TypeError) as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -108,7 +130,11 @@ async def regions(request: Request):
     except (base64.binascii.Error, ValueError) as exc:
         return JSONResponse(status_code=400, content={"error": f"invalid pdf_base64: {exc}"})
 
-    region_list = extract_regions.extract_regions(pdf_bytes)
+    # See the matching comment in /entities above: PDF layout classification
+    # is the heaviest call in this whole service (can run for seconds to
+    # tens of seconds on a large document) and must not run directly on the
+    # event loop.
+    region_list = await run_in_threadpool(extract_regions.extract_regions, pdf_bytes)
     return {"regions": region_list, "peak_rss_kb": extract_regions._peak_rss_kb()}
 
 
