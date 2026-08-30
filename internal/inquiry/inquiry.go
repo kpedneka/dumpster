@@ -51,14 +51,22 @@ type BoundingBox struct {
 	Y1 float64 `json:"y1"`
 }
 
-// Citation mirrors search.Citation; see that type for field meaning.
+// Citation mirrors search.Citation, with one deliberate difference: FileName
+// replaces Text. The live search response resolves a file name via a
+// request-time lookup (safe, since the document still exists at answer
+// time), but a persisted Inquiry message is read back long after that —
+// possibly after the source document was renamed or deleted. FileName is
+// snapshotted at persist time so a historical citation still identifies its
+// source even then; nothing displays raw chunk text anymore (see the
+// grouped-citation frontend redesign), so there's no resilience lost by not
+// snapshotting Text too.
 type Citation struct {
 	Number      int          `json:"number"`
 	DocumentID  uuid.UUID    `json:"document_id"`
 	ChunkID     uuid.UUID    `json:"chunk_id"`
 	CharStart   int          `json:"char_start"`
 	CharEnd     int          `json:"char_end"`
-	Text        string       `json:"text"`
+	FileName    string       `json:"file_name"`
 	PageNumber  *int         `json:"page_number,omitempty"`
 	BoundingBox *BoundingBox `json:"bounding_box,omitempty"`
 }

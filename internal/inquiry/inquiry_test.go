@@ -83,7 +83,7 @@ func TestAppendMessage_AssignsSequentialOrdinal(t *testing.T) {
 	}
 	second, err := repo.AppendMessage(ctx, userID, &inquiry.Message{
 		InquiryID: inq.ID, KBID: kbID, Role: inquiry.RoleAssistant, Content: "FEMA is...",
-		Citations: []inquiry.Citation{{Number: 1, Text: "source span"}},
+		Citations: []inquiry.Citation{{Number: 1, FileName: "notes.txt"}},
 	})
 	if err != nil {
 		t.Fatal(err)
