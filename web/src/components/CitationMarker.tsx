@@ -50,7 +50,23 @@ export function CitationMarker({ citation }: CitationMarkerProps) {
       }}
     >
       <PopoverTrigger asChild>
-        <sup className="ml-0.5 cursor-pointer rounded bg-accent px-1 py-0.5 text-xs font-medium text-accent-foreground hover:bg-accent/80">
+        {/* tabIndex makes this a real keyboard tab stop, and onKeyDown makes
+            it operable once reached: <sup> isn't focusable by default, and
+            asChild's ARIA/behavioral props (aria-haspopup, etc.) don't
+            include a browser's native Enter/Space-triggers-click behavior —
+            that only comes for free on an actual <button>. Both are missing
+            without this; confirmed by testing Enter on a tabIndex-only
+            version and finding the popover simply never opened. */}
+        <sup
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              e.currentTarget.click()
+            }
+          }}
+          className="ml-0.5 cursor-pointer rounded bg-accent px-1 py-0.5 text-xs font-medium text-accent-foreground hover:bg-accent/80"
+        >
           {`[${citation.number}]`}
         </sup>
       </PopoverTrigger>

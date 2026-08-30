@@ -5,7 +5,6 @@ import { useDropzone } from 'react-dropzone'
 import {
   AlertTriangle,
   FileText,
-  MoreHorizontal,
   RotateCw,
   Search as SearchIcon,
   Trash2,
@@ -25,12 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { toast } from '@/hooks/use-toast'
 import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
@@ -54,6 +47,27 @@ const CITATION_PLACEHOLDER_RE = /(\{CITE_\d+\})/
 
 function preprocessCitations(summary: string): string {
   return summary.replace(CITATION_BRACKET_RE, '{CITE_$1}')
+}
+
+// Surfaces exactly where in a source to look, for the subset of relevant
+// files the model actually cited — computed from data already on the page
+// (Citation.document_id + Citation.locator), no extra request. A file with
+// several cited pages shows all of them, deduped and in page order; a
+// relevant-but-never-cited file, or a non-paginated one (plain text), shows
+// none — there's no locator to show either way. Chosen over cross-highlight
+// hover/focus between citations and this list: that broke down the moment
+// the answer was long enough to scroll (a very likely case, and the whole
+// point of "which page do I check" is most valuable for long documents),
+// and doesn't work on mobile at all. This has no such dependency — it's
+// static text, always visible, answering the same question up front.
+function citedPagesFor(documentId: string, citations: Citation[]): number[] {
+  const pages = new Set<number>()
+  for (const c of citations) {
+    if (c.document_id === documentId && c.locator?.type === 'page') {
+      pages.add(c.locator.value)
+    }
+  }
+  return Array.from(pages).sort((a, b) => a - b)
 }
 
 function injectCitations(children: React.ReactNode, citations: Citation[]): React.ReactNode {
@@ -116,17 +130,36 @@ export function KBDetailPage() {
   const [duplicateQueue, setDuplicateQueue] = useState<File[]>([])
   const [query, setQuery] = useState(() => getDraftQuery(kbId!))
   const [submittedQuery, setSubmittedQueryState] = useState(() => getSubmittedQuery(kbId!))
+  // Forces the search effect below to re-run even when submittedQuery is
+  // textually unchanged: React's setState bails out of re-rendering when a
+  // string setter receives the same value, so re-clicking Search with an
+  // identical query would otherwise silently no-op — stale even after the
+  // KB's underlying data has changed (e.g. a newly uploaded document).
+  // Search should always be re-runnable on demand, not cached on the query text.
+  const [searchNonce, setSearchNonce] = useState(0)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
-  const { data: kb } = useQuery({
+  const { data: kb, error: kbError } = useQuery({
     queryKey: ['kbs', kbId],
     queryFn: async () => {
-      const { data, error } = await api.GET('/kbs/{id}', { params: { path: { id: kbId! } } })
-      if (error) throw error
+      const { data, error, response } = await api.GET('/kbs/{id}', { params: { path: { id: kbId! } } })
+      if (error) throw new Error('kb fetch failed', { cause: response.status })
       return data
     },
     enabled: !!kbId,
+    // Retrying a 404 (e.g. a KB the demo sweeper already deleted while this
+    // tab sat open) just delays the redirect below for no benefit.
+    retry: false,
   })
+
+  // A tab left open past the sweeper's deletion of its KB otherwise renders
+  // an empty, broken-looking page on reload rather than sending the user
+  // somewhere useful.
+  useEffect(() => {
+    if (kbError instanceof Error && kbError.cause === 404) {
+      navigate('/kbs', { replace: true })
+    }
+  }, [kbError, navigate])
 
   const { data: docPage } = useQuery({
     queryKey: ['docs', kbId],
@@ -150,6 +183,11 @@ export function KBDetailPage() {
   const [summary, setSummary] = useState('')
   const [citations, setCitations] = useState<Citation[]>([])
   const [retrievedFiles, setRetrievedFiles] = useState<RetrievedFile[]>([])
+  // How long retrieval took, in ms, measured client-side from the moment the
+  // search request went out to the retrieved_files event arriving — not a
+  // server-reported figure. null means "not back yet"; that's also what
+  // gates the "Finding relevant files…" vs. "Found N file(s) in Xms" text.
+  const [retrievalMs, setRetrievalMs] = useState<number | null>(null)
   const [searchError, setSearchError] = useState<unknown>(null)
 
   // Streaming (not react-query) because the response arrives incrementally
@@ -174,8 +212,10 @@ export function KBDetailPage() {
     setSummary('')
     setCitations([])
     setRetrievedFiles([])
+    setRetrievalMs(null)
     setSearchError(null)
     /* eslint-enable react-hooks/set-state-in-effect */
+    const startedAt = performance.now()
 
     searchStream(
       kbId,
@@ -184,6 +224,7 @@ export function KBDetailPage() {
         switch (event.type) {
           case 'retrieved_files':
             setRetrievedFiles(event.retrieved_files)
+            setRetrievalMs(Math.round(performance.now() - startedAt))
             break
           case 'delta':
             // Live-typing preview. The done event below replaces this
@@ -213,7 +254,7 @@ export function KBDetailPage() {
     })
 
     return () => controller.abort()
-  }, [kbId, submittedQuery])
+  }, [kbId, submittedQuery, searchNonce])
 
   const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
 
@@ -289,6 +330,9 @@ export function KBDetailPage() {
     if (trimmed) {
       setSubmittedQueryState(trimmed)
       setSubmittedQuery(kbId!, trimmed)
+      // Always bump the nonce, even when trimmed === submittedQuery already —
+      // that's precisely the "re-run an unchanged query" case this exists for.
+      setSearchNonce((n) => n + 1)
     }
   }
 
@@ -336,30 +380,14 @@ export function KBDetailPage() {
     </div>
   )
 
-  const noResults =
-    searchStatus === 'success' && citations.length === 0 && retrievedFiles.length === 0
-
   return (
     <div className="rise mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl font-semibold tracking-tight">{kb?.name ?? '—'}</h1>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
-              <MoreHorizontal className="h-4 w-4" />
-              <span className="sr-only">Knowledge base options</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete knowledge base
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+          <Trash2 className="h-4 w-4" />
+          Delete knowledge base
+        </Button>
       </div>
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-sm">
@@ -408,7 +436,7 @@ export function KBDetailPage() {
           the right on desktop — same responsive pattern the two-tab layout
           used, just with search in the slot the document list used to own. */}
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <aside className="order-first lg:order-last">
+        <aside className="order-last">
           <div className="flex flex-col gap-6 lg:sticky lg:top-4">
             <div>
               <h2 className="mb-1 font-display text-base font-semibold">Upload documents</h2>
@@ -481,46 +509,67 @@ export function KBDetailPage() {
             </p>
           )}
 
-          {submittedQuery && searchStatus === 'loading' && summary === '' && (
-            <p className="py-16 text-center text-sm text-muted-foreground">Searching…</p>
-          )}
-
           {submittedQuery && searchStatus === 'error' && (
             <p className="py-16 text-center text-sm text-destructive">
               {describeError(searchError, 'Search failed. Try again.')}
             </p>
           )}
 
-          {submittedQuery &&
-            searchStatus !== 'error' &&
-            searchStatus !== 'idle' &&
-            (searchStatus === 'loading' || summary !== '') &&
-            (noResults ? (
-              <p className="py-16 text-center text-sm text-muted-foreground">No results found.</p>
-            ) : (
-              <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
+          {submittedQuery && searchStatus !== 'error' && searchStatus !== 'idle' && (
+            <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
+              {summary === '' ? (
+                <p className="text-muted-foreground">Awaiting LLM summarization…</p>
+              ) : (
                 <ReactMarkdown components={mdComponents}>{preprocessCitations(summary)}</ReactMarkdown>
+              )}
 
-                {retrievedFiles.length > 0 && (
-                  <div className="mt-4 border-t border-border pt-3">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Relevant files
+              <div className="mt-4 border-t border-border pt-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Relevant files
+                  </span>
+                  {retrievalMs !== null && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in{' '}
+                      {retrievalMs}ms
                     </span>
+                  )}
+                </div>
+                {retrievalMs === null ? (
+                  <p className="mt-2 text-xs text-muted-foreground">Finding relevant files…</p>
+                ) : retrievedFiles.length === 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground">No relevant files found.</p>
+                ) : (
+                  <>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Ranked most to least relevant
+                    </p>
                     <ul className="mt-2 flex flex-col gap-1.5">
-                      {retrievedFiles.map((f) => (
-                        <li
-                          key={f.document_id}
-                          className="flex items-center gap-2 text-sm text-muted-foreground"
-                        >
-                          <FileText className="h-3.5 w-3.5 shrink-0" />
-                          <span className="truncate">{f.file_name}</span>
-                        </li>
-                      ))}
+                      {retrievedFiles.map((f) => {
+                        const pages = citedPagesFor(f.document_id, citations)
+                        return (
+                          <li
+                            key={f.document_id}
+                            className="flex items-center gap-2 text-sm text-muted-foreground"
+                          >
+                            <FileText className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">
+                              {f.file_name}
+                              {pages.length > 0 && (
+                                <span className="text-muted-foreground/70">
+                                  {` · p. ${pages.join(', ')}`}
+                                </span>
+                              )}
+                            </span>
+                          </li>
+                        )
+                      })}
                     </ul>
-                  </div>
+                  </>
                 )}
               </div>
-            ))}
+            </div>
+          )}
         </section>
       </div>
     </div>

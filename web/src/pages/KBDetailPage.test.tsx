@@ -72,8 +72,7 @@ describe('KBDetailPage', () => {
       renderKBDetailPage()
 
       await screen.findByRole('heading', { name: 'Test KB' })
-      await user.click(screen.getByRole('button', { name: /knowledge base options/i }))
-      await user.click(screen.getByRole('menuitem', { name: /delete knowledge base/i }))
+      await user.click(screen.getByRole('button', { name: /delete knowledge base/i }))
 
       const dialog = await screen.findByRole('dialog')
       await user.click(within(dialog).getByRole('button', { name: /^delete$/i }))
@@ -91,8 +90,7 @@ describe('KBDetailPage', () => {
       renderKBDetailPage()
 
       await screen.findByRole('heading', { name: 'Test KB' })
-      await user.click(screen.getByRole('button', { name: /knowledge base options/i }))
-      await user.click(screen.getByRole('menuitem', { name: /delete knowledge base/i }))
+      await user.click(screen.getByRole('button', { name: /delete knowledge base/i }))
 
       const dialog = await screen.findByRole('dialog')
       await user.click(within(dialog).getByRole('button', { name: /cancel/i }))
@@ -441,14 +439,17 @@ describe('KBDetailPage', () => {
       })
     })
 
-    it('lists relevant files under the answer, including files not cited inline', async () => {
+    it('lists relevant files under the answer in RRF-fused rank order, not re-sorted', async () => {
       mockSearchStream([
         sseFrame('retrieved_files', {
-          // A superset of citations — retrieval surfaced a second file that
-          // didn't end up cited in the answer.
+          // Deliberately NOT cited-first: history.txt ranked higher by
+          // retrieval but never ends up cited in the answer, while geo.txt
+          // ranks lower but IS cited. If the frontend re-sorted (e.g. cited
+          // files first) instead of rendering retrieved_files as received,
+          // this order would flip and the test below would catch it.
           retrieved_files: [
-            { document_id: 'doc-1', file_name: 'geo.txt' },
             { document_id: 'doc-2', file_name: 'history.txt' },
+            { document_id: 'doc-1', file_name: 'geo.txt' },
           ],
         }),
         sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
@@ -477,10 +478,65 @@ describe('KBDetailPage', () => {
       await user.click(screen.getByRole('button', { name: /^search$/i }))
 
       await waitFor(() => expect(screen.getByText('geo.txt')).toBeInTheDocument())
-      expect(screen.getByText('history.txt')).toBeInTheDocument()
+      const items = screen.getAllByRole('listitem').map((li) => li.textContent)
+      expect(items).toEqual(['history.txt', 'geo.txt'])
+      expect(screen.getByText(/ranked most to least relevant/i)).toBeInTheDocument()
     })
 
-    it('shows a "no results found" empty state when retrieval found nothing', async () => {
+    it('shows the cited page numbers next to a relevant file, aggregated from its citations', async () => {
+      mockSearchStream([
+        sseFrame('retrieved_files', {
+          retrieved_files: [
+            { document_id: 'doc-1', file_name: 'report.pdf' },
+            { document_id: 'doc-2', file_name: 'uncited.txt' },
+          ],
+        }),
+        sseFrame('delta', { text: 'The findings span several pages [1][2].' }),
+        sseFrame('done', {
+          summary: 'The findings span several pages [1][2].',
+          citations: [
+            {
+              number: 1,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              char_start: 0,
+              char_end: 10,
+              text: 'chunk one',
+              file_name: 'report.pdf',
+              locator: { type: 'page', value: 12 },
+            },
+            // Same file, a different (and out-of-order, to check sorting)
+            // page — and a duplicate of citation 1's page, to check dedup.
+            {
+              number: 2,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-2',
+              char_start: 0,
+              char_end: 10,
+              text: 'chunk two',
+              file_name: 'report.pdf',
+              locator: { type: 'page', value: 3 },
+            },
+          ],
+        }),
+      ])
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'what does the report say?')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => expect(screen.getByText('uncited.txt')).toBeInTheDocument())
+      // Sorted ascending and deduped, not insertion order (12 then 3 in the
+      // citations array above).
+      expect(screen.getByText(/p\.\s*3,\s*12/)).toBeInTheDocument()
+      // A relevant-but-never-cited file has no locator to show.
+      expect(screen.getByText('uncited.txt').textContent).toBe('uncited.txt')
+    })
+
+    it('shows the not-found summary and an empty relevant-files state when retrieval found nothing', async () => {
       mockSearchStream([
         sseFrame('retrieved_files', { retrieved_files: [] }),
         sseFrame('delta', { text: 'I could not find relevant information to answer this question.' }),
@@ -498,8 +554,41 @@ describe('KBDetailPage', () => {
       await user.click(screen.getByRole('button', { name: /^search$/i }))
 
       await waitFor(() => {
-        expect(screen.getByText(/no results found/i)).toBeInTheDocument()
+        expect(screen.getByText(/could not find relevant information/i)).toBeInTheDocument()
       })
+      expect(screen.getByText(/no relevant files found/i)).toBeInTheDocument()
+      expect(screen.getByText(/found 0 files in \d+ms/i)).toBeInTheDocument()
+    })
+
+    it('shows placeholder text before the retrieved_files and done events arrive', async () => {
+      let releaseStream: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        releaseStream = resolve
+      })
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          await gate
+          controller.enqueue(new TextEncoder().encode(sseFrame('retrieved_files', { retrieved_files: [] })))
+          controller.enqueue(
+            new TextEncoder().encode(sseFrame('done', { summary: 'the answer', citations: [] })),
+          )
+          controller.close()
+        },
+      })
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })))
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'a question')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => expect(screen.getByText(/awaiting llm summarization/i)).toBeInTheDocument())
+      expect(screen.getByText(/finding relevant files/i)).toBeInTheDocument()
+
+      releaseStream()
+      await waitFor(() => expect(screen.getByText('the answer')).toBeInTheDocument())
     })
 
     it('shows an error state when the search request fails outright', async () => {
@@ -534,6 +623,65 @@ describe('KBDetailPage', () => {
       await waitFor(() => {
         expect(screen.getByText(/generation failed/i)).toBeInTheDocument()
       })
+    })
+
+    it('re-runs the search when Search is clicked again with an unchanged query', async () => {
+      mockSearchStream([
+        sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
+        sseFrame('done', { summary: 'first answer', citations: [] }),
+      ])
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'same question')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await waitFor(() => expect(screen.getByText('first answer')).toBeInTheDocument())
+
+      expect(fetch).toHaveBeenCalledTimes(1)
+
+      // Same query text, clicked again — must actually re-run, not silently
+      // no-op just because the submitted string didn't change.
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    })
+  })
+
+  describe('stale or deleted knowledge base', () => {
+    it('redirects to the KB list when the KB fetch 404s', async () => {
+      vi.mocked(api.GET).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}') {
+          return Promise.resolve({
+            data: undefined,
+            error: { error: 'not found' },
+            response: { status: 404 },
+          })
+        }
+        if (path === '/kbs/{kbId}/documents') {
+          return Promise.resolve({ data: { items: [] }, error: undefined })
+        }
+        throw new Error(`unexpected api.GET call: ${path}`)
+      }) as never)
+
+      renderKBDetailPage()
+
+      await waitFor(() => {
+        expect(screen.getByText('Knowledge Bases list')).toBeInTheDocument()
+      })
+    })
+  })
+
+  describe('mobile layout order', () => {
+    it('places the upload/documents column after the search section, not before', async () => {
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      const aside = document.querySelector('aside')
+      expect(aside).not.toBeNull()
+      expect(aside?.className).toContain('order-last')
+      expect(aside?.className).not.toContain('order-first')
     })
   })
 })

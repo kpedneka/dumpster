@@ -96,4 +96,31 @@ describe('CitationMarker', () => {
     expect(await screen.findByText(longPageText)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /show full page text/i })).not.toBeInTheDocument()
   })
+
+  describe('keyboard accessibility', () => {
+    it('is a real tab stop', () => {
+      render(<CitationMarker citation={baseCitation} />)
+      expect(screen.getByText('[1]')).toHaveAttribute('tabIndex', '0')
+    })
+
+    it('opens the popover on Enter when focused, not just on click', async () => {
+      const user = userEvent.setup()
+      render(<CitationMarker citation={baseCitation} />)
+
+      screen.getByText('[1]').focus()
+      await user.keyboard('{Enter}')
+
+      expect(await screen.findByText('notes.txt')).toBeInTheDocument()
+    })
+
+    it('opens the popover on Space when focused', async () => {
+      const user = userEvent.setup()
+      render(<CitationMarker citation={baseCitation} />)
+
+      screen.getByText('[1]').focus()
+      await user.keyboard(' ')
+
+      expect(await screen.findByText('notes.txt')).toBeInTheDocument()
+    })
+  })
 })
