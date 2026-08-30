@@ -16,6 +16,17 @@ primary_region = "iad"
   dockerfile = "Dockerfile"
   target     = "inference"
 
+# Fly's 6PN private network is IPv6-only. Binding to 0.0.0.0 (the
+# Dockerfile's local-dev default) only opens an IPv4 socket, so api/worker
+# reaching this app via "dumpster-inference.internal:8000" got "connection
+# refused" despite DNS resolving fine and the process being up — nothing
+# was actually listening on the address 6PN traffic arrives on. No
+# [[services]] block substitutes for this: per Fly's own docs, 6PN traffic
+# bypasses Fly's proxy entirely, so the process itself has to bind the
+# address proxy-less private traffic actually lands on.
+[env]
+  UVICORN_HOST = "fly-local-6pn"
+
 # Always-on, never scale-to-zero: the whole point of this service is to
 # keep GLiNER, the layout classifier, and the local embedding model warm.
 # A cold start here reintroduces exactly the multi-second-to-multi-minute

@@ -98,7 +98,16 @@ COPY scripts/ /app/scripts/
 # from /app would need scripts/ to be a real package instead.
 WORKDIR /app/scripts
 EXPOSE 8000
-CMD ["uvicorn", "inference_service:app", "--host", "0.0.0.0", "--port", "8000"]
+# UVICORN_HOST defaults to 0.0.0.0 (all IPv4 interfaces) for local
+# docker-compose. On Fly, fly.inference.toml overrides this to
+# "fly-local-6pn" — Fly's private network (6PN) is IPv6-only, and
+# 0.0.0.0 never binds an IPv6 address, so another machine reaching this
+# one over 6PN would get "connection refused" despite the process being
+# up and DNS resolving correctly. Shell form (not exec form) so the env
+# var actually expands; Fly's own docs are explicit that no [[services]]
+# block substitutes for this — 6PN traffic bypasses Fly's proxy entirely,
+# so the process has to be the thing actually listening on that address.
+CMD exec uvicorn inference_service:app --host ${UVICORN_HOST:-0.0.0.0} --port 8000
 
 # No ENTRYPOINT/CMD on runtime: Fly.io selects the binary via [processes] in
 # fly.toml; docker-compose selects it via the `command:` key in
