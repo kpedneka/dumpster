@@ -50,10 +50,8 @@ type Config struct {
 	// Observability
 	MetricsPort string
 	// LLM
-	AnthropicAPIKey  string
-	AnthropicModel   string
-	OpenAIAPIKey     string
-	OpenAIEmbedModel string
+	AnthropicAPIKey string
+	AnthropicModel  string
 	// Entity extraction
 	// EntityTypes is the closed-but-broad, domain-agnostic set of entity
 	// types the extractor is allowed to emit. It is config, not code: add
@@ -132,8 +130,6 @@ func Load() *Config {
 		S3UsePathStyle:    getEnv("S3_USE_PATH_STYLE", "true") == "true",
 		AnthropicAPIKey:   getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:    getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-		OpenAIAPIKey:      getEnv("OPENAI_API_KEY", ""),
-		OpenAIEmbedModel:  getEnv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
 
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),

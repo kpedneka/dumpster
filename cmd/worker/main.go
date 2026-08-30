@@ -20,7 +20,7 @@ import (
 	entityinference "github.com/kunalpednekar/dumpster/internal/entity/inference"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/llm/openai"
+	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
 	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
@@ -79,7 +79,7 @@ func main() {
 	entities := entitypg.New(txRunner)
 	edges := graphedgepg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
-	embedder := openai.New(cfg.OpenAIAPIKey, cfg.OpenAIEmbedModel)
+	embedder := llminference.NewDocumentEmbedder(cfg.InferenceServiceURL)
 	extractor := entityinference.New(cfg.InferenceServiceURL)
 
 	manifestRepo := manifestpg.New(txRunner)

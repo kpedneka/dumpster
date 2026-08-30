@@ -3,6 +3,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/google/uuid"
@@ -49,6 +50,20 @@ func (r *Repository) ListByKB(_ context.Context, userID, kbID uuid.UUID) ([]*chu
 		}
 	}
 	return out, nil
+}
+
+// UpdateEmbedding sets the embedding vector for the chunk id owned by
+// userID. Returns an error if no such chunk exists for that tenant.
+func (r *Repository) UpdateEmbedding(_ context.Context, userID, id uuid.UUID, embedding []float32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, c := range r.rows {
+		if c.ID == id && c.UserID == userID {
+			c.Embedding = embedding
+			return nil
+		}
+	}
+	return fmt.Errorf("chunk: update embedding: no chunk %s for user %s", id, userID)
 }
 
 func (r *Repository) DeleteByDocument(_ context.Context, userID, documentID uuid.UUID) error {

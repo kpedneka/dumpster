@@ -43,4 +43,8 @@ type Repository interface {
 	ListByDocument(ctx context.Context, userID, documentID uuid.UUID) ([]*Chunk, error)
 	ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*Chunk, error)
 	DeleteByDocument(ctx context.Context, userID, documentID uuid.UUID) error
+	// UpdateEmbedding sets a chunk's embedding vector. Used by the
+	// local-embeddings backfill (internal/reembed) to populate vectors for
+	// chunks whose embedding was cleared by an embedding-model migration.
+	UpdateEmbedding(ctx context.Context, userID, id uuid.UUID, embedding []float32) error
 }
