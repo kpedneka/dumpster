@@ -20,16 +20,17 @@ jobs:
       - name: Test with coverage
         run: |
           go test ./...
-          # pgstore, db, s3store, llm/anthropic,
+          # pgstore, db, s3store,
           # session/pgstore require external services/processes; covered by
           # integration tests, not the unit gate. entity/inference,
-          # manifest/layout, and llm/inference are HTTP-client adapters
-          # tested with httptest — no external process needed, so they're in
-          # the unit gate. reembed only touches memory/mock repositories in
-          # its tests, so it's in the unit gate too.
-          CORE=./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/manifest/layout,./internal/llm,./internal/llm/mock,./internal/llm/inference,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/entity/inference,./internal/reembed,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock
+          # manifest/layout, llm/inference, and llm/anthropic are HTTP-client
+          # adapters tested with httptest / a fake http.RoundTripper — no
+          # external process or real API key needed, so they're in the unit
+          # gate. reembed only touches memory/mock repositories in its
+          # tests, so it's in the unit gate too.
+          CORE=./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/manifest/layout,./internal/llm,./internal/llm/mock,./internal/llm/inference,./internal/llm/anthropic,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/entity/inference,./internal/reembed,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock
           go test -coverpkg=$CORE -coverprofile=coverage.out -covermode=atomic \
-            ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/graphedge ./internal/manifest ./internal/manifest/layout ./internal/llm ./internal/llm/inference \
+            ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/graphedge ./internal/manifest ./internal/manifest/layout ./internal/llm ./internal/llm/inference ./internal/llm/anthropic \
             ./internal/kb ./internal/document ./internal/chunk ./internal/entity ./internal/entity/inference ./internal/reembed \
             ./internal/objectstore ./internal/worker \
             ./internal/rls ./internal/retrieval ./internal/retrieval/memory \

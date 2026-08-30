@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,7 +15,80 @@ import (
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 )
 
-func TestSearch(t *testing.T) {
+var errFakeGeneration = errors.New("generation failed")
+
+// sseFrame is one parsed "event: <name>\ndata: <json>\n\n" frame.
+type sseFrame struct {
+	name string
+	data string
+}
+
+// parseSSE splits a recorded SSE response body into its frames.
+func parseSSE(t *testing.T, body string) []sseFrame {
+	t.Helper()
+	var frames []sseFrame
+	for _, raw := range strings.Split(strings.TrimRight(body, "\n"), "\n\n") {
+		if raw == "" {
+			continue
+		}
+		var f sseFrame
+		for _, line := range strings.Split(raw, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				f.name = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				f.data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		frames = append(frames, f)
+	}
+	return frames
+}
+
+// frameNamed returns the first frame with the given name, failing the test
+// if none exists.
+func frameNamed(t *testing.T, frames []sseFrame, name string) sseFrame {
+	t.Helper()
+	for _, f := range frames {
+		if f.name == name {
+			return f
+		}
+	}
+	t.Fatalf("no %q frame found among %+v", name, frames)
+	return sseFrame{}
+}
+
+func decodeFrame[T any](t *testing.T, f sseFrame) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal([]byte(f.data), &v); err != nil {
+		t.Fatalf("decode %q frame data %q: %v", f.name, f.data, err)
+	}
+	return v
+}
+
+func TestSearch_StreamsSSEWithContentType(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "the answer"})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"what is the answer?"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("Content-Type: got %q, want text/event-stream", ct)
+	}
+}
+
+func TestSearch_DoneEventCarriesSummaryAndCitations(t *testing.T) {
 	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
@@ -31,43 +105,33 @@ func TestSearch(t *testing.T) {
 	})
 	router := NewRouter(deps)
 
-	body := strings.NewReader(`{"query":"what is the answer?"}`)
-	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search", body, userID)
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"what is the answer?"}`), userID)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
-	}
+	frames := parseSSE(t, w.Body.String())
+	got := decodeFrame[doneEvent](t, frameNamed(t, frames, "done"))
 
-	var got SearchResponse
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
 	if got.Summary != "the answer" {
 		t.Errorf("summary: got %q, want %q", got.Summary, "the answer")
 	}
 	if len(got.Citations) != 1 {
 		t.Fatalf("citations: got %d, want 1", len(got.Citations))
 	}
-	if got.Citations[0].Number != 1 {
-		t.Errorf("citation number: got %d, want 1", got.Citations[0].Number)
+	c := got.Citations[0]
+	if c.Number != 1 || c.DocumentID != doc.ID.String() || c.CharStart != 0 || c.CharEnd != 42 {
+		t.Errorf("citation mismatch: %+v", c)
 	}
-	if got.Citations[0].DocumentID != doc.ID.String() {
-		t.Errorf("citation document_id mismatch")
+	if c.Text != "the source text" {
+		t.Errorf("citation text: got %q, want %q", c.Text, "the source text")
 	}
-	if got.Citations[0].CharStart != 0 || got.Citations[0].CharEnd != 42 {
-		t.Errorf("citation range mismatch")
+	if c.FileName != "notes.txt" {
+		t.Errorf("citation file_name: got %q, want %q", c.FileName, "notes.txt")
 	}
-	if got.Citations[0].Text != "the source text" {
-		t.Errorf("citation text: got %q, want %q", got.Citations[0].Text, "the source text")
-	}
-	if got.Citations[0].FileName != "notes.txt" {
-		t.Errorf("citation file_name: got %q, want %q", got.Citations[0].FileName, "notes.txt")
-	}
-	if got.Citations[0].Locator != nil {
-		t.Errorf("citation locator: got %+v, want nil for a plain-text chunk", got.Citations[0].Locator)
+	if c.Locator != nil {
+		t.Errorf("citation locator: got %+v, want nil for a plain-text chunk", c.Locator)
 	}
 }
 
@@ -97,10 +161,9 @@ func TestSearch_CitationLocator_PDFPage(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	var got SearchResponse
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
+	frames := parseSSE(t, w.Body.String())
+	got := decodeFrame[doneEvent](t, frameNamed(t, frames, "done"))
+
 	if got.Citations[0].FileName != "paper.pdf" {
 		t.Errorf("citation file_name: got %q, want %q", got.Citations[0].FileName, "paper.pdf")
 	}
@@ -137,19 +200,18 @@ func TestSearch_CitationLocator_UnknownDocument(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
 	}
-	var got SearchResponse
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatal(err)
-	}
+	frames := parseSSE(t, w.Body.String())
+	got := decodeFrame[doneEvent](t, frameNamed(t, frames, "done"))
 	if got.Citations[0].FileName != "" {
 		t.Errorf("citation file_name: got %q, want empty for an unresolvable document", got.Citations[0].FileName)
 	}
 }
 
-// TestSearch_RetrievedFiles verifies the response's retrieved_files list
+// TestSearch_RetrievedFilesEvent verifies the retrieved_files SSE event
 // covers every document retrieval surfaced, ranked, not just the subset
-// that ended up cited inline in the summary.
-func TestSearch_RetrievedFiles(t *testing.T) {
+// that ended up cited inline in the summary — and that it arrives before
+// the done event.
+func TestSearch_RetrievedFilesEvent(t *testing.T) {
 	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
@@ -176,15 +238,63 @@ func TestSearch_RetrievedFiles(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	var got SearchResponse
-	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
-		t.Fatal(err)
+	frames := parseSSE(t, w.Body.String())
+	if frames[0].name != "retrieved_files" {
+		t.Fatalf("first frame: got %q, want retrieved_files", frames[0].name)
 	}
+	got := decodeFrame[retrievedFilesEvent](t, frames[0])
 	if len(got.RetrievedFiles) != 2 {
 		t.Fatalf("retrieved_files: got %d, want 2 (superset of citations)", len(got.RetrievedFiles))
 	}
 	if got.RetrievedFiles[0].FileName != "cited.txt" || got.RetrievedFiles[1].FileName != "uncited.txt" {
 		t.Errorf("retrieved_files order/content: got %+v", got.RetrievedFiles)
+	}
+
+	doneIdx := -1
+	for i, f := range frames {
+		if f.name == "done" {
+			doneIdx = i
+		}
+	}
+	if doneIdx <= 0 {
+		t.Fatalf("done frame: got index %d, want after retrieved_files (index 0)", doneIdx)
+	}
+}
+
+// TestSearch_DeltaEventsCarryGeneratedText verifies that delta events
+// forward the generated text chunks, in order, between retrieved_files and
+// done.
+func TestSearch_DeltaEventsCarryGeneratedText(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+
+	searcher := &searchmock.Searcher{
+		SearchStreamFn: func(_ context.Context, _ uuid.UUID, _ string, onEvent func(search.StreamEvent)) (search.Result, error) {
+			onEvent(search.StreamEvent{Type: search.EventRetrievedFiles})
+			onEvent(search.StreamEvent{Type: search.EventDelta, Delta: "Hello, "})
+			onEvent(search.StreamEvent{Type: search.EventDelta, Delta: "world."})
+			return search.Result{Summary: "Hello, world."}, nil
+		},
+	}
+	deps.Searcher = searcher
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hi"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	frames := parseSSE(t, w.Body.String())
+	var deltas []string
+	for _, f := range frames {
+		if f.name == "delta" {
+			deltas = append(deltas, decodeFrame[deltaEvent](t, f).Text)
+		}
+	}
+	if len(deltas) != 2 || deltas[0] != "Hello, " || deltas[1] != "world." {
+		t.Errorf("deltas: got %+v, want [\"Hello, \" \"world.\"]", deltas)
 	}
 }
 
@@ -258,7 +368,11 @@ func TestSearch_TenantIsolation(t *testing.T) {
 	}
 }
 
-func TestSearch_ServiceError(t *testing.T) {
+// TestSearch_ServiceError_BeforeAnyEvent_ReturnsNormalErrorStatus verifies
+// that a search error occurring before the searcher emits any event (e.g.
+// retrieval failing) still gets a plain JSON 500 response — the SSE stream
+// is never started for this case, so the status code can still change.
+func TestSearch_ServiceError_BeforeAnyEvent_ReturnsNormalErrorStatus(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
@@ -273,6 +387,44 @@ func TestSearch_ServiceError(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status: got %d, want 500", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct == "text/event-stream" {
+		t.Errorf("Content-Type: got %q, want a normal JSON error response, not SSE", ct)
+	}
+}
+
+// TestSearch_ServiceError_AfterStreamStarted_SendsErrorEvent verifies that
+// an error occurring after at least one event has been flushed can no
+// longer change the HTTP status (already committed to 200), so it's
+// signaled via an error SSE event inside the still-open stream instead.
+func TestSearch_ServiceError_AfterStreamStarted_SendsErrorEvent(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+
+	searcher := &searchmock.Searcher{
+		SearchStreamFn: func(_ context.Context, _ uuid.UUID, _ string, onEvent func(search.StreamEvent)) (search.Result, error) {
+			onEvent(search.StreamEvent{Type: search.EventRetrievedFiles})
+			onEvent(search.StreamEvent{Type: search.EventDelta, Delta: "partial answer"})
+			return search.Result{}, errFakeGeneration
+		},
+	}
+	deps.Searcher = searcher
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hello"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 (already committed before the error)", w.Code)
+	}
+	frames := parseSSE(t, w.Body.String())
+	got := decodeFrame[errorEvent](t, frameNamed(t, frames, "error"))
+	if got.Error == "" {
+		t.Error("expected a non-empty error message in the error event")
 	}
 }
 

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -26,7 +27,18 @@ func registerSearchRoutes(mux *http.ServeMux, kbRepo kb.Repository, docRepo docu
 }
 
 // search handles POST /kbs/{id}/search. It verifies the knowledge base belongs
-// to the requesting user before delegating to the search service.
+// to the requesting user, then streams the answer back as Server-Sent
+// Events: a retrieved_files event (the ranked retrieval set, before
+// generation begins), one delta event per generated text chunk, and a
+// final done event carrying the parsed summary and citations. See
+// StreamEvent's doc for why the wire format splits it this way.
+//
+// The 200 + text/event-stream response only commits once the first event is
+// ready to send (see startStream) — an error that happens before any event
+// fires (e.g. retrieval failing) still gets a normal JSON error response
+// with a real status code, since nothing has been written yet. An error
+// after streaming has started can no longer change the status code, so it's
+// signaled with an error event inside the still-open stream instead.
 func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -55,22 +67,47 @@ func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fileNames := h.fileNames(r.Context(), userID, kbID)
+	flusher, _ := w.(http.Flusher)
+	streamStarted := false
+	startStream := func() {
+		if streamStarted {
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		streamStarted = true
+	}
+
 	started := time.Now()
-	result, err := h.searcher.Search(r.Context(), kbID, body.Query)
+	result, err := h.searcher.SearchStream(r.Context(), kbID, body.Query, func(e search.StreamEvent) {
+		startStream()
+		writeSSE(w, flusher, toWireEvent(e, fileNames))
+	})
 	h.recordSearchLatency(r.Context(), started)
+
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "search failed")
+		if !streamStarted {
+			writeError(w, http.StatusInternalServerError, "search failed")
+			return
+		}
+		writeSSE(w, flusher, sseEvent{name: "error", data: errorEvent{Error: "search failed"}})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toSearchResponse(result, h.fileNames(r.Context(), userID, kbID)))
+	startStream() // defensive: SearchStream succeeding with zero events never happens today, but this keeps the response well-formed if it ever did.
+	writeSSE(w, flusher, sseEvent{name: "done", data: doneEvent{
+		Summary:   result.Summary,
+		Citations: buildCitations(result.Citations, fileNames),
+	}})
 }
 
 // fileNames resolves every citation's DocumentID to its filename in one
 // query, rather than one Get call per citation. A document that can't be
 // resolved (e.g. deleted between indexing and query) is simply absent from
-// the map — toSearchResponse falls back to an empty file name rather than
-// failing the whole response over one stale reference.
+// the map — buildCitations/buildRetrievedFiles fall back to an empty file
+// name rather than failing the whole response over one stale reference.
 func (h *searchHandler) fileNames(ctx context.Context, userID, kbID uuid.UUID) map[uuid.UUID]string {
 	docs, err := h.docRepo.ListByKB(ctx, userID, kbID)
 	if err != nil {
@@ -93,14 +130,61 @@ func (h *searchHandler) recordSearchLatency(ctx context.Context, started time.Ti
 	h.instruments.SearchLatency.Record(ctx, float64(time.Since(started).Microseconds())/1000)
 }
 
-// SearchResponse is the JSON shape returned by the search endpoint.
-type SearchResponse struct {
+// sseEvent is one Server-Sent Event frame: "event: <name>\ndata: <json>\n\n".
+type sseEvent struct {
+	name string
+	data any
+}
+
+// writeSSE serializes data as JSON and writes one SSE frame, flushing
+// immediately so the client sees it as soon as it's written rather than
+// waiting for Go's response buffering to fill up.
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, e sseEvent) {
+	payload, err := json.Marshal(e.data)
+	if err != nil {
+		payload = []byte(`{"error":"internal encoding error"}`)
+	}
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e.name, payload)
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
+
+// retrievedFilesEvent is the JSON payload of a "retrieved_files" SSE event.
+type retrievedFilesEvent struct {
+	RetrievedFiles []RetrievedFileResponse `json:"retrieved_files"`
+}
+
+// deltaEvent is the JSON payload of a "delta" SSE event: one chunk of
+// generated answer text.
+type deltaEvent struct {
+	Text string `json:"text"`
+}
+
+// doneEvent is the JSON payload of the final "done" SSE event: the parsed
+// summary and its citations. RetrievedFiles isn't repeated here — it
+// already went out as its own event before generation began.
+type doneEvent struct {
 	Summary   string             `json:"summary"`
 	Citations []CitationResponse `json:"citations"`
-	// RetrievedFiles is every file the fused top-k retrieval surfaced,
-	// ranked, independent of which subset ended up cited inline in Summary
-	// — the relevant-files surface renders this list, not just Citations.
-	RetrievedFiles []RetrievedFileResponse `json:"retrieved_files"`
+}
+
+// errorEvent is the JSON payload of an "error" SSE event, sent when the
+// search fails after streaming has already started (so the status code can
+// no longer change).
+type errorEvent struct {
+	Error string `json:"error"`
+}
+
+// toWireEvent converts a search.StreamEvent into the sseEvent that gets
+// written to the client.
+func toWireEvent(e search.StreamEvent, fileNames map[uuid.UUID]string) sseEvent {
+	switch e.Type {
+	case search.EventRetrievedFiles:
+		return sseEvent{name: "retrieved_files", data: retrievedFilesEvent{RetrievedFiles: buildRetrievedFiles(e.RetrievedDocuments, fileNames)}}
+	default: // search.EventDelta
+		return sseEvent{name: "delta", data: deltaEvent{Text: e.Delta}}
+	}
 }
 
 // RetrievedFileResponse names one file from the ranked retrieval set.
@@ -141,9 +225,9 @@ type CitationLocator struct {
 	Value int    `json:"value"`
 }
 
-func toSearchResponse(r search.Result, fileNames map[uuid.UUID]string) SearchResponse {
-	citations := make([]CitationResponse, len(r.Citations))
-	for i, c := range r.Citations {
+func buildCitations(cs []search.Citation, fileNames map[uuid.UUID]string) []CitationResponse {
+	citations := make([]CitationResponse, len(cs))
+	for i, c := range cs {
 		citations[i] = CitationResponse{
 			Number:     c.Number,
 			DocumentID: c.DocumentID.String(),
@@ -155,19 +239,18 @@ func toSearchResponse(r search.Result, fileNames map[uuid.UUID]string) SearchRes
 			Locator:    citationLocator(c),
 		}
 	}
-	retrievedFiles := make([]RetrievedFileResponse, len(r.RetrievedDocuments))
-	for i, docID := range r.RetrievedDocuments {
+	return citations
+}
+
+func buildRetrievedFiles(docIDs []uuid.UUID, fileNames map[uuid.UUID]string) []RetrievedFileResponse {
+	retrievedFiles := make([]RetrievedFileResponse, len(docIDs))
+	for i, docID := range docIDs {
 		retrievedFiles[i] = RetrievedFileResponse{
 			DocumentID: docID.String(),
 			FileName:   fileNames[docID],
 		}
 	}
-
-	return SearchResponse{
-		Summary:        r.Summary,
-		Citations:      citations,
-		RetrievedFiles: retrievedFiles,
-	}
+	return retrievedFiles
 }
 
 // citationLocator returns the modality-native locator for c, or nil when

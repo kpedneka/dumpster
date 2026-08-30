@@ -67,10 +67,47 @@ type Result struct {
 // testable with hand-crafted data.
 type Answerer interface {
 	Answer(ctx context.Context, kbID uuid.UUID, query string, chunks []retrieval.ScoredChunk) (Result, error)
+	// AnswerStream behaves like Answer, but also invokes onDelta for each
+	// visible text chunk as it's generated. onDelta never receives any
+	// part of the CITATIONS: footer — see footerFilter — so callers can
+	// forward every delta straight to a client without leaking it.
+	AnswerStream(ctx context.Context, kbID uuid.UUID, query string, chunks []retrieval.ScoredChunk, onDelta func(delta string)) (Result, error)
+}
+
+// StreamEventType distinguishes what a StreamEvent carries. Exactly one of
+// StreamEvent's payload fields is populated, according to Type.
+type StreamEventType string
+
+const (
+	// EventRetrievedFiles carries the ranked retrieval set, emitted once,
+	// before generation begins — see StreamEvent.RetrievedDocuments.
+	EventRetrievedFiles StreamEventType = "retrieved_files"
+	// EventDelta carries one chunk of generated answer text, emitted as
+	// generation progresses — see StreamEvent.Delta.
+	EventDelta StreamEventType = "delta"
+)
+
+// StreamEvent is one incremental update emitted while SearchStream answers
+// a query. The final Result (summary + citations) is not a StreamEvent: it
+// is SearchStream's own return value, since — unlike retrieved files or a
+// generated token — it only exists once the whole pipeline has completed.
+type StreamEvent struct {
+	Type StreamEventType
+	// RetrievedDocuments is set when Type == EventRetrievedFiles; see
+	// Result.RetrievedDocuments for its meaning.
+	RetrievedDocuments []uuid.UUID
+	// Delta is set when Type == EventDelta.
+	Delta string
 }
 
 // Searcher is the single entry point for end-to-end query execution.
 // It owns the sequence: retrieve → answer → assemble citations.
 type Searcher interface {
 	Search(ctx context.Context, kbID uuid.UUID, query string) (Result, error)
+	// SearchStream behaves like Search, but emits StreamEvent values via
+	// onEvent as they become available — retrieved files immediately after
+	// retrieval, then a delta per generated text chunk — instead of making
+	// the caller wait for the full Result. It still returns the same final
+	// Result Search would, once everything completes.
+	SearchStream(ctx context.Context, kbID uuid.UUID, query string, onEvent func(StreamEvent)) (Result, error)
 }

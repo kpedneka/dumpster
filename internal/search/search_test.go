@@ -219,6 +219,181 @@ func TestAnswerer_NoCitationsInResponse(t *testing.T) {
 	}
 }
 
+// ---- AnswerStream tests -------------------------------------------------------
+
+// TestAnswerer_AnswerStream_DeliversDeltasAndNeverLeaksFooter verifies that
+// AnswerStream forwards every generated text chunk via onDelta, in order,
+// and that none of them ever contain any part of the CITATIONS: footer —
+// footer stripping happens for the streamed preview exactly as it does for
+// the final parsed Summary.
+func TestAnswerer_AnswerStream_DeliversDeltasAndNeverLeaksFooter(t *testing.T) {
+	docID := uuid.New()
+	chunks := []retrieval.ScoredChunk{
+		makeChunk(docID, "Go is a statically typed language.", 0, 34),
+	}
+
+	gen := mock.NewGenerator("unused")
+	gen.GenerateStreamFn = func(_ context.Context, _ string, onDelta func(string)) (string, error) {
+		for _, d := range []string{"Go is fast ", "[1].\n", "CITATIONS", ": 1"} {
+			onDelta(d)
+		}
+		return "Go is fast [1].\nCITATIONS: 1", nil
+	}
+	a := search.NewAnswerer(gen)
+
+	var deltas []string
+	result, err := a.AnswerStream(authedCtx(), uuid.New(), "What is Go?", chunks, func(d string) { deltas = append(deltas, d) })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := strings.Join(deltas, "")
+	if strings.Contains(strings.ToLower(got), "citations:") {
+		t.Errorf("streamed deltas leaked the footer: %q", got)
+	}
+	if got != "Go is fast [1].\n" {
+		t.Errorf("streamed deltas = %q, want the pre-footer text only", got)
+	}
+	// The final Result must still be fully and correctly parsed, exactly as
+	// non-streaming Answer would produce.
+	if len(result.Citations) != 1 {
+		t.Errorf("expected 1 citation from the authoritative parse, got %d", len(result.Citations))
+	}
+}
+
+// TestAnswerer_AnswerStream_NoChunks_NoDeltasEmitted verifies the not-found
+// guardrail short-circuits before any generation, so onDelta is never
+// called (matching Answer's existing no-Generate-call behavior).
+func TestAnswerer_AnswerStream_NoChunks_NoDeltasEmitted(t *testing.T) {
+	gen := mock.NewGenerator("should not be called")
+	a := search.NewAnswerer(gen)
+
+	called := false
+	result, err := a.AnswerStream(authedCtx(), uuid.New(), "anything?", nil, func(string) { called = true })
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Error("onDelta must not be called for the not-found guardrail")
+	}
+	if result.Summary == "" {
+		t.Error("expected a not-found summary")
+	}
+}
+
+// TestAnswerer_AnswerStream_GeneratorError_Propagates verifies that a
+// streaming generation error is returned, matching Answer's behavior.
+func TestAnswerer_AnswerStream_GeneratorError_Propagates(t *testing.T) {
+	chunks := []retrieval.ScoredChunk{makeChunk(uuid.New(), "some text", 0, 9)}
+	gen := mock.NewErrorGenerator("llm unavailable")
+	a := search.NewAnswerer(gen)
+
+	_, err := a.AnswerStream(authedCtx(), uuid.New(), "query", chunks, func(string) {})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+// TestAnswerer_Answer_StillWorksThroughStreamingPath verifies that Answer's
+// observable behavior is unchanged now that it's implemented in terms of
+// AnswerStream with a no-op onDelta — same assertion as TestAnswerer_WithChunks,
+// re-run here to make the delegation explicit.
+func TestAnswerer_Answer_StillWorksThroughStreamingPath(t *testing.T) {
+	docID := uuid.New()
+	chunks := []retrieval.ScoredChunk{makeChunk(docID, "Go is a statically typed language.", 0, 34)}
+	gen := mock.NewGenerator("Go is fast [1].\nCITATIONS: 1")
+	a := search.NewAnswerer(gen)
+
+	result, err := a.Answer(authedCtx(), uuid.New(), "What is Go?", chunks)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Citations) != 1 {
+		t.Errorf("expected 1 citation, got %d", len(result.Citations))
+	}
+}
+
+// ---- SearchStream tests ---------------------------------------------------
+
+// TestService_SearchStream_EmitsRetrievedFilesBeforeDeltas verifies the
+// event ordering contract: the retrieved_files event always arrives before
+// any delta event, so a client can render the relevant-files list before
+// the answer starts streaming in.
+func TestService_SearchStream_EmitsRetrievedFilesBeforeDeltas(t *testing.T) {
+	docID := uuid.New()
+	kbID := uuid.New()
+	chunks := []retrieval.ScoredChunk{makeChunk(docID, "The sky is blue.", 0, 16)}
+
+	ret := &stubRetriever{chunks: chunks}
+	gen := mock.NewGenerator("unused")
+	gen.GenerateStreamFn = func(_ context.Context, _ string, onDelta func(string)) (string, error) {
+		onDelta("The sky is blue [1].\n")
+		onDelta("CITATIONS: 1")
+		return "The sky is blue [1].\nCITATIONS: 1", nil
+	}
+	svc := search.New(ret, search.NewAnswerer(gen))
+
+	var events []search.StreamEvent
+	result, err := svc.SearchStream(authedCtx(), kbID, "What colour is the sky?", func(e search.StreamEvent) {
+		events = append(events, e)
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(events) == 0 || events[0].Type != search.EventRetrievedFiles {
+		t.Fatalf("first event = %+v, want EventRetrievedFiles first", events)
+	}
+	if len(events[0].RetrievedDocuments) != 1 || events[0].RetrievedDocuments[0] != docID {
+		t.Errorf("retrieved_files event: got %+v, want [%v]", events[0].RetrievedDocuments, docID)
+	}
+	for _, e := range events[1:] {
+		if e.Type != search.EventDelta {
+			t.Errorf("event after the first: got type %v, want EventDelta only", e.Type)
+		}
+	}
+	if result.Summary == "" {
+		t.Error("expected non-empty final summary")
+	}
+	if len(result.Citations) == 0 {
+		t.Error("expected at least one citation in the final result")
+	}
+}
+
+// TestService_SearchStream_AnswererError_Propagates verifies that an
+// answerer error surfaces from SearchStream the same way it does from Search.
+func TestService_SearchStream_AnswererError_Propagates(t *testing.T) {
+	ret := &stubRetriever{chunks: []retrieval.ScoredChunk{makeChunk(uuid.New(), "text", 0, 4)}}
+	gen := mock.NewErrorGenerator("llm unavailable")
+	svc := search.New(ret, search.NewAnswerer(gen))
+
+	_, err := svc.SearchStream(authedCtx(), uuid.New(), "query", func(search.StreamEvent) {})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+// TestService_Search_DelegatesToSearchStream verifies Search's observable
+// behavior is unchanged now that it's a thin wrapper around SearchStream.
+func TestService_Search_DelegatesToSearchStream(t *testing.T) {
+	docID := uuid.New()
+	chunks := []retrieval.ScoredChunk{makeChunk(docID, "The sky is blue.", 0, 16)}
+	ret := &stubRetriever{chunks: chunks}
+	gen := mock.NewGenerator("The sky is blue [1].\nCITATIONS: 1")
+	svc := search.New(ret, search.NewAnswerer(gen))
+
+	result, err := svc.Search(authedCtx(), uuid.New(), "What colour is the sky?")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Citations) == 0 {
+		t.Error("expected at least one citation")
+	}
+	if len(result.RetrievedDocuments) != 1 || result.RetrievedDocuments[0] != docID {
+		t.Errorf("RetrievedDocuments: got %v, want [%v]", result.RetrievedDocuments, docID)
+	}
+}
+
 // ---- SearchService tests -----------------------------------------------------
 
 // TestService_Search verifies end-to-end: Retriever returns chunks →
