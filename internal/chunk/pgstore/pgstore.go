@@ -122,6 +122,28 @@ func (s *Store) list(ctx context.Context, userID uuid.UUID, col string, val uuid
 	return results, nil
 }
 
+// UpdateEmbedding sets the embedding vector for the chunk id owned by
+// userID. Returns an error if no such chunk exists for that tenant.
+func (s *Store) UpdateEmbedding(ctx context.Context, userID, id uuid.UUID, embedding []float32) error {
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		tag, txErr := tx.Exec(ctx,
+			`UPDATE chunks SET embedding = $1::vector WHERE id = $2 AND user_id = $3`,
+			vectorParam(embedding), id, userID,
+		)
+		if txErr != nil {
+			return txErr
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("no chunk %s for user %s", id, userID)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("chunk: update embedding %v: %w", id, err)
+	}
+	return nil
+}
+
 func (s *Store) DeleteByDocument(ctx context.Context, userID, documentID uuid.UUID) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,

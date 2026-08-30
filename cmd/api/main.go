@@ -12,8 +12,8 @@ import (
 	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
+	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
 	"github.com/kunalpednekar/dumpster/internal/llm/instrumented"
-	"github.com/kunalpednekar/dumpster/internal/llm/openai"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
@@ -71,7 +71,7 @@ func main() {
 		UsePathStyle: cfg.S3UsePathStyle,
 	})
 
-	embedder := instrumented.NewEmbedder(openai.New(cfg.OpenAIAPIKey, cfg.OpenAIEmbedModel), instruments)
+	embedder := instrumented.NewEmbedder(llminference.NewQueryEmbedder(cfg.InferenceServiceURL), instruments)
 	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
 	retriever := retrievalpg.New(txRunner, embedder)
 	answerer := search.NewAnswerer(generator)
