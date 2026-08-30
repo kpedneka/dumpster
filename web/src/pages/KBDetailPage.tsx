@@ -5,7 +5,6 @@ import { useDropzone } from 'react-dropzone'
 import {
   AlertTriangle,
   FileText,
-  MoreHorizontal,
   RotateCw,
   Search as SearchIcon,
   Trash2,
@@ -25,12 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { toast } from '@/hooks/use-toast'
 import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
@@ -116,17 +109,36 @@ export function KBDetailPage() {
   const [duplicateQueue, setDuplicateQueue] = useState<File[]>([])
   const [query, setQuery] = useState(() => getDraftQuery(kbId!))
   const [submittedQuery, setSubmittedQueryState] = useState(() => getSubmittedQuery(kbId!))
+  // Forces the search effect below to re-run even when submittedQuery is
+  // textually unchanged: React's setState bails out of re-rendering when a
+  // string setter receives the same value, so re-clicking Search with an
+  // identical query would otherwise silently no-op — stale even after the
+  // KB's underlying data has changed (e.g. a newly uploaded document).
+  // Search should always be re-runnable on demand, not cached on the query text.
+  const [searchNonce, setSearchNonce] = useState(0)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
-  const { data: kb } = useQuery({
+  const { data: kb, error: kbError } = useQuery({
     queryKey: ['kbs', kbId],
     queryFn: async () => {
-      const { data, error } = await api.GET('/kbs/{id}', { params: { path: { id: kbId! } } })
-      if (error) throw error
+      const { data, error, response } = await api.GET('/kbs/{id}', { params: { path: { id: kbId! } } })
+      if (error) throw new Error('kb fetch failed', { cause: response.status })
       return data
     },
     enabled: !!kbId,
+    // Retrying a 404 (e.g. a KB the demo sweeper already deleted while this
+    // tab sat open) just delays the redirect below for no benefit.
+    retry: false,
   })
+
+  // A tab left open past the sweeper's deletion of its KB otherwise renders
+  // an empty, broken-looking page on reload rather than sending the user
+  // somewhere useful.
+  useEffect(() => {
+    if (kbError instanceof Error && kbError.cause === 404) {
+      navigate('/kbs', { replace: true })
+    }
+  }, [kbError, navigate])
 
   const { data: docPage } = useQuery({
     queryKey: ['docs', kbId],
@@ -213,7 +225,7 @@ export function KBDetailPage() {
     })
 
     return () => controller.abort()
-  }, [kbId, submittedQuery])
+  }, [kbId, submittedQuery, searchNonce])
 
   const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
 
@@ -289,6 +301,9 @@ export function KBDetailPage() {
     if (trimmed) {
       setSubmittedQueryState(trimmed)
       setSubmittedQuery(kbId!, trimmed)
+      // Always bump the nonce, even when trimmed === submittedQuery already —
+      // that's precisely the "re-run an unchanged query" case this exists for.
+      setSearchNonce((n) => n + 1)
     }
   }
 
@@ -343,23 +358,15 @@ export function KBDetailPage() {
     <div className="rise mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-2xl font-semibold tracking-tight">{kb?.name ?? '—'}</h1>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
-              <MoreHorizontal className="h-4 w-4" />
-              <span className="sr-only">Knowledge base options</span>
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              className="text-destructive focus:text-destructive"
-              onSelect={() => setDeleteOpen(true)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete knowledge base
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-muted-foreground hover:text-destructive"
+          onClick={() => setDeleteOpen(true)}
+        >
+          <Trash2 className="h-4 w-4" />
+          <span className="sr-only">Delete knowledge base</span>
+        </Button>
       </div>
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-sm">
@@ -408,7 +415,7 @@ export function KBDetailPage() {
           the right on desktop — same responsive pattern the two-tab layout
           used, just with search in the slot the document list used to own. */}
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <aside className="order-first lg:order-last">
+        <aside className="order-last">
           <div className="flex flex-col gap-6 lg:sticky lg:top-4">
             <div>
               <h2 className="mb-1 font-display text-base font-semibold">Upload documents</h2>
