@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CitationMarker } from './CitationMarker'
@@ -95,5 +95,41 @@ describe('CitationMarker', () => {
 
     expect(await screen.findByText(longPageText)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /show full page text/i })).not.toBeInTheDocument()
+  })
+
+  describe('cross-highlight with the relevant-files list', () => {
+    it('reports its document_id on hover and clears it on unhover', async () => {
+      const user = userEvent.setup()
+      const onHoverChange = vi.fn()
+      render(<CitationMarker citation={baseCitation} onHoverChange={onHoverChange} />)
+
+      await user.hover(screen.getByText('[1]'))
+      expect(onHoverChange).toHaveBeenLastCalledWith('doc-1')
+
+      await user.unhover(screen.getByText('[1]'))
+      expect(onHoverChange).toHaveBeenLastCalledWith(null)
+    })
+
+    it('reports its document_id on keyboard focus and clears it on blur', () => {
+      const onHoverChange = vi.fn()
+      render(<CitationMarker citation={baseCitation} onHoverChange={onHoverChange} />)
+
+      const marker = screen.getByText('[1]')
+      marker.focus()
+      expect(onHoverChange).toHaveBeenLastCalledWith('doc-1')
+
+      marker.blur()
+      expect(onHoverChange).toHaveBeenLastCalledWith(null)
+    })
+
+    it('renders visibly highlighted when the highlighted prop is true', () => {
+      render(<CitationMarker citation={baseCitation} highlighted />)
+      expect(screen.getByText('[1]').className).toContain('bg-primary')
+    })
+
+    it('does not render highlighted by default', () => {
+      render(<CitationMarker citation={baseCitation} />)
+      expect(screen.getByText('[1]').className).not.toContain('bg-primary')
+    })
   })
 })

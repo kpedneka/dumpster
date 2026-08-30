@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -480,6 +480,70 @@ describe('KBDetailPage', () => {
       await waitFor(() => expect(screen.getByText('geo.txt')).toBeInTheDocument())
       const items = screen.getAllByRole('listitem').map((li) => li.textContent)
       expect(items).toEqual(['history.txt', 'geo.txt'])
+      expect(screen.getByText(/ranked most to least relevant/i)).toBeInTheDocument()
+    })
+
+    it('cross-highlights a citation and its source file on hover, in both directions', async () => {
+      mockSearchStream([
+        sseFrame('retrieved_files', {
+          retrieved_files: [
+            { document_id: 'doc-2', file_name: 'history.txt' },
+            { document_id: 'doc-1', file_name: 'geo.txt' },
+          ],
+        }),
+        sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
+        sseFrame('done', {
+          summary: 'Paris is the capital of France [1].',
+          citations: [
+            {
+              number: 1,
+              document_id: 'doc-1',
+              chunk_id: 'chunk-1',
+              char_start: 0,
+              char_end: 10,
+              text: 'Paris is the capital of France.',
+              file_name: 'geo.txt',
+              locator: null,
+            },
+          ],
+        }),
+      ])
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
+      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await waitFor(() => expect(screen.getByText('geo.txt')).toBeInTheDocument())
+
+      // Re-query fresh before each interaction, and use fireEvent rather
+      // than userEvent.hover/unhover: ReactMarkdown recreates the citation
+      // marker's DOM node on every render where mdComponents' identity
+      // changes (which happens on every hover, since it depends on
+      // hoveredDocumentId) — confirmed via a throwaway repro that the node
+      // reference genuinely changes and the old one leaves the DOM.
+      // userEvent's hover/unhover tracks pointer state against the specific
+      // node hover() was called on, so calling unhover() on the
+      // post-remount node doesn't register as "leaving" what was hovered.
+      // Plain fireEvent has no such statefulness and isn't affected.
+      const geoItem = () => screen.getByText('geo.txt').closest('li')!
+      const historyItem = () => screen.getByText('history.txt').closest('li')!
+      const citationMarker = () => screen.getByText('[1]')
+
+      // Hovering the citation highlights its source (geo.txt), not the
+      // other file (history.txt), which the citation has nothing to do with.
+      fireEvent.mouseEnter(citationMarker())
+      expect(geoItem().className).toContain('bg-accent')
+      expect(historyItem().className).not.toContain('bg-accent')
+      fireEvent.mouseLeave(citationMarker())
+      expect(geoItem().className).not.toContain('bg-accent')
+
+      // And the reverse: hovering the file highlights its citation marker.
+      fireEvent.mouseEnter(geoItem())
+      expect(citationMarker().className).toContain('bg-primary')
+      fireEvent.mouseLeave(geoItem())
+      expect(citationMarker().className).not.toContain('bg-primary')
     })
 
     it('shows the not-found summary and an empty relevant-files state when retrieval found nothing', async () => {
