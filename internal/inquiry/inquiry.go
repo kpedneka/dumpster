@@ -9,6 +9,7 @@ package inquiry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -79,6 +80,28 @@ type Citation struct {
 type RetrievedDocument struct {
 	DocumentID uuid.UUID `json:"document_id"`
 	FileName   string    `json:"file_name"`
+}
+
+// UnmarshalJSON accepts the current {document_id, file_name} object shape,
+// or falls back to treating the value as a bare document ID string with an
+// empty FileName. RetrievedDocuments was originally persisted as a plain
+// array of ID strings before FileName was added; a message written under
+// that shape shouldn't make ListMessages fail for the whole Inquiry it
+// belongs to just because one older row predates the richer format.
+func (r *RetrievedDocument) UnmarshalJSON(data []byte) error {
+	var id uuid.UUID
+	if err := json.Unmarshal(data, &id); err == nil {
+		r.DocumentID = id
+		r.FileName = ""
+		return nil
+	}
+	type alias RetrievedDocument // avoid infinite recursion into this method
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*r = RetrievedDocument(a)
+	return nil
 }
 
 // Message is one turn in an Inquiry. A user-role message carries only

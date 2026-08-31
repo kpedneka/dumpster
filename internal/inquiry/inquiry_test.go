@@ -2,6 +2,7 @@ package inquiry_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -13,6 +14,51 @@ import (
 
 // Compile-time check that the test double satisfies the domain interface.
 var _ inquiry.Repository = (*memory.Repository)(nil)
+
+// TestRetrievedDocument_UnmarshalJSON_BackwardCompatible is a regression
+// test: found via a real dev database row written before FileName was
+// added to RetrievedDocument, when retrieved_documents was persisted as a
+// bare array of ID strings. Reading that row with the new struct shape
+// used to fail ListMessages entirely (a 500 on the whole Inquiry, not just
+// a blank field on one message) instead of degrading gracefully the way
+// deleted-document file names already do.
+func TestRetrievedDocument_UnmarshalJSON_BackwardCompatible(t *testing.T) {
+	id := uuid.New()
+
+	t.Run("old bare-ID-string format", func(t *testing.T) {
+		var docs []inquiry.RetrievedDocument
+		raw := `["` + id.String() + `"]`
+		if err := json.Unmarshal([]byte(raw), &docs); err != nil {
+			t.Fatal(err)
+		}
+		if len(docs) != 1 || docs[0].DocumentID != id || docs[0].FileName != "" {
+			t.Errorf("got %+v, want [{%v \"\"}]", docs, id)
+		}
+	})
+
+	t.Run("current object format", func(t *testing.T) {
+		var docs []inquiry.RetrievedDocument
+		raw := `[{"document_id":"` + id.String() + `","file_name":"notes.txt"}]`
+		if err := json.Unmarshal([]byte(raw), &docs); err != nil {
+			t.Fatal(err)
+		}
+		if len(docs) != 1 || docs[0].DocumentID != id || docs[0].FileName != "notes.txt" {
+			t.Errorf("got %+v, want [{%v notes.txt}]", docs, id)
+		}
+	})
+
+	t.Run("mixed old and new entries in the same array", func(t *testing.T) {
+		other := uuid.New()
+		var docs []inquiry.RetrievedDocument
+		raw := `["` + id.String() + `", {"document_id":"` + other.String() + `","file_name":"notes.txt"}]`
+		if err := json.Unmarshal([]byte(raw), &docs); err != nil {
+			t.Fatal(err)
+		}
+		if len(docs) != 2 || docs[0].FileName != "" || docs[1].FileName != "notes.txt" {
+			t.Errorf("got %+v", docs)
+		}
+	})
+}
 
 func TestGetOrCreate_IdempotentPerKBAndUser(t *testing.T) {
 	repo := memory.New()
