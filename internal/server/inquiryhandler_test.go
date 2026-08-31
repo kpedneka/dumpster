@@ -81,6 +81,44 @@ func TestGetInquiry_ReturnsAccumulatedTurns(t *testing.T) {
 	}
 }
 
+// TestGetInquiry_RetrievedDocumentFileNameSurvivesDeletion is a regression
+// test: RetrievedDocuments' file names used to be resolved via a live
+// document lookup at GET-time, going blank the moment the source document
+// was deleted — unlike citations, which were already snapshotted for
+// exactly this reason. Both are snapshotted now.
+func TestGetInquiry_RetrievedDocumentFileNameSurvivesDeletion(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: k.ID, UserID: userID, Filename: "notes.txt", ContentType: "text/plain",
+	})
+	deps.Searcher = searchmock.NewSearcher(search.Result{
+		Summary:            "the answer",
+		Citations:          []search.Citation{{Number: 1, DocumentID: doc.ID, ChunkID: uuid.New(), CharStart: 0, CharEnd: 10}},
+		RetrievedDocuments: []uuid.UUID{doc.ID},
+	})
+	seedOneTurn(t, deps, k.ID, userID, "what is the answer?")
+
+	if err := docRepo.Delete(context.TODO(), userID, doc.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	router := NewRouter(deps)
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+k.ID.String()+"/inquiry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	got := decodeJSON[inquiryResponse](t, w.Body.Bytes())
+	assistant := got.Messages[1]
+	if len(assistant.Citations) != 1 || assistant.Citations[0].FileName != "notes.txt" {
+		t.Errorf("citation file_name after document deletion: got %+v, want notes.txt", assistant.Citations)
+	}
+	if len(assistant.RetrievedDocuments) != 1 || assistant.RetrievedDocuments[0].FileName != "notes.txt" {
+		t.Errorf("retrieved document file_name after document deletion: got %+v, want notes.txt", assistant.RetrievedDocuments)
+	}
+}
+
 func TestGetInquiry_MarksSupersedesOnReevaluatedMessage(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	userID := uuid.New()

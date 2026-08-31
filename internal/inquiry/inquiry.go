@@ -71,6 +71,16 @@ type Citation struct {
 	BoundingBox *BoundingBox `json:"bounding_box,omitempty"`
 }
 
+// RetrievedDocument names one file in a message's ranked retrieval set.
+// FileName is snapshotted at persist time for the same reason as
+// Citation.FileName: a bare DocumentID resolved via a live lookup goes
+// blank the moment the source document is renamed or deleted, which a
+// historical Inquiry message needs to survive.
+type RetrievedDocument struct {
+	DocumentID uuid.UUID `json:"document_id"`
+	FileName   string    `json:"file_name"`
+}
+
 // Message is one turn in an Inquiry. A user-role message carries only
 // Content (the query text); an assistant-role message additionally carries
 // Citations and RetrievedDocuments, mirroring search.Result.
@@ -82,7 +92,7 @@ type Message struct {
 	Role               Role
 	Content            string
 	Citations          []Citation
-	RetrievedDocuments []uuid.UUID
+	RetrievedDocuments []RetrievedDocument
 	// SupersedesMessageID is set on a re-evaluation: a new assistant message
 	// produced by re-running an earlier message's query against the current
 	// KB state. Re-evaluating appends rather than overwrites, since seeing

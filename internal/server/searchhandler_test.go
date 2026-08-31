@@ -189,8 +189,9 @@ func TestSearch_PersistsUserAndAssistantMessages(t *testing.T) {
 	if len(messages[1].Citations) != 1 || messages[1].Citations[0].FileName != "notes.txt" {
 		t.Errorf("assistant message citation FileName: got %+v, want notes.txt", messages[1].Citations)
 	}
-	if len(messages[1].RetrievedDocuments) != 1 || messages[1].RetrievedDocuments[0] != doc.ID {
-		t.Errorf("assistant message retrieved documents: got %v, want [%v]", messages[1].RetrievedDocuments, doc.ID)
+	if len(messages[1].RetrievedDocuments) != 1 || messages[1].RetrievedDocuments[0].DocumentID != doc.ID ||
+		messages[1].RetrievedDocuments[0].FileName != "notes.txt" {
+		t.Errorf("assistant message retrieved documents: got %+v, want one entry {%v, notes.txt}", messages[1].RetrievedDocuments, doc.ID)
 	}
 }
 

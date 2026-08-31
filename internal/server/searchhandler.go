@@ -114,8 +114,7 @@ func (h *searchHandler) getInquiry(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, "failed to load inquiry")
 				return
 			}
-			fileNames := h.fileNames(r.Context(), userID, kbID)
-			resp.Messages = buildInquiryMessages(messages, fileNames)
+			resp.Messages = buildInquiryMessages(messages)
 		case !errors.Is(err, inquiry.ErrNotFound):
 			writeError(w, http.StatusInternalServerError, "failed to load inquiry")
 			return
@@ -146,14 +145,12 @@ type inquiryMessageResponse struct {
 }
 
 // buildInquiryMessages converts persisted Inquiry messages to their wire
-// shape, resolving each citation's/retrieved document's file name from
-// fileNames — the same live, request-time lookup the search handler uses,
-// not the FileName already snapshotted on the citation itself. A citation's
-// snapshotted FileName is what the researcher saw at answer time and is
-// preserved as-is; fileNames here is only used for RetrievedDocuments,
-// which was never snapshotted (see inquiry.Citation's doc comment for why
-// citations needed it and retrieved-document rows didn't).
-func buildInquiryMessages(messages []*inquiry.Message, fileNames map[uuid.UUID]string) []inquiryMessageResponse {
+// shape. Every file name — a citation's or a retrieved document's — comes
+// from what was snapshotted at persist time, not a live document lookup:
+// a historical Inquiry message is read back long after the request that
+// produced it, potentially after its source document was renamed or
+// deleted, so there's no live lookup that could answer this correctly.
+func buildInquiryMessages(messages []*inquiry.Message) []inquiryMessageResponse {
 	out := make([]inquiryMessageResponse, len(messages))
 	for i, m := range messages {
 		citations := make([]CitationResponse, len(m.Citations))
@@ -169,8 +166,8 @@ func buildInquiryMessages(messages []*inquiry.Message, fileNames map[uuid.UUID]s
 			}
 		}
 		retrieved := make([]RetrievedFileResponse, len(m.RetrievedDocuments))
-		for j, docID := range m.RetrievedDocuments {
-			retrieved[j] = RetrievedFileResponse{DocumentID: docID.String(), FileName: fileNames[docID]}
+		for j, rd := range m.RetrievedDocuments {
+			retrieved[j] = RetrievedFileResponse{DocumentID: rd.DocumentID.String(), FileName: rd.FileName}
 		}
 		var supersedes *string
 		if m.SupersedesMessageID != nil {
@@ -373,13 +370,17 @@ func (h *searchHandler) persistAssistantMessage(ctx context.Context, userID uuid
 			}
 		}
 	}
+	retrieved := make([]inquiry.RetrievedDocument, len(result.RetrievedDocuments))
+	for i, docID := range result.RetrievedDocuments {
+		retrieved[i] = inquiry.RetrievedDocument{DocumentID: docID, FileName: fileNames[docID]}
+	}
 	_, err := h.inquiryRepo.AppendMessage(ctx, userID, &inquiry.Message{
 		InquiryID:           inq.ID,
 		KBID:                inq.KBID,
 		Role:                inquiry.RoleAssistant,
 		Content:             result.Summary,
 		Citations:           citations,
-		RetrievedDocuments:  result.RetrievedDocuments,
+		RetrievedDocuments:  retrieved,
 		SupersedesMessageID: supersedes,
 	})
 	if err != nil {
