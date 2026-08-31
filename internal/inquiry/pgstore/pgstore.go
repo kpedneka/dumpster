@@ -84,7 +84,7 @@ func (s *Store) AppendMessage(ctx context.Context, userID uuid.UUID, msg *inquir
 		return tx.QueryRow(ctx,
 			`INSERT INTO inquiry_messages
 			 (inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, supersedes_message_id, ordinal)
-			 SELECT $1, $2, $3, $4, $5, $6, $7, $8, COALESCE(MAX(ordinal), -1) + 1
+			 SELECT $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, COALESCE(MAX(ordinal), -1) + 1
 			 FROM inquiry_messages WHERE inquiry_id = $1
 			 RETURNING id, inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, supersedes_message_id, ordinal, created_at`,
 			msg.InquiryID, msg.KBID, userID, msg.Role, msg.Content, citationsJSON, retrievedJSON, msg.SupersedesMessageID,
@@ -146,12 +146,25 @@ func (s *Store) ListMessages(ctx context.Context, userID, inquiryID uuid.UUID) (
 
 // marshalOrNil returns nil (SQL NULL) for an empty/nil slice, rather than
 // the JSON literal "[]" or "null" — mirroring chunk.pgstore's handling of
-// the optional bounding_box column.
-func marshalOrNil[T any](v []T) ([]byte, error) {
+// the optional bounding_box column. The result is a string, not []byte: the
+// API connects via db.Connect's pooled (PgBouncer) mode, which runs in
+// pgx's simple query protocol — every parameter gets inlined as a literal
+// in the SQL text rather than bound out-of-band, and pgx's simple-protocol
+// encoding of a bare []byte produces a bytea hex-literal, not the JSON text
+// itself. A jsonb-cast parameter then tries to parse that hex string as
+// JSON and fails ("invalid input syntax for type json"). A string encodes
+// as a quoted text literal instead, which the ::jsonb cast can actually
+// parse — the same reason chunk.pgstore's vectorParam returns a string for
+// its ::vector-cast parameter, not a []float32.
+func marshalOrNil[T any](v []T) (any, error) {
 	if len(v) == 0 {
 		return nil, nil
 	}
-	return json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // unmarshalIfPresent leaves dst untouched (nil slice) when raw is empty,
