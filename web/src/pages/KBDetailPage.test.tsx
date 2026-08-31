@@ -895,9 +895,55 @@ describe('KBDetailPage', () => {
           expect.objectContaining({ method: 'POST' }),
         )
         await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
-        // The original answer is still there, not overwritten.
+        // The original answer is still there, not overwritten, grouped
+        // under the same query with the re-evaluation labeled and the
+        // latest answer tagged as current.
         expect(screen.getByText('Paris is the capital.')).toBeInTheDocument()
-        expect(screen.getByText(/re-evaluated answer/i)).toBeInTheDocument()
+        expect(screen.getByText(/re-evaluated ·/i)).toBeInTheDocument()
+        expect(screen.getByText('Current')).toBeInTheDocument()
+      })
+
+      it('groups a re-evaluation under the query it re-answers, not whichever query is nearby', async () => {
+        // Two independent turns; only the first one's answer gets
+        // re-evaluated. A grouping bug (e.g. by array position instead of
+        // supersedes_message_id) would attach the re-evaluation to the
+        // second turn instead, or show it detached from both.
+        mockInquiryMessages = [
+          userMessage('what is the capital of France?', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'Paris is the capital.' }),
+          userMessage('what is the capital of Japan?', 'msg-3'),
+          assistantMessage({ id: 'msg-4', content: 'Tokyo is the capital.' }),
+        ]
+        renderKBDetailPage()
+        await screen.findByText('Tokyo is the capital.')
+
+        mockSearchStream(
+          [sseFrame('done', { summary: 'Paris remains the capital.', citations: [] })],
+          {},
+          [
+            userMessage('what is the capital of France?', 'msg-1'),
+            assistantMessage({ id: 'msg-2', content: 'Paris is the capital.' }),
+            userMessage('what is the capital of Japan?', 'msg-3'),
+            assistantMessage({ id: 'msg-4', content: 'Tokyo is the capital.' }),
+            assistantMessage({ id: 'msg-5', content: 'Paris remains the capital.', supersedes_message_id: 'msg-2' }),
+          ],
+        )
+        const reevaluateButtons = screen.getAllByRole('button', { name: /re-evaluate against the current knowledge base/i })
+        // The France turn's button is the first one rendered (turns render
+        // in original-query order).
+        await userEvent.setup().click(reevaluateButtons[0])
+
+        await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
+
+        // Both France answers are grouped together...
+        const franceQuery = screen.getByText('what is the capital of France?')
+        const franceGroup = franceQuery.parentElement!
+        expect(within(franceGroup).getByText('Paris is the capital.')).toBeInTheDocument()
+        expect(within(franceGroup).getByText('Paris remains the capital.')).toBeInTheDocument()
+        // ...and the Japan turn is untouched by it.
+        const japanQuery = screen.getByText('what is the capital of Japan?')
+        const japanGroup = japanQuery.parentElement!
+        expect(within(japanGroup).queryByText('Paris remains the capital.')).not.toBeInTheDocument()
       })
 
       it('shows the re-evaluation streaming in directly under the message being re-answered', async () => {

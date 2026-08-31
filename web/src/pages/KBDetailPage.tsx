@@ -91,6 +91,76 @@ async function fetchInquiry(kbId: string) {
   return data
 }
 
+// A Turn is one original query and every answer ever given to it, in
+// chronological order — the original first, each re-evaluation after.
+// Re-evaluations are appended wherever they land in the raw message list
+// (at the end of the Inquiry, not next to the query they re-answer — see
+// AppendMessage), so grouping by supersedes_message_id is what actually
+// keeps a query and all its answers visually together.
+interface Turn {
+  query: InquiryMessage | null
+  answers: InquiryMessage[]
+}
+
+function groupIntoTurns(messages: InquiryMessage[]): Turn[] {
+  const byId = new Map(messages.map((m) => [m.id, m]))
+  const turnByRootId = new Map<string, Turn>()
+  const turns: Turn[] = []
+
+  const consumedQueryIds = new Set<string>()
+
+  messages.forEach((m, i) => {
+    if (m.role !== 'assistant' || m.supersedes_message_id) return
+    const prev = messages[i - 1]
+    const query = prev?.role === 'user' ? prev : null
+    if (query) consumedQueryIds.add(query.id)
+    const turn: Turn = { query, answers: [m] }
+    turnByRootId.set(m.id, turn)
+    turns.push(turn)
+  })
+
+  messages.forEach((m) => {
+    if (m.role !== 'assistant' || !m.supersedes_message_id) return
+    // Walk the supersedes chain to the root original answer, in case this
+    // is a re-evaluation of a re-evaluation.
+    let ancestorId = m.supersedes_message_id
+    for (;;) {
+      const ancestor = byId.get(ancestorId)
+      if (!ancestor?.supersedes_message_id) break
+      ancestorId = ancestor.supersedes_message_id
+    }
+    const turn = turnByRootId.get(ancestorId)
+    if (turn) {
+      turn.answers.push(m)
+    } else {
+      // Defensive: supersedes_message_id pointing outside this Inquiry
+      // shouldn't happen, but render it as its own turn rather than
+      // silently dropping it.
+      turns.push({ query: null, answers: [m] })
+    }
+  })
+
+  // A user message with no assistant answer yet — e.g. the page was
+  // reloaded mid-generation, aborting it — still needs to render rather
+  // than silently vanish just because it has no answer to pair with.
+  messages.forEach((m) => {
+    if (m.role === 'user' && !consumedQueryIds.has(m.id)) {
+      turns.push({ query: m, answers: [] })
+    }
+  })
+
+  return turns
+}
+
+function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
 function citedPagesFor(documentId: string, citations: Citation[]): number[] {
   const pages = new Set<number>()
   for (const c of citations) {
@@ -180,12 +250,16 @@ function AnswerBlock({
   retrievedFiles,
   retrievalMs,
   isStreaming,
+  badge,
 }: {
   content: string
   citations: Citation[]
   retrievedFiles: RetrievedFile[]
   retrievalMs: number | null
   isStreaming: boolean
+  // Optional small tag shown next to "Relevant files" — used for "Current"
+  // on the latest answer in a re-evaluated turn (see Turn/groupIntoTurns).
+  badge?: React.ReactNode
 }) {
   const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
 
@@ -202,11 +276,14 @@ function AnswerBlock({
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Relevant files
           </span>
-          {isStreaming && retrievalMs !== null && (
-            <span className="text-[11px] text-muted-foreground">
-              Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in {retrievalMs}ms
-            </span>
-          )}
+          <span className="flex items-center gap-2">
+            {isStreaming && retrievalMs !== null && (
+              <span className="text-[11px] text-muted-foreground">
+                Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in {retrievalMs}ms
+              </span>
+            )}
+            {badge}
+          </span>
         </div>
         {isStreaming && retrievalMs === null ? (
           <p className="mt-2 text-xs text-muted-foreground">Finding relevant files…</p>
@@ -337,7 +414,8 @@ export function KBDetailPage() {
     queryFn: () => fetchInquiry(kbId!),
     enabled: !!kbId,
   })
-  const messages: InquiryMessage[] = inquiryData?.messages ?? []
+  const messages: InquiryMessage[] = useMemo(() => inquiryData?.messages ?? [], [inquiryData])
+  const turns = useMemo(() => groupIntoTurns(messages), [messages])
 
   // The turn currently streaming in — a fresh search (kind: 'search',
   // appended after every historical turn) or a re-evaluation (kind:
@@ -670,47 +748,68 @@ export function KBDetailPage() {
             Each query is answered independently — it won't reference earlier queries in this inquiry.
           </p>
 
-          {messages.length === 0 && !pending && (
+          {turns.length === 0 && !pending && (
             <p className="py-16 text-center text-sm text-muted-foreground">
               Query this knowledge base above to begin your inquiry.
             </p>
           )}
 
-          <div className="flex flex-col gap-4">
-            {messages.map((m) =>
-              m.role === 'user' ? (
-                <p key={m.id} className="text-sm font-medium">
-                  {m.content}
-                </p>
-              ) : (
-                <div key={m.id} className="flex flex-col gap-2">
-                  {m.supersedes_message_id && (
-                    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                      <RotateCw className="h-3 w-3" />
-                      Re-evaluated answer
-                    </span>
+          <div className="flex flex-col gap-6">
+            {turns.map((turn, ti) => {
+              const latest = turn.answers[turn.answers.length - 1]
+              const reevaluatingThis = pending?.kind === 'reevaluate' && latest && pending.anchorMessageId === latest.id
+              return (
+                <div key={turn.query?.id ?? latest?.id ?? `turn-${ti}`} className="flex flex-col gap-2">
+                  {turn.query && <p className="text-sm font-medium">{turn.query.content}</p>}
+                  {turn.answers.map((m, ai) => (
+                    <div
+                      key={m.id}
+                      className={ai > 0 ? 'flex flex-col gap-1.5 border-l-2 border-border pl-3' : 'flex flex-col gap-1.5'}
+                    >
+                      {ai > 0 && (
+                        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <RotateCw className="h-3 w-3" />
+                          Re-evaluated · {formatTimestamp(m.created_at)}
+                        </span>
+                      )}
+                      <AnswerBlock
+                        content={m.content}
+                        citations={m.citations}
+                        retrievedFiles={m.retrieved_documents}
+                        retrievalMs={null}
+                        isStreaming={false}
+                        badge={
+                          ai === turn.answers.length - 1 && turn.answers.length > 1 ? (
+                            <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-foreground">
+                              Current
+                            </span>
+                          ) : undefined
+                        }
+                      />
+                    </div>
+                  ))}
+                  {latest && (
+                    <button
+                      type="button"
+                      onClick={() => reevaluate(latest.id)}
+                      disabled={pending?.status === 'loading'}
+                      className="self-start text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                    >
+                      Re-evaluate against the current knowledge base
+                    </button>
                   )}
-                  <AnswerBlock
-                    content={m.content}
-                    citations={m.citations}
-                    retrievedFiles={m.retrieved_documents}
-                    retrievalMs={null}
-                    isStreaming={false}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => reevaluate(m.id)}
-                    disabled={pending?.status === 'loading'}
-                    className="self-start text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-                  >
-                    Re-evaluate against the current knowledge base
-                  </button>
-                  {pending?.kind === 'reevaluate' && pending.anchorMessageId === m.id && (
-                    <PendingAnswerBlock pending={pending} />
+                  {reevaluatingThis && (
+                    <div className="flex flex-col gap-1.5 border-l-2 border-border pl-3">
+                      <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <RotateCw className="h-3 w-3" />
+                        Re-evaluating…
+                      </span>
+                      <PendingAnswerBlock pending={pending} />
+                    </div>
                   )}
                 </div>
-              ),
-            )}
+              )
+            })}
 
             {pending?.kind === 'search' && <PendingAnswerBlock pending={pending} />}
           </div>
