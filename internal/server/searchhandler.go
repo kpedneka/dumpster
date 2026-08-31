@@ -263,19 +263,39 @@ func (h *searchHandler) reevaluate(w http.ResponseWriter, r *http.Request) {
 	h.persistAssistantMessage(r.Context(), userID, inq, result, fileNames, &messageID)
 }
 
-// queryForReEvaluation returns the query text to re-run for messageID —
-// the content of the user-role message immediately preceding it — when
-// messageID identifies a re-evaluatable assistant answer within messages.
-// Every assistant message persistAssistantMessage creates is immediately
-// preceded by the user message that prompted it (see persistUserMessage),
-// so an assistant message failing that shape indicates a caller error
-// (wrong message ID, or a user-role message ID), not a data integrity bug.
+// queryForReEvaluation returns the query text to re-run for messageID: the
+// content of the user-role message immediately preceding the *root*
+// original answer in messageID's supersedes chain. messageID itself is
+// only adjacent to that user message when it IS the root — a
+// re-evaluation is always appended at the end of the message list (see
+// AppendMessage's ordinal assignment), never next to the query it
+// re-answers, so re-evaluating an already-re-evaluated answer (the
+// current answer in a turn with 2+ answers) needs to walk back to the
+// original before the "immediately preceding message" assumption holds.
 func queryForReEvaluation(messages []*inquiry.Message, messageID uuid.UUID) (string, bool) {
+	byID := make(map[uuid.UUID]*inquiry.Message, len(messages))
+	for _, m := range messages {
+		byID[m.ID] = m
+	}
+
+	target, ok := byID[messageID]
+	if !ok || target.Role != inquiry.RoleAssistant {
+		return "", false
+	}
+	root := target
+	for root.SupersedesMessageID != nil {
+		parent, ok := byID[*root.SupersedesMessageID]
+		if !ok {
+			break
+		}
+		root = parent
+	}
+
 	for i, m := range messages {
-		if m.ID != messageID {
+		if m.ID != root.ID {
 			continue
 		}
-		if m.Role != inquiry.RoleAssistant || i == 0 {
+		if i == 0 {
 			return "", false
 		}
 		prev := messages[i-1]

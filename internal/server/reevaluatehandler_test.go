@@ -28,6 +28,71 @@ func seedOneTurn(t *testing.T, deps Deps, kbID, userID uuid.UUID, query string) 
 	router.ServeHTTP(httptest.NewRecorder(), req)
 }
 
+// TestReevaluate_ReevaluatingAnAlreadyReevaluatedAnswer is a regression
+// test: a re-evaluation is always appended at the end of the message list
+// (see AppendMessage's ordinal assignment), never adjacent to the query it
+// re-answers. Re-evaluating the current answer in a turn that has already
+// been re-evaluated once used to 400, since queryForReEvaluation looked
+// only at the message immediately before the target by ordinal — which is
+// the wrong message once the target isn't the original answer anymore.
+func TestReevaluate_ReevaluatingAnAlreadyReevaluatedAnswer(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	inquiryRepo := deps.Inquiries.(*inquirymem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "first answer"})
+	seedOneTurn(t, deps, k.ID, userID, "what changed?")
+
+	inq, _ := inquiryRepo.Get(context.TODO(), userID, k.ID)
+	before, _ := inquiryRepo.ListMessages(context.TODO(), userID, inq.ID)
+	original := before[1]
+
+	// First re-evaluation: succeeds today even without the fix, since the
+	// original answer IS adjacent to its query.
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "second answer"})
+	router := NewRouter(deps)
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+k.ID.String()+"/inquiry/messages/"+original.ID.String()+"/reevaluate", nil, userID)
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	afterFirst, _ := inquiryRepo.ListMessages(context.TODO(), userID, inq.ID)
+	firstReeval := afterFirst[2]
+
+	// Second re-evaluation: targets the first re-evaluation, which sits at
+	// the end of the message list, nowhere near the original query.
+	var gotQuery string
+	deps.Searcher = &searchmock.Searcher{
+		SearchFn: func(_ context.Context, _ uuid.UUID, query string) (search.Result, error) {
+			gotQuery = query
+			return search.Result{Summary: "third answer"}, nil
+		},
+	}
+	router = NewRouter(deps)
+	req2 := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+k.ID.String()+"/inquiry/messages/"+firstReeval.ID.String()+"/reevaluate", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req2)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if gotQuery != "what changed?" {
+		t.Errorf("re-evaluated query: got %q, want %q", gotQuery, "what changed?")
+	}
+
+	after, _ := inquiryRepo.ListMessages(context.TODO(), userID, inq.ID)
+	if len(after) != 4 {
+		t.Fatalf("messages: got %d, want 4", len(after))
+	}
+	newest := after[3]
+	if newest.Content != "third answer" {
+		t.Errorf("newest answer: got %q, want %q", newest.Content, "third answer")
+	}
+	if newest.SupersedesMessageID == nil || *newest.SupersedesMessageID != firstReeval.ID {
+		t.Errorf("SupersedesMessageID: got %v, want %v", newest.SupersedesMessageID, firstReeval.ID)
+	}
+}
+
 func TestReevaluate_AppendsRatherThanReplaces(t *testing.T) {
 	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	inquiryRepo := deps.Inquiries.(*inquirymem.Repository)
