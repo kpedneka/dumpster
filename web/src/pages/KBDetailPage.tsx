@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useDropzone } from 'react-dropzone'
 import {
   AlertTriangle,
+  ChevronRight,
   FileText,
   RotateCw,
   Search as SearchIcon,
@@ -342,6 +343,38 @@ function PendingAnswerBlock({ pending }: { pending: PendingTurn }) {
       retrievalMs={pending.retrievalMs}
       isStreaming
     />
+  )
+}
+
+// HistoryAnswer renders one superseded (no longer current) answer,
+// collapsed by default behind a caret — a long-form LLM answer plus its
+// relevant-files section is a lot of text to show for every past version
+// of a re-evaluated turn when only the current one is usually what's
+// relevant. The always-visible summary line doubles as the toggle.
+function HistoryAnswer({ message }: { message: InquiryMessage }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+      >
+        <ChevronRight className={cn('h-3 w-3 transition-transform', expanded && 'rotate-90')} />
+        <RotateCw className="h-3 w-3" />
+        Re-evaluated · {formatTimestamp(message.created_at)}
+      </button>
+      {expanded && (
+        <AnswerBlock
+          content={message.content}
+          citations={message.citations}
+          retrievedFiles={message.retrieved_documents}
+          retrievalMs={null}
+          isStreaming={false}
+        />
+      )}
+    </div>
   )
 }
 
@@ -763,37 +796,33 @@ export function KBDetailPage() {
           <div className="flex flex-col gap-6">
             {turns.map((turn, ti) => {
               const latest = turn.answers[turn.answers.length - 1]
+              // Newest first, oldest last: the current answer reflects the
+              // knowledge base as it stands right now, which is usually
+              // more relevant than any earlier version of it — showing it
+              // last (as if chronology mattered more than relevance) would
+              // mean hunting past history for the answer that actually
+              // matters most.
+              const history = turn.answers.slice(0, -1).reverse()
               const reevaluatingThis = pending?.kind === 'reevaluate' && latest && pending.anchorMessageId === latest.id
               return (
                 <div key={turn.query?.id ?? latest?.id ?? `turn-${ti}`} className="flex flex-col gap-2">
                   {turn.query && <p className="text-sm font-medium">{turn.query.content}</p>}
-                  {turn.answers.map((m, ai) => (
-                    <div
-                      key={m.id}
-                      className={ai > 0 ? 'flex flex-col gap-1.5 border-l-2 border-border pl-3' : 'flex flex-col gap-1.5'}
-                    >
-                      {ai > 0 && (
-                        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                          <RotateCw className="h-3 w-3" />
-                          Re-evaluated · {formatTimestamp(m.created_at)}
-                        </span>
-                      )}
-                      <AnswerBlock
-                        content={m.content}
-                        citations={m.citations}
-                        retrievedFiles={m.retrieved_documents}
-                        retrievalMs={null}
-                        isStreaming={false}
-                        badge={
-                          ai === turn.answers.length - 1 && turn.answers.length > 1 ? (
-                            <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-foreground">
-                              Current
-                            </span>
-                          ) : undefined
-                        }
-                      />
-                    </div>
-                  ))}
+                  {latest && (
+                    <AnswerBlock
+                      content={latest.content}
+                      citations={latest.citations}
+                      retrievedFiles={latest.retrieved_documents}
+                      retrievalMs={null}
+                      isStreaming={false}
+                      badge={
+                        history.length > 0 ? (
+                          <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-foreground">
+                            Current
+                          </span>
+                        ) : undefined
+                      }
+                    />
+                  )}
                   {latest && (
                     <button
                       type="button"
@@ -811,6 +840,13 @@ export function KBDetailPage() {
                         Re-evaluating…
                       </span>
                       <PendingAnswerBlock pending={pending} />
+                    </div>
+                  )}
+                  {history.length > 0 && (
+                    <div className="flex flex-col gap-2 border-l-2 border-border pl-3">
+                      {history.map((m) => (
+                        <HistoryAnswer key={m.id} message={m} />
+                      ))}
                     </div>
                   )}
                 </div>

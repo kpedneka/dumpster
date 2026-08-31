@@ -903,12 +903,14 @@ describe('KBDetailPage', () => {
           expect.objectContaining({ method: 'POST' }),
         )
         await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
-        // The original answer is still there, not overwritten, grouped
-        // under the same query with the re-evaluation labeled and the
-        // latest answer tagged as current.
-        expect(screen.getByText('Paris is the capital.')).toBeInTheDocument()
-        expect(screen.getByText(/re-evaluated ·/i)).toBeInTheDocument()
+        // The original answer isn't overwritten — it's collapsed into
+        // history behind a caret, not shown inline, but still there and
+        // reachable, and the current answer is tagged as such.
+        expect(screen.queryByText('Paris is the capital.')).not.toBeInTheDocument()
         expect(screen.getByText('Current')).toBeInTheDocument()
+        const historyToggle = screen.getByText(/re-evaluated ·/i)
+        await user.click(historyToggle)
+        expect(await screen.findByText('Paris is the capital.')).toBeInTheDocument()
       })
 
       it('groups a re-evaluation under the query it re-answers, not whichever query is nearby', async () => {
@@ -936,18 +938,20 @@ describe('KBDetailPage', () => {
             assistantMessage({ id: 'msg-5', content: 'Paris remains the capital.', supersedes_message_id: 'msg-2' }),
           ],
         )
+        const user = userEvent.setup()
         const reevaluateButtons = screen.getAllByRole('button', { name: /re-evaluate against the current knowledge base/i })
         // The France turn's button is the first one rendered (turns render
         // in original-query order).
-        await userEvent.setup().click(reevaluateButtons[0])
+        await user.click(reevaluateButtons[0])
 
         await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
 
         // Both France answers are grouped together...
         const franceQuery = screen.getByText('what is the capital of France?')
         const franceGroup = franceQuery.parentElement!
-        expect(within(franceGroup).getByText('Paris is the capital.')).toBeInTheDocument()
         expect(within(franceGroup).getByText('Paris remains the capital.')).toBeInTheDocument()
+        await user.click(within(franceGroup).getByText(/re-evaluated ·/i))
+        expect(await within(franceGroup).findByText('Paris is the capital.')).toBeInTheDocument()
         // ...and the Japan turn is untouched by it.
         const japanQuery = screen.getByText('what is the capital of Japan?')
         const japanGroup = japanQuery.parentElement!
@@ -984,6 +988,36 @@ describe('KBDetailPage', () => {
         // in-progress re-evaluation renders right after it, not replacing it.
         expect(screen.getByText('an answer')).toBeInTheDocument()
         releaseDone()
+      })
+
+      it('shows the newest answer expanded and un-indented, with older answers collapsed below it, most-recently-superseded first', async () => {
+        mockInquiryMessages = [
+          userMessage('what changed?', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'first answer' }),
+          assistantMessage({ id: 'msg-3', content: 'second answer', supersedes_message_id: 'msg-2' }),
+          assistantMessage({ id: 'msg-4', content: 'third answer', supersedes_message_id: 'msg-3' }),
+        ]
+        renderKBDetailPage()
+
+        // The newest answer is immediately visible, no expansion needed.
+        await screen.findByText('third answer')
+        // The two older ones are collapsed — not in the document at all
+        // until their toggle is clicked.
+        expect(screen.queryByText('first answer')).not.toBeInTheDocument()
+        expect(screen.queryByText('second answer')).not.toBeInTheDocument()
+
+        const toggles = screen.getAllByText(/re-evaluated ·/i)
+        expect(toggles).toHaveLength(2)
+
+        const user = userEvent.setup()
+        // Most-recently-superseded first: "second answer" (msg-3, which
+        // "third answer" superseded) toggles before "first answer" (msg-2).
+        await user.click(toggles[0])
+        expect(await screen.findByText('second answer')).toBeInTheDocument()
+        expect(screen.queryByText('first answer')).not.toBeInTheDocument()
+
+        await user.click(toggles[1])
+        expect(await screen.findByText('first answer')).toBeInTheDocument()
       })
     })
   })
