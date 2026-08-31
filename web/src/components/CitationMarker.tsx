@@ -75,8 +75,8 @@ export function CitationMarker({ citations }: CitationGroupProps) {
             return (
               <li key={group.documentId} className="flex items-center gap-1.5 text-sm">
                 <img src={fileIconSrc(group.fileName)} alt="" className="h-3.5 w-3.5 shrink-0" />
-                <span className="font-medium">{group.fileName}</span>
-                {locatorLabel && <span className="text-muted-foreground">{` · ${locatorLabel}`}</span>}
+                <span className="min-w-0 wrap-anywhere font-medium">{group.fileName}</span>
+                {locatorLabel && <span className="shrink-0 text-muted-foreground">{` · ${locatorLabel}`}</span>}
               </li>
             )
           })}

@@ -419,7 +419,9 @@ export function KBDetailPage() {
   return (
     <div className="rise mx-auto max-w-6xl px-6 py-8">
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="font-display text-2xl font-semibold tracking-tight">{kb?.name ?? '—'}</h1>
+        <h1 className="min-w-0 wrap-anywhere font-display text-2xl font-semibold tracking-tight">
+          {kb?.name ?? '—'}
+        </h1>
         <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
           <Trash2 className="h-4 w-4" />
           Delete knowledge base
@@ -589,7 +591,7 @@ export function KBDetailPage() {
                             className="flex items-center gap-2 text-sm text-muted-foreground"
                           >
                             <img src={fileIconSrc(f.file_name)} alt="" className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate">
+                            <span className="min-w-0 truncate">
                               {f.file_name}
                               {pages.length > 0 && (
                                 <span className="text-muted-foreground/70">
@@ -659,7 +661,7 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
     <div className="lift flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm hover:border-primary/40">
       <img src={fileIconSrc(doc.filename)} alt="" className="h-4 w-4 shrink-0" />
       <div className="min-w-0 flex-1">
-        <p className="break-words text-sm font-medium">{doc.filename}</p>
+        <p className="wrap-anywhere text-sm font-medium">{doc.filename}</p>
         <p className="text-xs text-muted-foreground">{formatSize(doc.size_bytes)}</p>
       </div>
       <StatusRing status={doc.status} updatedAt={doc.updated_at} />

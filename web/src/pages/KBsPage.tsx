@@ -150,7 +150,7 @@ function KBRow({ kb, onDelete }: { kb: KB; onDelete: () => void }) {
     <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3 shadow-sm hover:bg-accent/30 transition-colors">
       <Link to={`/kbs/${kb.id}`} className="flex flex-1 items-center gap-3 min-w-0">
         <Database className="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span className="truncate font-medium">{kb.name}</span>
+        <span className="min-w-0 truncate font-medium">{kb.name}</span>
       </Link>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>

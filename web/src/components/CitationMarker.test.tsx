@@ -77,6 +77,20 @@ describe('CitationMarker', () => {
     expect(screen.getByText(/p\.\s*4/i)).toBeInTheDocument()
   })
 
+  it('wraps a long, unbroken file name in the popover instead of overflowing horizontally', async () => {
+    const longName = 'agenuinelyextremelylongfilenamewithnodelimitersatall.pdf'
+    const citation: Citation = { ...notes, file_name: longName }
+    const user = userEvent.setup()
+    render(<CitationMarker citations={[citation]} />)
+
+    await user.click(screen.getByText(longName))
+
+    const inPopover = await screen.findAllByText(longName)
+    const popoverEntry = inPopover.find((el) => el.tagName === 'SPAN')
+    expect(popoverEntry?.className).toContain('wrap-anywhere')
+    expect(popoverEntry?.className).toContain('min-w-0')
+  })
+
   it('never shows chunk text in the popover', async () => {
     const user = userEvent.setup()
     render(<CitationMarker citations={[notes]} />)

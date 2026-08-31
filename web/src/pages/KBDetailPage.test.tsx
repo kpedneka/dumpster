@@ -64,6 +64,24 @@ describe('KBDetailPage', () => {
     expect(screen.getByRole('link', { name: /privacy policy/i })).toHaveAttribute('href', '/privacy')
   })
 
+  it('wraps a long, unbroken KB name in the title instead of overflowing horizontally', async () => {
+    const longName = 'agenuinelyextremelylongknowledgebasenamewithnodelimitersatall'
+    vi.mocked(api.GET).mockImplementation(((path: string) => {
+      if (path === '/kbs/{id}') {
+        return Promise.resolve({ data: { id: 'kb-1', name: longName }, error: undefined })
+      }
+      if (path === '/kbs/{kbId}/documents') {
+        return Promise.resolve({ data: { items: [] }, error: undefined })
+      }
+      throw new Error(`unexpected api.GET call: ${path}`)
+    }) as never)
+    renderKBDetailPage()
+
+    const heading = await screen.findByRole('heading', { name: longName })
+    expect(heading.className).toContain('min-w-0')
+    expect(heading.className).toContain('wrap-anywhere')
+  })
+
   describe('delete knowledge base', () => {
     it('deletes the knowledge base and navigates back to the list on confirm', async () => {
       vi.mocked(api.DELETE).mockResolvedValue({ error: undefined } as never)
@@ -253,13 +271,21 @@ describe('KBDetailPage', () => {
     })
 
     it('wraps long filenames instead of truncating or scrolling', async () => {
-      const longName = 'a-genuinely-extremely-long-filename-that-would-otherwise-force-horizontal-scroll.pdf'
+      // No spaces or hyphens: a delimited long name would already wrap at
+      // those break points under plain CSS defaults, so it wouldn't
+      // exercise the actual bug (a flex item's default min-width: auto
+      // refusing to shrink below an unbroken string's full width).
+      const longName = 'agenuinelyextremelylongfilenamethatwouldotherwiseforcehorizontalscroll.pdf'
       mockDocs([{ id: 'doc-1', filename: longName, status: 'indexed', size_bytes: 10 }])
       renderKBDetailPage()
 
       const filename = await screen.findByText(longName)
-      expect(filename.className).toContain('break-words')
+      expect(filename.className).toContain('wrap-anywhere')
       expect(filename.className).not.toContain('truncate')
+      // wrap-anywhere alone isn't enough inside a flex row — the flex item
+      // ancestor also needs min-w-0, or it never actually shrinks far
+      // enough to need to wrap.
+      expect(filename.parentElement?.className).toContain('min-w-0')
     })
 
     it('shows a retry action only for a failed (dead-lettered) document', async () => {
