@@ -66,8 +66,8 @@ func (a *LLMAnswerer) AnswerStream(ctx context.Context, _ uuid.UUID, query strin
 func buildPrompt(query string, chunks []retrieval.ScoredChunk) string {
 	var sb strings.Builder
 	sb.WriteString("You are a knowledge-base assistant. Answer the question using ONLY the source chunks below.\n")
-	sb.WriteString("Cite every factual claim with [N] where N is the chunk number.\n")
-	sb.WriteString("When a claim is supported by more than one chunk, place their citations immediately adjacent with no space or punctuation between them, e.g. [1][2], not [1] [2] or [1, 2].\n")
+	sb.WriteString("Cite your sources with [N] where N is the chunk number, but group citations at the end of each paragraph, bullet point, or section rather than after every individual sentence — place every chunk number that supports that whole block of text together at its very end, not scattered one after each sentence.\n")
+	sb.WriteString("When more than one chunk supports the same block, place their citations immediately adjacent with no space or punctuation between them, e.g. [1][2], not [1] [2] or [1, 2].\n")
 	sb.WriteString("If the chunks do not contain enough information, reply with exactly: \"" + notFoundSummary + "\"\n\n")
 	sb.WriteString("Source chunks:\n")
 	for i, sc := range chunks {
