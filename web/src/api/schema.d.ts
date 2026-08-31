@@ -443,6 +443,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{id}/inquiry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the researcher's Inquiry (turn history) for a knowledge base
+         * @description Returns an empty Inquiry (null id, no messages) rather than a 404 when no search has been run against this knowledge base yet — that's a normal state, not an error.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The Inquiry for this knowledge base. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Inquiry"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{id}/inquiry/messages/{messageId}/reevaluate": {
         parameters: {
             query?: never;
@@ -978,6 +1037,26 @@ export interface components {
             /** Format: uuid */
             document_id: string;
             file_name: string;
+        };
+        /** @description One turn in an Inquiry: either the researcher's query (role=user, no citations/retrieved_documents) or a generated answer (role=assistant). Answers are never overwritten — a re-evaluation appends a new message with supersedes_message_id set rather than replacing the one it re-answers. */
+        InquiryMessage: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            content: string;
+            citations: components["schemas"]["Citation"][];
+            retrieved_documents: components["schemas"]["RetrievedFile"][];
+            /** Format: uuid */
+            supersedes_message_id: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description The researcher's single persisted thread of turns for one knowledge base. id is nullable: a knowledge base with no searches run against it yet has no Inquiry, which is a normal state, not an error. */
+        Inquiry: {
+            /** Format: uuid */
+            id: string | null;
+            messages: components["schemas"]["InquiryMessage"][];
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];

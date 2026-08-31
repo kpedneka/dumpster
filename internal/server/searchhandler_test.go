@@ -69,6 +69,16 @@ func decodeFrame[T any](t *testing.T, f sseFrame) T {
 	return v
 }
 
+// decodeJSON decodes a plain (non-SSE) JSON response body.
+func decodeJSON[T any](t *testing.T, body []byte) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decode body %q: %v", body, err)
+	}
+	return v
+}
+
 func TestSearch_StreamsSSEWithContentType(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	userID := uuid.New()

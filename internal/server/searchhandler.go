@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,7 @@ type searchHandler struct {
 func registerSearchRoutes(mux *http.ServeMux, kbRepo kb.Repository, docRepo document.Repository, searcher search.Searcher, inquiryRepo inquiry.Repository, instruments *telemetry.Instruments) {
 	h := &searchHandler{kbRepo: kbRepo, docRepo: docRepo, searcher: searcher, inquiryRepo: inquiryRepo, instruments: instruments}
 	mux.HandleFunc("POST /kbs/{id}/search", h.search)
+	mux.HandleFunc("GET /kbs/{id}/inquiry", h.getInquiry)
 	mux.HandleFunc("POST /kbs/{id}/inquiry/messages/{messageId}/reevaluate", h.reevaluate)
 }
 
@@ -79,6 +81,122 @@ func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.persistAssistantMessage(r.Context(), userID, inq, result, fileNames, nil)
+}
+
+// getInquiry handles GET /kbs/{id}/inquiry, returning the researcher's
+// single Inquiry for this KB so the frontend can hydrate turn history on
+// page load. A KB with no searches run against it yet has no Inquiry —
+// that's a normal state, not an error, so the response is an empty
+// (nil ID, no messages) body rather than a 404.
+func (h *searchHandler) getInquiry(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	kbID, ok := parseUUID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	if _, err := h.kbRepo.Get(r.Context(), userID, kbID); err != nil {
+		writeKBError(w, err)
+		return
+	}
+
+	resp := inquiryResponse{Messages: []inquiryMessageResponse{}}
+	if h.inquiryRepo != nil {
+		inq, err := h.inquiryRepo.Get(r.Context(), userID, kbID)
+		switch {
+		case err == nil:
+			id := inq.ID.String()
+			resp.ID = &id
+			messages, err := h.inquiryRepo.ListMessages(r.Context(), userID, inq.ID)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load inquiry")
+				return
+			}
+			fileNames := h.fileNames(r.Context(), userID, kbID)
+			resp.Messages = buildInquiryMessages(messages, fileNames)
+		case !errors.Is(err, inquiry.ErrNotFound):
+			writeError(w, http.StatusInternalServerError, "failed to load inquiry")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// inquiryResponse is the JSON shape of GET /kbs/{id}/inquiry.
+type inquiryResponse struct {
+	// ID is nil when no Inquiry exists yet for this KB.
+	ID       *string                  `json:"id"`
+	Messages []inquiryMessageResponse `json:"messages"`
+}
+
+// inquiryMessageResponse is one turn. Citations/RetrievedDocuments are
+// empty (not null) for a user-role message, matching CitationResponse's
+// existing shape for a search response with no citations.
+type inquiryMessageResponse struct {
+	ID                  string                  `json:"id"`
+	Role                string                  `json:"role"`
+	Content             string                  `json:"content"`
+	Citations           []CitationResponse      `json:"citations"`
+	RetrievedDocuments  []RetrievedFileResponse `json:"retrieved_documents"`
+	SupersedesMessageID *string                 `json:"supersedes_message_id"`
+	CreatedAt           time.Time               `json:"created_at"`
+}
+
+// buildInquiryMessages converts persisted Inquiry messages to their wire
+// shape, resolving each citation's/retrieved document's file name from
+// fileNames — the same live, request-time lookup the search handler uses,
+// not the FileName already snapshotted on the citation itself. A citation's
+// snapshotted FileName is what the researcher saw at answer time and is
+// preserved as-is; fileNames here is only used for RetrievedDocuments,
+// which was never snapshotted (see inquiry.Citation's doc comment for why
+// citations needed it and retrieved-document rows didn't).
+func buildInquiryMessages(messages []*inquiry.Message, fileNames map[uuid.UUID]string) []inquiryMessageResponse {
+	out := make([]inquiryMessageResponse, len(messages))
+	for i, m := range messages {
+		citations := make([]CitationResponse, len(m.Citations))
+		for j, c := range m.Citations {
+			citations[j] = CitationResponse{
+				Number:     c.Number,
+				DocumentID: c.DocumentID.String(),
+				ChunkID:    c.ChunkID.String(),
+				CharStart:  c.CharStart,
+				CharEnd:    c.CharEnd,
+				FileName:   c.FileName,
+				Locator:    inquiryCitationLocator(c),
+			}
+		}
+		retrieved := make([]RetrievedFileResponse, len(m.RetrievedDocuments))
+		for j, docID := range m.RetrievedDocuments {
+			retrieved[j] = RetrievedFileResponse{DocumentID: docID.String(), FileName: fileNames[docID]}
+		}
+		var supersedes *string
+		if m.SupersedesMessageID != nil {
+			s := m.SupersedesMessageID.String()
+			supersedes = &s
+		}
+		out[i] = inquiryMessageResponse{
+			ID:                  m.ID.String(),
+			Role:                string(m.Role),
+			Content:             m.Content,
+			Citations:           citations,
+			RetrievedDocuments:  retrieved,
+			SupersedesMessageID: supersedes,
+			CreatedAt:           m.CreatedAt,
+		}
+	}
+	return out
+}
+
+// inquiryCitationLocator mirrors citationLocator for a persisted
+// inquiry.Citation rather than a live search.Citation.
+func inquiryCitationLocator(c inquiry.Citation) *CitationLocator {
+	if c.PageNumber == nil {
+		return nil
+	}
+	return &CitationLocator{Type: "page", Value: *c.PageNumber}
 }
 
 // reevaluate handles POST /kbs/{id}/inquiry/messages/{messageId}/reevaluate.

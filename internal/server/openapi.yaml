@@ -195,6 +195,58 @@ components:
           type: string
       required: [document_id, file_name]
 
+    InquiryMessage:
+      type: object
+      description: >-
+        One turn in an Inquiry: either the researcher's query (role=user,
+        no citations/retrieved_documents) or a generated answer
+        (role=assistant). Answers are never overwritten — a re-evaluation
+        appends a new message with supersedes_message_id set rather than
+        replacing the one it re-answers.
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+        retrieved_documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetrievedFile"
+        supersedes_message_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, role, content, citations, retrieved_documents, supersedes_message_id, created_at]
+
+    Inquiry:
+      type: object
+      description: >-
+        The researcher's single persisted thread of turns for one
+        knowledge base. id is nullable: a knowledge base with no searches
+        run against it yet has no Inquiry, which is a normal state, not
+        an error.
+      properties:
+        id:
+          type: string
+          format: uuid
+          nullable: true
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/InquiryMessage"
+      required: [id, messages]
+
     KBPage:
       type: object
       properties:
@@ -481,6 +533,40 @@ paths:
             Search failed before any event was streamed (e.g. retrieval
             itself failed) — a normal JSON error, since nothing has been
             written yet at this point.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/inquiry:
+    get:
+      summary: Get the researcher's Inquiry (turn history) for a knowledge base
+      description: >-
+        Returns an empty Inquiry (null id, no messages) rather than a 404
+        when no search has been run against this knowledge base yet —
+        that's a normal state, not an error.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The Inquiry for this knowledge base.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Inquiry"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
           content:
             application/json:
               schema:
