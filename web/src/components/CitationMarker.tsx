@@ -1,62 +1,59 @@
-import { useState } from 'react'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { fileIconSrc } from '@/lib/file-icons'
 import type { components } from '@/api/schema.d.ts'
 
 type Citation = components['schemas']['Citation']
 
-interface CitationMarkerProps {
-  citation: Citation
+interface CitationGroupProps {
+  // One or more citations the model cited immediately adjacent to each
+  // other (e.g. "[1][2]") — see the prompt instruction in answerer.go.
+  // Grouping and file-level dedup happens before this component ever sees
+  // the citations; it only renders what it's given.
+  citations: Citation[]
 }
 
-// The inline marker stays a compact [N] badge rather than the file name
-// itself — spelling out every citation's source inline would reintroduce the
-// clutter this model was built to avoid. Instead, mirroring how search
-// engines cite a source page rather than a byte range within it, the
-// popover's primary content is the file (+ locator, when one applies, e.g.
-// a PDF page number), with the chunk's own extracted text underneath as
-// drill-down evidence for anyone who wants to verify the exact source span.
-function formatLocator(locator: Citation['locator']): string | null {
-  if (!locator) return null
-  switch (locator.type) {
-    case 'page':
-      return `p. ${locator.value}`
-    default:
-      return null
+interface FileGroup {
+  fileName: string
+  documentId: string
+  pages: number[]
+}
+
+// Groups citations by document, mirroring KBDetailPage's citedPagesFor: two
+// citations from the same file collapse into one entry with every distinct
+// page they named, sorted ascending — a "+k" badge counts distinct files,
+// not raw citation count, so two pages of the same PDF is never "+1".
+function groupByFile(citations: Citation[]): FileGroup[] {
+  const byDoc = new Map<string, FileGroup>()
+  for (const c of citations) {
+    let group = byDoc.get(c.document_id)
+    if (!group) {
+      group = { fileName: c.file_name, documentId: c.document_id, pages: [] }
+      byDoc.set(c.document_id, group)
+    }
+    if (c.locator?.type === 'page' && !group.pages.includes(c.locator.value)) {
+      group.pages.push(c.locator.value)
+    }
   }
+  for (const group of byDoc.values()) {
+    group.pages.sort((a, b) => a - b)
+  }
+  return Array.from(byDoc.values())
 }
 
-// A locator-bearing chunk (currently: a PDF page) is much larger than a
-// text/markdown chunk, so its drill-down text is truncated behind an expand
-// control by default — otherwise the popover reintroduces the same
-// too-much-highlighted-text problem this citation model was built to avoid.
-// Plain-text citations have no locator and are never truncated: their
-// chunks are already paragraph-sized.
-const TRUNCATE_AT = 200
-
-export function CitationMarker({ citation }: CitationMarkerProps) {
-  const [open, setOpen] = useState(false)
-  const [expanded, setExpanded] = useState(false)
-  const locatorLabel = formatLocator(citation.locator)
-
-  const truncatable = citation.locator != null && citation.text.length > TRUNCATE_AT
-  const displayText = truncatable && !expanded ? `${citation.text.slice(0, TRUNCATE_AT)}…` : citation.text
+// The inline marker shows the file name it came from — borrowed from how
+// Google shows a source's site name rather than a bare footnote number —
+// plus a "+k" for any additional distinct files behind the same claim,
+// rather than stacking one "[N]" badge per citation. The popover lists
+// every file in the group with its page(s), no chunk-text quote: the file
+// (+ page, when one applies) is the entire citation identity now, matching
+// the file-level "relevant files" ranking shown elsewhere on the page.
+export function CitationMarker({ citations }: CitationGroupProps) {
+  const groups = groupByFile(citations)
+  const [primary, ...rest] = groups
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        if (!next) setExpanded(false)
-      }}
-    >
+    <Popover>
       <PopoverTrigger asChild>
-        {/* tabIndex makes this a real keyboard tab stop, and onKeyDown makes
-            it operable once reached: <sup> isn't focusable by default, and
-            asChild's ARIA/behavioral props (aria-haspopup, etc.) don't
-            include a browser's native Enter/Space-triggers-click behavior —
-            that only comes for free on an actual <button>. Both are missing
-            without this; confirmed by testing Enter on a tabIndex-only
-            version and finding the popover simply never opened. */}
         <sup
           tabIndex={0}
           onKeyDown={(e) => {
@@ -67,26 +64,23 @@ export function CitationMarker({ citation }: CitationMarkerProps) {
           }}
           className="ml-0.5 cursor-pointer rounded bg-accent px-1 py-0.5 text-xs font-medium text-accent-foreground hover:bg-accent/80"
         >
-          {`[${citation.number}]`}
+          {primary.fileName}
+          {rest.length > 0 && ` +${rest.length}`}
         </sup>
       </PopoverTrigger>
       <PopoverContent className="max-h-[min(24rem,70vh)] overflow-y-auto">
-        <p className="mb-2 text-sm font-medium">
-          {citation.file_name}
-          {locatorLabel && <span className="text-muted-foreground">{` · ${locatorLabel}`}</span>}
-        </p>
-        <p className="text-sm leading-relaxed">
-          <mark className="rounded bg-yellow-200 px-0.5">{displayText}</mark>
-        </p>
-        {truncatable && !expanded && (
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="mt-2 text-xs font-medium text-accent-foreground underline underline-offset-2 hover:no-underline"
-          >
-            Show full page text
-          </button>
-        )}
+        <ul className="space-y-2">
+          {groups.map((group) => {
+            const locatorLabel = group.pages.length > 0 ? `p. ${group.pages.join(', ')}` : null
+            return (
+              <li key={group.documentId} className="flex items-center gap-1.5 text-sm">
+                <img src={fileIconSrc(group.fileName)} alt="" className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 wrap-anywhere font-medium">{group.fileName}</span>
+                {locatorLabel && <span className="shrink-0 text-muted-foreground">{` · ${locatorLabel}`}</span>}
+              </li>
+            )
+          })}
+        </ul>
       </PopoverContent>
     </Popover>
   )

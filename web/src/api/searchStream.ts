@@ -10,10 +10,10 @@ export type SearchStreamEvent =
   | { type: 'error'; error: string }
 
 // The typed openapi-fetch client (see ./client.ts) expects a single JSON
-// response body, which doesn't fit POST /kbs/{id}/search's actual wire
-// format now that it streams Server-Sent Events — so this call goes
-// through plain fetch instead. The BASE_URL logic mirrors client.ts: Vite
-// proxies /api → the API in dev, same-origin in production.
+// response body, which doesn't fit these endpoints' actual wire format now
+// that they stream Server-Sent Events — so these calls go through plain
+// fetch instead. The BASE_URL logic mirrors client.ts: Vite proxies
+// /api → the API in dev, same-origin in production.
 const BASE_URL = import.meta.env.DEV ? '/api' : ''
 
 // searchStream POSTs a query to the search endpoint and invokes onEvent for
@@ -27,18 +27,55 @@ export async function searchStream(
   onEvent: (event: SearchStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${BASE_URL}/kbs/${kbId}/search`, {
+  return postEventStream(
+    `${BASE_URL}/kbs/${kbId}/search`,
+    { 'Content-Type': 'application/json' },
+    JSON.stringify({ query }),
+    onEvent,
+    signal,
+  )
+}
+
+// reevaluateStream re-runs the query behind an existing assistant message
+// against the current KB state, streaming the same event sequence as
+// searchStream. The resulting answer is persisted server-side as a new
+// message (see B5) rather than replacing messageId's — this call only
+// streams the regenerated answer back; picking up the new message itself
+// requires refetching the Inquiry.
+export async function reevaluateStream(
+  kbId: string,
+  messageId: string,
+  onEvent: (event: SearchStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return postEventStream(
+    `${BASE_URL}/kbs/${kbId}/inquiry/messages/${messageId}/reevaluate`,
+    {},
+    null,
+    onEvent,
+    signal,
+  )
+}
+
+async function postEventStream(
+  url: string,
+  headers: Record<string, string>,
+  body: BodyInit | null,
+  onEvent: (event: SearchStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     credentials: 'include',
-    body: JSON.stringify({ query }),
+    body,
     signal,
   })
   if (!res.ok) {
-    throw new Error(`search failed with status ${res.status}`)
+    throw new Error(`request failed with status ${res.status}`)
   }
   if (!res.body) {
-    throw new Error('search response had no body')
+    throw new Error('response had no body')
   }
 
   const reader = res.body.getReader()
@@ -62,7 +99,7 @@ export async function searchStream(
 // parseFrame reads one "event: <name>\ndata: <json>\n\n" SSE frame (minus
 // its trailing blank line, already stripped by the caller) into a typed
 // SearchStreamEvent. Returns null for a frame with no data line (SSE
-// comments/keepalives), which this endpoint never sends today but which a
+// comments/keepalives), which these endpoints never send today but which a
 // spec-compliant parser shouldn't choke on.
 function parseFrame(frame: string): SearchStreamEvent | null {
   let name: string | null = null

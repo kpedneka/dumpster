@@ -443,6 +443,141 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{id}/inquiry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the researcher's Inquiry (turn history) for a knowledge base
+         * @description Returns an empty Inquiry (null id, no messages) rather than a 404 when no search has been run against this knowledge base yet — that's a normal state, not an error.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The Inquiry for this knowledge base. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Inquiry"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/kbs/{id}/inquiry/messages/{messageId}/reevaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run the query behind a past assistant message against the current knowledge base state
+         * @description Appends a new assistant message rather than overwriting the original — seeing that an answer changed is often as valuable as the new answer itself. messageId must identify an assistant-role message in the caller's Inquiry for this knowledge base; the query re-run is the content of the user message that originally prompted it. Same event stream shape as POST /kbs/{id}/search.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    messageId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description A Server-Sent Events stream identical in shape to POST /kbs/{id}/search's 200 response. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description messageId does not identify a re-evaluatable assistant message (unknown, a user-role message, or the first message in the inquiry). */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found, or no Inquiry exists yet for it. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Search failed before any event was streamed — a normal JSON error, since nothing has been written yet at this point. */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{kbId}/documents": {
         parameters: {
             query?: never;
@@ -871,9 +1006,7 @@ export interface components {
             chunk_id: string;
             char_start: number;
             char_end: number;
-            /** @description The cited chunk's own extracted text, served directly so clients never need to re-fetch and slice the original document. Used as the drill-down evidence behind the primary file+locator citation, not as the primary citation display itself. */
-            text: string;
-            /** @description The source document's filename. This, plus locator when present, is the primary citation identity — mirroring how search engines cite the source page rather than a byte range within it. */
+            /** @description The source document's filename — the entire primary citation identity, plus locator when present. Citations are grouped and displayed by file, not by individual chunk text, mirroring how search engines cite the source page rather than a byte range within it. */
             file_name: string;
             /** @description An optional modality-native locator narrowing the citation within the file — a page number for PDF-derived chunks. Absent for plain-text/markdown chunks. Shaped so a future locator type (e.g. a video timestamp) is an additive change, not a schema rework. */
             locator: {
@@ -904,6 +1037,26 @@ export interface components {
             /** Format: uuid */
             document_id: string;
             file_name: string;
+        };
+        /** @description One turn in an Inquiry: either the researcher's query (role=user, no citations/retrieved_documents) or a generated answer (role=assistant). Answers are never overwritten — a re-evaluation appends a new message with supersedes_message_id set rather than replacing the one it re-answers. */
+        InquiryMessage: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            content: string;
+            citations: components["schemas"]["Citation"][];
+            retrieved_documents: components["schemas"]["RetrievedFile"][];
+            /** Format: uuid */
+            supersedes_message_id: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /** @description The researcher's single persisted thread of turns for one knowledge base. id is nullable: a knowledge base with no searches run against it yet has no Inquiry, which is a normal state, not an error. */
+        Inquiry: {
+            /** Format: uuid */
+            id: string | null;
+            messages: components["schemas"]["InquiryMessage"][];
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];

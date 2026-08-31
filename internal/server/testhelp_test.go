@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
+	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	kbmem "github.com/kunalpednekar/dumpster/internal/kb/memory"
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
@@ -23,12 +24,13 @@ import (
 // testDeps assembles a Deps with all in-memory/mock implementations.
 func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.Store, pub *qmem.Publisher) Deps {
 	return Deps{
-		KBs:      kbRepo,
-		Docs:     docRepo,
-		Objects:  obj,
+		KBs:       kbRepo,
+		Docs:      docRepo,
+		Objects:   obj,
 		Publisher: pub,
 		Searcher:  searchmock.NewSearcher(search.Result{}),
-		Sessions: sessionmock.New(),
+		Inquiries: inquirymem.New(),
+		Sessions:  sessionmock.New(),
 	}
 }
 

@@ -160,7 +160,7 @@ function KBNavItem({ kb, onNavigate }: { kb: KB; onNavigate?: () => void }) {
       }
     >
       <Database className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">{kb.name}</span>
+      <span className="min-w-0 truncate">{kb.name}</span>
     </NavLink>
   )
 }

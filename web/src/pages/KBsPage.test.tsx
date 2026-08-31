@@ -49,4 +49,17 @@ describe('KBsPage', () => {
       expect(api.DELETE).toHaveBeenCalledWith('/kbs/{id}', { params: { path: { id: 'kb-1' } } })
     })
   })
+
+  it('wraps a long, unbroken KB name instead of overflowing horizontally', async () => {
+    const longName = 'agenuinelyextremelylongknowledgebasenamewithnodelimitersatall'
+    vi.mocked(api.GET).mockResolvedValue({
+      data: { items: [{ id: 'kb-1', name: longName }], next_cursor: null },
+      error: undefined,
+    } as never)
+    renderKBsPage()
+
+    const name = await screen.findByText(longName)
+    expect(name.className).toContain('min-w-0')
+    expect(name.className).toContain('truncate')
+  })
 })

@@ -107,19 +107,14 @@ components:
           type: integer
         char_end:
           type: integer
-        text:
-          type: string
-          description: >-
-            The cited chunk's own extracted text, served directly so clients
-            never need to re-fetch and slice the original document. Used as
-            the drill-down evidence behind the primary file+locator citation,
-            not as the primary citation display itself.
         file_name:
           type: string
           description: >-
-            The source document's filename. This, plus locator when present,
-            is the primary citation identity — mirroring how search engines
-            cite the source page rather than a byte range within it.
+            The source document's filename — the entire primary citation
+            identity, plus locator when present. Citations are grouped and
+            displayed by file, not by individual chunk text, mirroring how
+            search engines cite the source page rather than a byte range
+            within it.
         locator:
           type: object
           nullable: true
@@ -135,7 +130,7 @@ components:
             value:
               type: integer
           required: [type, value]
-      required: [number, document_id, chunk_id, char_start, char_end, text, file_name, locator]
+      required: [number, document_id, chunk_id, char_start, char_end, file_name, locator]
 
     SearchRetrievedFilesEvent:
       type: object
@@ -199,6 +194,58 @@ components:
         file_name:
           type: string
       required: [document_id, file_name]
+
+    InquiryMessage:
+      type: object
+      description: >-
+        One turn in an Inquiry: either the researcher's query (role=user,
+        no citations/retrieved_documents) or a generated answer
+        (role=assistant). Answers are never overwritten — a re-evaluation
+        appends a new message with supersedes_message_id set rather than
+        replacing the one it re-answers.
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+        retrieved_documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/RetrievedFile"
+        supersedes_message_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, role, content, citations, retrieved_documents, supersedes_message_id, created_at]
+
+    Inquiry:
+      type: object
+      description: >-
+        The researcher's single persisted thread of turns for one
+        knowledge base. id is nullable: a knowledge base with no searches
+        run against it yet has no Inquiry, which is a normal state, not
+        an error.
+      properties:
+        id:
+          type: string
+          format: uuid
+          nullable: true
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/InquiryMessage"
+      required: [id, messages]
 
     KBPage:
       type: object
@@ -486,6 +533,101 @@ paths:
             Search failed before any event was streamed (e.g. retrieval
             itself failed) — a normal JSON error, since nothing has been
             written yet at this point.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/inquiry:
+    get:
+      summary: Get the researcher's Inquiry (turn history) for a knowledge base
+      description: >-
+        Returns an empty Inquiry (null id, no messages) rather than a 404
+        when no search has been run against this knowledge base yet —
+        that's a normal state, not an error.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The Inquiry for this knowledge base.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Inquiry"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/inquiry/messages/{messageId}/reevaluate:
+    post:
+      summary: >-
+        Re-run the query behind a past assistant message against the
+        current knowledge base state
+      description: >-
+        Appends a new assistant message rather than overwriting the
+        original — seeing that an answer changed is often as valuable as
+        the new answer itself. messageId must identify an assistant-role
+        message in the caller's Inquiry for this knowledge base; the query
+        re-run is the content of the user message that originally prompted
+        it. Same event stream shape as POST /kbs/{id}/search.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: messageId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >-
+            A Server-Sent Events stream identical in shape to POST
+            /kbs/{id}/search's 200 response.
+        "400":
+          description: >-
+            messageId does not identify a re-evaluatable assistant message
+            (unknown, a user-role message, or the first message in the
+            inquiry).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            Knowledge base not found, or no Inquiry exists yet for it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >-
+            Search failed before any event was streamed — a normal JSON
+            error, since nothing has been written yet at this point.
           content:
             application/json:
               schema:

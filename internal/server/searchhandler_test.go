@@ -11,6 +11,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	"github.com/kunalpednekar/dumpster/internal/inquiry"
+	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 )
@@ -63,6 +65,16 @@ func decodeFrame[T any](t *testing.T, f sseFrame) T {
 	var v T
 	if err := json.Unmarshal([]byte(f.data), &v); err != nil {
 		t.Fatalf("decode %q frame data %q: %v", f.name, f.data, err)
+	}
+	return v
+}
+
+// decodeJSON decodes a plain (non-SSE) JSON response body.
+func decodeJSON[T any](t *testing.T, body []byte) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decode body %q: %v", body, err)
 	}
 	return v
 }
@@ -124,14 +136,125 @@ func TestSearch_DoneEventCarriesSummaryAndCitations(t *testing.T) {
 	if c.Number != 1 || c.DocumentID != doc.ID.String() || c.CharStart != 0 || c.CharEnd != 42 {
 		t.Errorf("citation mismatch: %+v", c)
 	}
-	if c.Text != "the source text" {
-		t.Errorf("citation text: got %q, want %q", c.Text, "the source text")
-	}
 	if c.FileName != "notes.txt" {
 		t.Errorf("citation file_name: got %q, want %q", c.FileName, "notes.txt")
 	}
 	if c.Locator != nil {
 		t.Errorf("citation locator: got %+v, want nil for a plain-text chunk", c.Locator)
+	}
+}
+
+// TestSearch_PersistsUserAndAssistantMessages verifies that a successful
+// search records both turns of the exchange as Inquiry messages, with the
+// assistant message snapshotting a FileName onto its citation from the
+// same request-time lookup used for the live response.
+func TestSearch_PersistsUserAndAssistantMessages(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	inquiryRepo := deps.Inquiries.(*inquirymem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: k.ID, UserID: userID, Filename: "notes.txt", ContentType: "text/plain",
+	})
+	chunkID := uuid.New()
+	deps.Searcher = searchmock.NewSearcher(search.Result{
+		Summary:            "the answer",
+		Citations:          []search.Citation{{Number: 1, DocumentID: doc.ID, ChunkID: chunkID, CharStart: 0, CharEnd: 42}},
+		RetrievedDocuments: []uuid.UUID{doc.ID},
+	})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"what is the answer?"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	inq, err := inquiryRepo.Get(context.TODO(), userID, k.ID)
+	if err != nil {
+		t.Fatalf("expected an Inquiry to have been created, got: %v", err)
+	}
+	messages, err := inquiryRepo.ListMessages(context.TODO(), userID, inq.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages: got %d, want 2 (one user, one assistant)", len(messages))
+	}
+	if messages[0].Role != inquiry.RoleUser || messages[0].Content != "what is the answer?" {
+		t.Errorf("first message: got role=%q content=%q", messages[0].Role, messages[0].Content)
+	}
+	if messages[1].Role != inquiry.RoleAssistant || messages[1].Content != "the answer" {
+		t.Errorf("second message: got role=%q content=%q", messages[1].Role, messages[1].Content)
+	}
+	if len(messages[1].Citations) != 1 || messages[1].Citations[0].FileName != "notes.txt" {
+		t.Errorf("assistant message citation FileName: got %+v, want notes.txt", messages[1].Citations)
+	}
+	if len(messages[1].RetrievedDocuments) != 1 || messages[1].RetrievedDocuments[0].DocumentID != doc.ID ||
+		messages[1].RetrievedDocuments[0].FileName != "notes.txt" {
+		t.Errorf("assistant message retrieved documents: got %+v, want one entry {%v, notes.txt}", messages[1].RetrievedDocuments, doc.ID)
+	}
+}
+
+// TestSearch_MultipleSearchesAccumulateAsTurns verifies that a second search
+// against the same KB appends to the existing Inquiry rather than replacing
+// it or starting a new one — the core "one Inquiry per (kb, user)" contract.
+func TestSearch_MultipleSearchesAccumulateAsTurns(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	inquiryRepo := deps.Inquiries.(*inquirymem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "an answer"})
+	router := NewRouter(deps)
+
+	for _, q := range []string{"first question", "second question"} {
+		req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+			strings.NewReader(`{"query":"`+q+`"}`), userID)
+		req.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	inq, err := inquiryRepo.Get(context.TODO(), userID, k.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := inquiryRepo.ListMessages(context.TODO(), userID, inq.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 4 {
+		t.Fatalf("messages: got %d, want 4 (2 searches x user+assistant)", len(messages))
+	}
+	if messages[0].Content != "first question" || messages[2].Content != "second question" {
+		t.Errorf("turn order: got %q then %q, want the two questions in submission order",
+			messages[0].Content, messages[2].Content)
+	}
+}
+
+// TestSearch_NilInquiries_SkipsPersistenceWithoutFailingTheRequest verifies
+// that Inquiry persistence is genuinely optional: a nil Deps.Inquiries must
+// not prevent search from working, matching how Manifest/Instruments are
+// already optional dependencies elsewhere in Deps.
+func TestSearch_NilInquiries_SkipsPersistenceWithoutFailingTheRequest(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	deps.Inquiries = nil
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "an answer"})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"a question"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", w.Code, http.StatusOK)
+	}
+	frames := parseSSE(t, w.Body.String())
+	got := decodeFrame[doneEvent](t, frameNamed(t, frames, "done"))
+	if got.Summary != "an answer" {
+		t.Errorf("summary: got %q, want %q", got.Summary, "an answer")
 	}
 }
 

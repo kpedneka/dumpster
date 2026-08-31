@@ -9,6 +9,7 @@ import (
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	"github.com/kunalpednekar/dumpster/internal/inquiry"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
@@ -27,6 +28,10 @@ type Deps struct {
 	Publisher queue.Publisher
 	Manifest  manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
 	Searcher  search.Searcher
+	// Inquiries is optional; when nil, search results are not persisted as
+	// Inquiry history (search itself still works — persistence is a
+	// convenience layered on top, not a dependency search needs).
+	Inquiries inquiry.Repository
 	Sessions  session.SessionStore
 	// Instruments is optional; when nil, document upload/delete metrics are
 	// not recorded.
@@ -64,7 +69,7 @@ func NewRouter(deps Deps) http.Handler {
 	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
-		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Instruments)
+		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments)
 	}
 
 	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, authed)
