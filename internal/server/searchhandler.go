@@ -154,6 +154,13 @@ func buildInquiryMessages(messages []*inquiry.Message) []inquiryMessageResponse 
 	out := make([]inquiryMessageResponse, len(messages))
 	for i, m := range messages {
 		citations := make([]CitationResponse, len(m.Citations))
+		// citationFileNames backs the fallback below: a message written
+		// before RetrievedDocument carried its own FileName (see its
+		// UnmarshalJSON) has a blank name with no way to recover it from
+		// that field alone, but a citation for the same document in the
+		// same message was already snapshotted correctly at the time —
+		// this recovers the name from there instead of showing blank.
+		citationFileNames := make(map[uuid.UUID]string, len(m.Citations))
 		for j, c := range m.Citations {
 			citations[j] = CitationResponse{
 				Number:     c.Number,
@@ -164,10 +171,17 @@ func buildInquiryMessages(messages []*inquiry.Message) []inquiryMessageResponse 
 				FileName:   c.FileName,
 				Locator:    inquiryCitationLocator(c),
 			}
+			if c.FileName != "" {
+				citationFileNames[c.DocumentID] = c.FileName
+			}
 		}
 		retrieved := make([]RetrievedFileResponse, len(m.RetrievedDocuments))
 		for j, rd := range m.RetrievedDocuments {
-			retrieved[j] = RetrievedFileResponse{DocumentID: rd.DocumentID.String(), FileName: rd.FileName}
+			name := rd.FileName
+			if name == "" {
+				name = citationFileNames[rd.DocumentID]
+			}
+			retrieved[j] = RetrievedFileResponse{DocumentID: rd.DocumentID.String(), FileName: name}
 		}
 		var supersedes *string
 		if m.SupersedesMessageID != nil {

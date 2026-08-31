@@ -8,9 +8,59 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	"github.com/kunalpednekar/dumpster/internal/inquiry"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 )
+
+// TestBuildInquiryMessages_RecoversRetrievedDocumentNameFromCitation is a
+// regression test: found on a real message written between two fixes —
+// Citation.FileName was already being snapshotted, RetrievedDocument's
+// wasn't yet — leaving retrieved_documents blank for a document a citation
+// in the very same message already named correctly. The name is right
+// there; there's no reason to show blank when it's recoverable from the
+// message's own data.
+func TestBuildInquiryMessages_RecoversRetrievedDocumentNameFromCitation(t *testing.T) {
+	docID := uuid.New()
+	messages := []*inquiry.Message{
+		{
+			ID:   uuid.New(),
+			Role: inquiry.RoleAssistant,
+			Citations: []inquiry.Citation{
+				{Number: 1, DocumentID: docID, FileName: "notes.txt"},
+			},
+			RetrievedDocuments: []inquiry.RetrievedDocument{
+				{DocumentID: docID, FileName: ""}, // old-format row, unmarshaled with a blank name
+			},
+		},
+	}
+
+	out := buildInquiryMessages(messages)
+
+	if len(out[0].RetrievedDocuments) != 1 || out[0].RetrievedDocuments[0].FileName != "notes.txt" {
+		t.Errorf("got %+v, want file_name recovered as notes.txt", out[0].RetrievedDocuments)
+	}
+}
+
+// TestBuildInquiryMessages_NoFallbackAvailable confirms the fallback
+// degrades to blank, not a crash or a wrong name, when no citation for the
+// document exists to recover a name from either.
+func TestBuildInquiryMessages_NoFallbackAvailable(t *testing.T) {
+	docID := uuid.New()
+	messages := []*inquiry.Message{
+		{
+			ID:                 uuid.New(),
+			Role:               inquiry.RoleAssistant,
+			RetrievedDocuments: []inquiry.RetrievedDocument{{DocumentID: docID, FileName: ""}},
+		},
+	}
+
+	out := buildInquiryMessages(messages)
+
+	if len(out[0].RetrievedDocuments) != 1 || out[0].RetrievedDocuments[0].FileName != "" {
+		t.Errorf("got %+v, want blank file_name with no citation to recover from", out[0].RetrievedDocuments)
+	}
+}
 
 func TestGetInquiry_EmptyWhenNoSearchHasRunYet(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
