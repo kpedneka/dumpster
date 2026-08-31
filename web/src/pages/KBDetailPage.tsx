@@ -474,16 +474,22 @@ export function KBDetailPage() {
 
       // The stream completed successfully: refetch so the canonical,
       // persisted (and ID-bearing, re-evaluatable) message replaces this
-      // pending turn in the list above. Deliberately its own try/catch, not
-      // folded into the one above — a failed refetch here (e.g. persistence
-      // silently didn't happen server-side) must not be treated the same as
-      // a failed *generation*: the answer the researcher just watched
-      // stream in is still good, so on refetch failure pending is simply
-      // left showing it as-is rather than discarded or replaced with an
-      // error. It reconciles with the server on the next successful fetch
-      // (e.g. a later reload).
+      // pending turn in the list above. staleTime: 0 overrides the app's
+      // default 30s staleTime (main.tsx) for this one call — without it,
+      // fetchQuery treats the mount-time fetch as still fresh and returns
+      // the cached (pre-this-turn) data without hitting the network at
+      // all, so the completed answer would still get discarded below the
+      // moment it "succeeds", just with stale data instead of an error.
+      // Deliberately its own try/catch, not folded into the one above — a
+      // failed refetch here (e.g. persistence silently didn't happen
+      // server-side) must not be treated the same as a failed
+      // *generation*: the answer the researcher just watched stream in is
+      // still good, so on refetch failure pending is simply left showing
+      // it as-is rather than discarded or replaced with an error. It
+      // reconciles with the server on the next successful fetch (e.g. a
+      // later reload).
       try {
-        await queryClient.fetchQuery({ queryKey: ['inquiry', kbId], queryFn: () => fetchInquiry(kbId!) })
+        await queryClient.fetchQuery({ queryKey: ['inquiry', kbId], queryFn: () => fetchInquiry(kbId!), staleTime: 0 })
         setPending(null)
       } catch {
         // Leave pending as-is — see comment above.

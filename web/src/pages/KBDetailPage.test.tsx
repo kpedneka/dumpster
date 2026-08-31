@@ -20,7 +20,15 @@ vi.mock('@/hooks/use-toast', () => ({
 
 function renderKBDetailPage(kbId = 'kb-1') {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // staleTime matches main.tsx's production default deliberately: a
+    // real bug (a re-evaluation vanishing because fetchQuery treated the
+    // mount-time fetch as still fresh and returned stale cached data
+    // instead of hitting the network) was invisible under staleTime: 0
+    // (react-query's own default, and what this suite used before) —
+    // that's a materially different caching behavior than production
+    // actually runs under, so tests here need to match it to catch this
+    // class of bug at all.
+    defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   })
   return render(
     <QueryClientProvider client={queryClient}>
