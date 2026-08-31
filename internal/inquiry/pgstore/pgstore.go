@@ -83,14 +83,14 @@ func (s *Store) AppendMessage(ctx context.Context, userID uuid.UUID, msg *inquir
 	err = s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`INSERT INTO inquiry_messages
-			 (inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, ordinal)
-			 SELECT $1, $2, $3, $4, $5, $6, $7, COALESCE(MAX(ordinal), -1) + 1
+			 (inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, supersedes_message_id, ordinal)
+			 SELECT $1, $2, $3, $4, $5, $6, $7, $8, COALESCE(MAX(ordinal), -1) + 1
 			 FROM inquiry_messages WHERE inquiry_id = $1
-			 RETURNING id, inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, ordinal, created_at`,
-			msg.InquiryID, msg.KBID, userID, msg.Role, msg.Content, citationsJSON, retrievedJSON,
+			 RETURNING id, inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, supersedes_message_id, ordinal, created_at`,
+			msg.InquiryID, msg.KBID, userID, msg.Role, msg.Content, citationsJSON, retrievedJSON, msg.SupersedesMessageID,
 		).Scan(
 			&result.ID, &result.InquiryID, &result.KBID, &result.UserID, &result.Role, &result.Content,
-			&citationsOut, &retrievedOut, &result.Ordinal, &result.CreatedAt,
+			&citationsOut, &retrievedOut, &result.SupersedesMessageID, &result.Ordinal, &result.CreatedAt,
 		)
 	})
 	if err != nil {
@@ -109,7 +109,7 @@ func (s *Store) ListMessages(ctx context.Context, userID, inquiryID uuid.UUID) (
 	var results []*inquiry.Message
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, ordinal, created_at
+			`SELECT id, inquiry_id, kb_id, user_id, role, content, citations, retrieved_documents, supersedes_message_id, ordinal, created_at
 			 FROM inquiry_messages
 			 WHERE inquiry_id = $1 AND user_id = $2
 			 ORDER BY ordinal`,
@@ -124,7 +124,7 @@ func (s *Store) ListMessages(ctx context.Context, userID, inquiryID uuid.UUID) (
 			var citationsRaw, retrievedRaw []byte
 			if err := rows.Scan(
 				&m.ID, &m.InquiryID, &m.KBID, &m.UserID, &m.Role, &m.Content,
-				&citationsRaw, &retrievedRaw, &m.Ordinal, &m.CreatedAt,
+				&citationsRaw, &retrievedRaw, &m.SupersedesMessageID, &m.Ordinal, &m.CreatedAt,
 			); err != nil {
 				return err
 			}

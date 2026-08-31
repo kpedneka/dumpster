@@ -486,6 +486,67 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /kbs/{id}/inquiry/messages/{messageId}/reevaluate:
+    post:
+      summary: >-
+        Re-run the query behind a past assistant message against the
+        current knowledge base state
+      description: >-
+        Appends a new assistant message rather than overwriting the
+        original — seeing that an answer changed is often as valuable as
+        the new answer itself. messageId must identify an assistant-role
+        message in the caller's Inquiry for this knowledge base; the query
+        re-run is the content of the user message that originally prompted
+        it. Same event stream shape as POST /kbs/{id}/search.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: messageId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: >-
+            A Server-Sent Events stream identical in shape to POST
+            /kbs/{id}/search's 200 response.
+        "400":
+          description: >-
+            messageId does not identify a re-evaluatable assistant message
+            (unknown, a user-role message, or the first message in the
+            inquiry).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: >-
+            Knowledge base not found, or no Inquiry exists yet for it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >-
+            Search failed before any event was streamed — a normal JSON
+            error, since nothing has been written yet at this point.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /kbs/{kbId}/documents:
     parameters:
       - in: path

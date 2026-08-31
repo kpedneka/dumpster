@@ -83,6 +83,12 @@ type Message struct {
 	Content            string
 	Citations          []Citation
 	RetrievedDocuments []uuid.UUID
+	// SupersedesMessageID is set on a re-evaluation: a new assistant message
+	// produced by re-running an earlier message's query against the current
+	// KB state. Re-evaluating appends rather than overwrites, since seeing
+	// that an answer changed is often as valuable as the new answer itself.
+	// Nil for every ordinary turn.
+	SupersedesMessageID *uuid.UUID
 	// Ordinal is assigned by Repository.AppendMessage; callers must not set
 	// it when constructing a Message to append.
 	Ordinal   int
@@ -103,7 +109,10 @@ type Repository interface {
 	// AppendMessage adds msg as the next turn in msg.InquiryID, assigning
 	// Ordinal as one past the current highest ordinal for that inquiry.
 	// msg.UserID must be set to userID; ID, Ordinal, and CreatedAt are
-	// assigned by the repository.
+	// assigned by the repository. msg.SupersedesMessageID, if set, is
+	// persisted as given — the repository does not validate that it points
+	// to an assistant-role message in the same inquiry; callers (the API
+	// layer) own that check.
 	AppendMessage(ctx context.Context, userID uuid.UUID, msg *Message) (*Message, error)
 	// ListMessages returns every message in inquiryID, ordered by Ordinal.
 	ListMessages(ctx context.Context, userID, inquiryID uuid.UUID) ([]*Message, error)

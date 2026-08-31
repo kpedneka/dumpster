@@ -27,6 +27,7 @@ type searchHandler struct {
 func registerSearchRoutes(mux *http.ServeMux, kbRepo kb.Repository, docRepo document.Repository, searcher search.Searcher, inquiryRepo inquiry.Repository, instruments *telemetry.Instruments) {
 	h := &searchHandler{kbRepo: kbRepo, docRepo: docRepo, searcher: searcher, inquiryRepo: inquiryRepo, instruments: instruments}
 	mux.HandleFunc("POST /kbs/{id}/search", h.search)
+	mux.HandleFunc("POST /kbs/{id}/inquiry/messages/{messageId}/reevaluate", h.reevaluate)
 }
 
 // search handles POST /kbs/{id}/search. It verifies the knowledge base belongs
@@ -72,6 +73,98 @@ func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 
 	fileNames := h.fileNames(r.Context(), userID, kbID)
 	inq := h.persistUserMessage(r.Context(), userID, kbID, body.Query)
+
+	result, ok := h.streamAndAnswer(w, r, kbID, body.Query, fileNames)
+	if !ok {
+		return
+	}
+	h.persistAssistantMessage(r.Context(), userID, inq, result, fileNames, nil)
+}
+
+// reevaluate handles POST /kbs/{id}/inquiry/messages/{messageId}/reevaluate.
+// It re-runs the query behind an existing assistant message against the
+// current KB state and appends a new assistant message carrying
+// SupersedesMessageID — it never overwrites the original, since seeing that
+// an answer changed is often as valuable as the new answer itself. Beyond
+// resolving which query to re-run, this is the same retrieve→answer→stream
+// pipeline as search; see streamAndAnswer.
+func (h *searchHandler) reevaluate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	kbID, ok := parseUUID(w, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	messageID, ok := parseUUID(w, r.PathValue("messageId"))
+	if !ok {
+		return
+	}
+	if _, err := h.kbRepo.Get(r.Context(), userID, kbID); err != nil {
+		writeKBError(w, err)
+		return
+	}
+	if h.inquiryRepo == nil {
+		writeError(w, http.StatusNotFound, "no inquiry for this knowledge base")
+		return
+	}
+
+	inq, err := h.inquiryRepo.Get(r.Context(), userID, kbID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "no inquiry for this knowledge base")
+		return
+	}
+	messages, err := h.inquiryRepo.ListMessages(r.Context(), userID, inq.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load inquiry")
+		return
+	}
+	query, ok := queryForReEvaluation(messages, messageID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "message is not a re-evaluatable assistant answer")
+		return
+	}
+
+	fileNames := h.fileNames(r.Context(), userID, kbID)
+	result, ok := h.streamAndAnswer(w, r, kbID, query, fileNames)
+	if !ok {
+		return
+	}
+	h.persistAssistantMessage(r.Context(), userID, inq, result, fileNames, &messageID)
+}
+
+// queryForReEvaluation returns the query text to re-run for messageID —
+// the content of the user-role message immediately preceding it — when
+// messageID identifies a re-evaluatable assistant answer within messages.
+// Every assistant message persistAssistantMessage creates is immediately
+// preceded by the user message that prompted it (see persistUserMessage),
+// so an assistant message failing that shape indicates a caller error
+// (wrong message ID, or a user-role message ID), not a data integrity bug.
+func queryForReEvaluation(messages []*inquiry.Message, messageID uuid.UUID) (string, bool) {
+	for i, m := range messages {
+		if m.ID != messageID {
+			continue
+		}
+		if m.Role != inquiry.RoleAssistant || i == 0 {
+			return "", false
+		}
+		prev := messages[i-1]
+		if prev.Role != inquiry.RoleUser {
+			return "", false
+		}
+		return prev.Content, true
+	}
+	return "", false
+}
+
+// streamAndAnswer runs the retrieve→answer pipeline for query against kbID,
+// streaming StreamEvents to the client as they arrive and writing the final
+// "done" event once generation completes. The bool return is false when the
+// request has already been fully handled — either a normal error status (if
+// streaming never started) or an in-stream "error" event (if it had) — and
+// callers must not write anything further in that case.
+func (h *searchHandler) streamAndAnswer(w http.ResponseWriter, r *http.Request, kbID uuid.UUID, query string, fileNames map[uuid.UUID]string) (search.Result, bool) {
 	flusher, _ := w.(http.Flusher)
 	streamStarted := false
 	startStream := func() {
@@ -85,7 +178,7 @@ func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	started := time.Now()
-	result, err := h.searcher.SearchStream(r.Context(), kbID, body.Query, func(e search.StreamEvent) {
+	result, err := h.searcher.SearchStream(r.Context(), kbID, query, func(e search.StreamEvent) {
 		startStream()
 		writeSSE(w, flusher, toWireEvent(e, fileNames))
 	})
@@ -94,19 +187,18 @@ func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if !streamStarted {
 			writeError(w, http.StatusInternalServerError, "search failed")
-			return
+			return search.Result{}, false
 		}
 		writeSSE(w, flusher, sseEvent{name: "error", data: errorEvent{Error: "search failed"}})
-		return
+		return search.Result{}, false
 	}
-
-	h.persistAssistantMessage(r.Context(), userID, inq, result, fileNames)
 
 	startStream() // defensive: SearchStream succeeding with zero events never happens today, but this keeps the response well-formed if it ever did.
 	writeSSE(w, flusher, sseEvent{name: "done", data: doneEvent{
 		Summary:   result.Summary,
 		Citations: buildCitations(result.Citations, fileNames),
 	}})
+	return result, true
 }
 
 // persistUserMessage resolves the researcher's single Inquiry for this KB
@@ -140,8 +232,9 @@ func (h *searchHandler) persistUserMessage(ctx context.Context, userID, kbID uui
 // request-time lookup used for the live response: unlike a live citation,
 // a persisted one may be read back long after its source document was
 // renamed or deleted, so FileName has to be captured now rather than
-// resolved again later.
-func (h *searchHandler) persistAssistantMessage(ctx context.Context, userID uuid.UUID, inq *inquiry.Inquiry, result search.Result, fileNames map[uuid.UUID]string) {
+// resolved again later. supersedes is nil for an ordinary search turn, or
+// the re-evaluated message's ID when called from reevaluate.
+func (h *searchHandler) persistAssistantMessage(ctx context.Context, userID uuid.UUID, inq *inquiry.Inquiry, result search.Result, fileNames map[uuid.UUID]string, supersedes *uuid.UUID) {
 	if inq == nil {
 		return
 	}
@@ -163,12 +256,13 @@ func (h *searchHandler) persistAssistantMessage(ctx context.Context, userID uuid
 		}
 	}
 	_, err := h.inquiryRepo.AppendMessage(ctx, userID, &inquiry.Message{
-		InquiryID:          inq.ID,
-		KBID:               inq.KBID,
-		Role:               inquiry.RoleAssistant,
-		Content:            result.Summary,
-		Citations:          citations,
-		RetrievedDocuments: result.RetrievedDocuments,
+		InquiryID:           inq.ID,
+		KBID:                inq.KBID,
+		Role:                inquiry.RoleAssistant,
+		Content:             result.Summary,
+		Citations:           citations,
+		RetrievedDocuments:  result.RetrievedDocuments,
+		SupersedesMessageID: supersedes,
 	})
 	if err != nil {
 		slog.Error("inquiry: persist assistant message failed", "inquiry_id", inq.ID, "err", err)

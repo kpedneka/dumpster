@@ -443,6 +443,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{id}/inquiry/messages/{messageId}/reevaluate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run the query behind a past assistant message against the current knowledge base state
+         * @description Appends a new assistant message rather than overwriting the original — seeing that an answer changed is often as valuable as the new answer itself. messageId must identify an assistant-role message in the caller's Inquiry for this knowledge base; the query re-run is the content of the user message that originally prompted it. Same event stream shape as POST /kbs/{id}/search.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                    messageId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description A Server-Sent Events stream identical in shape to POST /kbs/{id}/search's 200 response. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description messageId does not identify a re-evaluatable assistant message (unknown, a user-role message, or the first message in the inquiry). */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found, or no Inquiry exists yet for it. */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Search failed before any event was streamed — a normal JSON error, since nothing has been written yet at this point. */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{kbId}/documents": {
         parameters: {
             query?: never;
