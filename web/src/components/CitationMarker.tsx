@@ -1,4 +1,5 @@
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { fileIconSrc } from '@/lib/file-icons'
 import type { components } from '@/api/schema.d.ts'
 
 type Citation = components['schemas']['Citation']
@@ -72,7 +73,8 @@ export function CitationMarker({ citations }: CitationGroupProps) {
           {groups.map((group) => {
             const locatorLabel = group.pages.length > 0 ? `p. ${group.pages.join(', ')}` : null
             return (
-              <li key={group.documentId} className="text-sm">
+              <li key={group.documentId} className="flex items-center gap-1.5 text-sm">
+                <img src={fileIconSrc(group.fileName)} alt="" className="h-3.5 w-3.5 shrink-0" />
                 <span className="font-medium">{group.fileName}</span>
                 {locatorLabel && <span className="text-muted-foreground">{` · ${locatorLabel}`}</span>}
               </li>

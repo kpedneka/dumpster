@@ -29,6 +29,7 @@ import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
 import { StatusRing } from '@/components/StatusRing'
 import { getDraftQuery, setDraftQuery, getSubmittedQuery, setSubmittedQuery } from '@/lib/search-state'
+import { fileIconSrc } from '@/lib/file-icons'
 import { cn } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
 
@@ -587,7 +588,7 @@ export function KBDetailPage() {
                             key={f.document_id}
                             className="flex items-center gap-2 text-sm text-muted-foreground"
                           >
-                            <FileText className="h-3.5 w-3.5 shrink-0" />
+                            <img src={fileIconSrc(f.file_name)} alt="" className="h-3.5 w-3.5 shrink-0" />
                             <span className="truncate">
                               {f.file_name}
                               {pages.length > 0 && (
@@ -656,7 +657,7 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
 
   return (
     <div className="lift flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm hover:border-primary/40">
-      <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <img src={fileIconSrc(doc.filename)} alt="" className="h-4 w-4 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="break-words text-sm font-medium">{doc.filename}</p>
         <p className="text-xs text-muted-foreground">{formatSize(doc.size_bytes)}</p>
