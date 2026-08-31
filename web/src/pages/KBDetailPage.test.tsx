@@ -896,7 +896,7 @@ describe('KBDetailPage', () => {
             assistantMessage({ id: 'msg-3', content: 'Paris remains the capital.', supersedes_message_id: 'msg-2' }),
           ],
         )
-        await user.click(screen.getByRole('button', { name: /re-evaluate against the current knowledge base/i }))
+        await user.click(screen.getByRole('button', { name: /re-evaluate query/i }))
 
         expect(fetch).toHaveBeenCalledWith(
           expect.stringContaining('/kbs/kb-1/inquiry/messages/msg-2/reevaluate'),
@@ -908,7 +908,10 @@ describe('KBDetailPage', () => {
         // reachable, and the current answer is tagged as such.
         expect(screen.queryByText('Paris is the capital.')).not.toBeInTheDocument()
         expect(screen.getByText('Current')).toBeInTheDocument()
-        const historyToggle = screen.getByText(/re-evaluated ·/i)
+        // msg-2 is the original answer, not itself a re-evaluation of
+        // anything — its collapsed label should say "Evaluated", not
+        // "Re-evaluated".
+        const historyToggle = screen.getByText(/^evaluated ·/i)
         await user.click(historyToggle)
         expect(await screen.findByText('Paris is the capital.')).toBeInTheDocument()
       })
@@ -939,7 +942,7 @@ describe('KBDetailPage', () => {
           ],
         )
         const user = userEvent.setup()
-        const reevaluateButtons = screen.getAllByRole('button', { name: /re-evaluate against the current knowledge base/i })
+        const reevaluateButtons = screen.getAllByRole('button', { name: /re-evaluate query/i })
         // The France turn's button is the first one rendered (turns render
         // in original-query order).
         await user.click(reevaluateButtons[0])
@@ -950,7 +953,8 @@ describe('KBDetailPage', () => {
         const franceQuery = screen.getByText('what is the capital of France?')
         const franceGroup = franceQuery.parentElement!
         expect(within(franceGroup).getByText('Paris remains the capital.')).toBeInTheDocument()
-        await user.click(within(franceGroup).getByText(/re-evaluated ·/i))
+        // msg-2 is the original answer, not itself a re-evaluation.
+        await user.click(within(franceGroup).getByText(/^evaluated ·/i))
         expect(await within(franceGroup).findByText('Paris is the capital.')).toBeInTheDocument()
         // ...and the Japan turn is untouched by it.
         const japanQuery = screen.getByText('what is the capital of Japan?')
@@ -981,7 +985,7 @@ describe('KBDetailPage', () => {
         renderKBDetailPage()
         await screen.findByText('an answer')
 
-        await user.click(screen.getByRole('button', { name: /re-evaluate against the current knowledge base/i }))
+        await user.click(screen.getByRole('button', { name: /re-evaluate query/i }))
 
         await waitFor(() => expect(screen.getByText('partial re-eval')).toBeInTheDocument())
         // Still mid-stream: the original answer is untouched and the
@@ -999,24 +1003,35 @@ describe('KBDetailPage', () => {
         ]
         renderKBDetailPage()
 
-        // The newest answer is immediately visible, no expansion needed.
+        // The newest answer is immediately visible, no expansion needed —
+        // and, since it's itself a re-evaluation (msg-4 supersedes msg-3),
+        // its always-visible meta line says so, consistent with history.
+        // (msg-3's collapsed history toggle also reads "Re-evaluated ·",
+        // so there are legitimately two matches — the current one is the
+        // one that isn't a button.)
         await screen.findByText('third answer')
+        const currentMeta = screen.getAllByText(/^re-evaluated ·/i).find((el) => el.closest('button') === null)
+        expect(currentMeta).toBeTruthy()
         // The two older ones are collapsed — not in the document at all
         // until their toggle is clicked.
         expect(screen.queryByText('first answer')).not.toBeInTheDocument()
         expect(screen.queryByText('second answer')).not.toBeInTheDocument()
 
-        const toggles = screen.getAllByText(/re-evaluated ·/i)
-        expect(toggles).toHaveLength(2)
-
         const user = userEvent.setup()
-        // Most-recently-superseded first: "second answer" (msg-3, which
-        // "third answer" superseded) toggles before "first answer" (msg-2).
-        await user.click(toggles[0])
+        // Most-recently-superseded first: msg-3 ("second answer", labeled
+        // "Re-evaluated" — it superseded msg-2) toggles before msg-2
+        // ("first answer", labeled "Evaluated" — the original, not itself
+        // a re-evaluation of anything).
+        const historyToggles = screen.getAllByRole('button', { name: /evaluated ·/i })
+        expect(historyToggles).toHaveLength(2)
+        expect(historyToggles[0]).toHaveAccessibleName(/^re-evaluated ·/i)
+        expect(historyToggles[1]).toHaveAccessibleName(/^evaluated ·/i)
+
+        await user.click(historyToggles[0])
         expect(await screen.findByText('second answer')).toBeInTheDocument()
         expect(screen.queryByText('first answer')).not.toBeInTheDocument()
 
-        await user.click(toggles[1])
+        await user.click(historyToggles[1])
         expect(await screen.findByText('first answer')).toBeInTheDocument()
       })
     })

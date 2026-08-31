@@ -251,16 +251,12 @@ function AnswerBlock({
   retrievedFiles,
   retrievalMs,
   isStreaming,
-  badge,
 }: {
   content: string
   citations: Citation[]
   retrievedFiles: RetrievedFile[]
   retrievalMs: number | null
   isStreaming: boolean
-  // Optional small tag shown next to "Relevant files" — used for "Current"
-  // on the latest answer in a re-evaluated turn (see Turn/groupIntoTurns).
-  badge?: React.ReactNode
 }) {
   const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
 
@@ -277,14 +273,11 @@ function AnswerBlock({
           <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Relevant files
           </span>
-          <span className="flex items-center gap-2">
-            {isStreaming && retrievalMs !== null && (
-              <span className="text-[11px] text-muted-foreground">
-                Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in {retrievalMs}ms
-              </span>
-            )}
-            {badge}
-          </span>
+          {isStreaming && retrievalMs !== null && (
+            <span className="text-[11px] text-muted-foreground">
+              Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in {retrievalMs}ms
+            </span>
+          )}
         </div>
         {isStreaming && retrievalMs === null ? (
           <p className="mt-2 text-xs text-muted-foreground">Finding relevant files…</p>
@@ -351,6 +344,32 @@ function PendingAnswerBlock({ pending }: { pending: PendingTurn }) {
 // relevant-files section is a lot of text to show for every past version
 // of a re-evaluated turn when only the current one is usually what's
 // relevant. The always-visible summary line doubles as the toggle.
+// AnswerMeta labels when an answer was produced and how — "Evaluated" for
+// the original answer to a query, "Re-evaluated" for one that superseded
+// an earlier answer (the icon only makes sense for the latter: nothing
+// was "re"-done for the original). Shared between the current answer's
+// always-visible label and each collapsed HistoryAnswer's toggle, so a
+// timestamp is shown consistently everywhere an answer appears, not just
+// in history.
+function AnswerMeta({ message, trailing }: { message: InquiryMessage; trailing?: React.ReactNode }) {
+  const isReevaluation = !!message.supersedes_message_id
+  return (
+    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+      {isReevaluation && <RotateCw className="h-3 w-3" />}
+      {isReevaluation ? 'Re-evaluated' : 'Evaluated'} · {formatTimestamp(message.created_at)}
+      {trailing}
+    </span>
+  )
+}
+
+function CurrentBadge() {
+  return (
+    <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-foreground">
+      Current
+    </span>
+  )
+}
+
 function HistoryAnswer({ message }: { message: InquiryMessage }) {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -359,11 +378,10 @@ function HistoryAnswer({ message }: { message: InquiryMessage }) {
         type="button"
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
-        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+        className="flex items-center gap-1 self-start hover:text-foreground [&_span]:hover:text-foreground"
       >
-        <ChevronRight className={cn('h-3 w-3 transition-transform', expanded && 'rotate-90')} />
-        <RotateCw className="h-3 w-3" />
-        Re-evaluated · {formatTimestamp(message.created_at)}
+        <ChevronRight className={cn('h-3 w-3 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')} />
+        <AnswerMeta message={message} />
       </button>
       {expanded && (
         <AnswerBlock
@@ -808,30 +826,27 @@ export function KBDetailPage() {
                 <div key={turn.query?.id ?? latest?.id ?? `turn-${ti}`} className="flex flex-col gap-2">
                   {turn.query && <p className="text-sm font-medium">{turn.query.content}</p>}
                   {latest && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="self-start"
+                      onClick={() => reevaluate(latest.id)}
+                      disabled={pending?.status === 'loading'}
+                    >
+                      <RotateCw className="h-3.5 w-3.5" />
+                      Re-evaluate query
+                    </Button>
+                  )}
+                  {latest && <AnswerMeta message={latest} trailing={history.length > 0 ? <CurrentBadge /> : undefined} />}
+                  {latest && (
                     <AnswerBlock
                       content={latest.content}
                       citations={latest.citations}
                       retrievedFiles={latest.retrieved_documents}
                       retrievalMs={null}
                       isStreaming={false}
-                      badge={
-                        history.length > 0 ? (
-                          <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-foreground">
-                            Current
-                          </span>
-                        ) : undefined
-                      }
                     />
-                  )}
-                  {latest && (
-                    <button
-                      type="button"
-                      onClick={() => reevaluate(latest.id)}
-                      disabled={pending?.status === 'loading'}
-                      className="self-start text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-                    >
-                      Re-evaluate against the current knowledge base
-                    </button>
                   )}
                   {reevaluatingThis && (
                     <div className="flex flex-col gap-1.5 border-l-2 border-border pl-3">
@@ -843,10 +858,15 @@ export function KBDetailPage() {
                     </div>
                   )}
                   {history.length > 0 && (
-                    <div className="flex flex-col gap-2 border-l-2 border-border pl-3">
-                      {history.map((m) => (
-                        <HistoryAnswer key={m.id} message={m} />
-                      ))}
+                    <div className="flex flex-col gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Evaluation history
+                      </p>
+                      <div className="flex flex-col gap-2 border-l-2 border-border pl-3">
+                        {history.map((m) => (
+                          <HistoryAnswer key={m.id} message={m} />
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
