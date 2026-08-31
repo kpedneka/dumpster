@@ -34,18 +34,33 @@ function renderKBDetailPage(kbId = 'kb-1') {
   )
 }
 
+// Read by the shared api.GET mock's /kbs/{id}/inquiry handler. Tests that
+// need the Inquiry to contain specific turns (e.g. to observe a message
+// still rendered after the post-search refetch reconciles it) mutate this
+// directly, or via mockSearchStream's thenInquiryMessages side effect,
+// which sets it exactly when the mocked SSE fetch is invoked — guaranteed
+// to happen before the later refetch that reads it, so there's no race.
+let mockInquiryMessages: unknown[] = []
+
 beforeEach(() => {
   vi.clearAllMocks()
-  // search-state.ts persists draft/submitted queries to sessionStorage
-  // (intentionally, for reload continuity) — clear it so one test's typed
-  // or submitted query never leaks into the next test's fresh render.
+  // search-state.ts persists draft queries to sessionStorage (intentionally,
+  // for reload continuity) — clear it so one test's typed query never leaks
+  // into the next test's fresh render.
   sessionStorage.clear()
+  mockInquiryMessages = []
   vi.mocked(api.GET).mockImplementation(((path: string) => {
     if (path === '/kbs/{id}') {
       return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
     }
     if (path === '/kbs/{kbId}/documents') {
       return Promise.resolve({ data: { items: [] }, error: undefined })
+    }
+    if (path === '/kbs/{id}/inquiry') {
+      return Promise.resolve({
+        data: { id: mockInquiryMessages.length ? 'inquiry-1' : null, messages: mockInquiryMessages },
+        error: undefined,
+      })
     }
     throw new Error(`unexpected api.GET call: ${path}`)
   }) as never)
@@ -72,6 +87,9 @@ describe('KBDetailPage', () => {
       }
       if (path === '/kbs/{kbId}/documents') {
         return Promise.resolve({ data: { items: [] }, error: undefined })
+      }
+      if (path === '/kbs/{id}/inquiry') {
+        return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
       }
       throw new Error(`unexpected api.GET call: ${path}`)
     }) as never)
@@ -172,6 +190,9 @@ describe('KBDetailPage', () => {
         if (path === '/kbs/{kbId}/documents') {
           return Promise.resolve({ data: { items }, error: undefined })
         }
+        if (path === '/kbs/{id}/inquiry') {
+          return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+        }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
     }
@@ -255,6 +276,9 @@ describe('KBDetailPage', () => {
         }
         if (path === '/kbs/{kbId}/documents') {
           return Promise.resolve({ data: { items }, error: undefined })
+        }
+        if (path === '/kbs/{id}/inquiry') {
+          return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
@@ -352,17 +376,20 @@ describe('KBDetailPage', () => {
       return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
     }
 
-    function mockSearchStream(frames: string[], init: { status?: number; noBody?: boolean } = {}) {
-      // A fresh Response (and fresh ReadableStream) per call: a stream's
-      // body can only be read once, but this mock may be invoked more than
-      // once per test — e.g. a leftover submitted query restored from
-      // sessionStorage on mount fires its own search before the test's own
-      // user.click() does. mockResolvedValue would hand out the same
-      // already-drained stream to that second call; mockImplementation
-      // rebuilds it every time, like a real server would.
+    // thenInquiryMessages, if given, is written into mockInquiryMessages at
+    // the moment the mocked fetch is invoked — i.e. exactly when a search
+    // or reevaluate actually starts — so the later post-completion refetch
+    // (see runStream's invalidateQueries call) deterministically observes
+    // it, with no dependency on real-time scheduling between the two.
+    function mockSearchStream(
+      frames: string[],
+      init: { status?: number; noBody?: boolean } = {},
+      thenInquiryMessages?: unknown[],
+    ) {
       vi.stubGlobal(
         'fetch',
         vi.fn().mockImplementation(() => {
+          if (thenInquiryMessages) mockInquiryMessages = thenInquiryMessages
           const body = init.noBody
             ? null
             : new ReadableStream<Uint8Array>({
@@ -377,6 +404,36 @@ describe('KBDetailPage', () => {
       )
     }
 
+    function userMessage(content: string, id = 'msg-user') {
+      return {
+        id,
+        role: 'user',
+        content,
+        citations: [],
+        retrieved_documents: [],
+        supersedes_message_id: null,
+        created_at: '2026-01-01T00:00:00Z',
+      }
+    }
+
+    function assistantMessage(overrides: {
+      id?: string
+      content?: string
+      citations?: unknown[]
+      retrieved_documents?: unknown[]
+      supersedes_message_id?: string | null
+    } = {}) {
+      return {
+        id: overrides.id ?? 'msg-assistant',
+        role: 'assistant',
+        content: overrides.content ?? '',
+        citations: overrides.citations ?? [],
+        retrieved_documents: overrides.retrieved_documents ?? [],
+        supersedes_message_id: overrides.supersedes_message_id ?? null,
+        created_at: '2026-01-01T00:00:00Z',
+      }
+    }
+
     afterEach(() => {
       vi.unstubAllGlobals()
     })
@@ -384,35 +441,56 @@ describe('KBDetailPage', () => {
     it('shows a prompt before any search is submitted', async () => {
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
-      expect(screen.getByText(/ask a question/i)).toBeInTheDocument()
+      expect(screen.getByText(/query this knowledge base above/i)).toBeInTheDocument()
+    })
+
+    it('hydrates from persisted Inquiry history on mount, without re-running a search', async () => {
+      mockInquiryMessages = [
+        { id: 'msg-1', role: 'user', content: 'a past question', citations: [], retrieved_documents: [], supersedes_message_id: null, created_at: '2026-01-01T00:00:00Z' },
+        { id: 'msg-2', role: 'assistant', content: 'a past answer', citations: [], retrieved_documents: [], supersedes_message_id: null, created_at: '2026-01-01T00:00:01Z' },
+      ]
+      vi.stubGlobal('fetch', vi.fn())
+
+      renderKBDetailPage()
+
+      await screen.findByText('a past question')
+      expect(screen.getByText('a past answer')).toBeInTheDocument()
+      // No search or reevaluate call — history came entirely from the
+      // GET /kbs/{id}/inquiry fetch (api.GET, not global fetch).
+      expect(fetch).not.toHaveBeenCalled()
     })
 
     it('submits a query and renders the cited summary', async () => {
-      mockSearchStream([
-        sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
-        sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
-        sseFrame('done', {
-          summary: 'Paris is the capital of France [1].',
-          citations: [
-            {
-              number: 1,
-              document_id: 'doc-1',
-              chunk_id: 'chunk-1',
-              char_start: 0,
-              char_end: 10,
-              file_name: 'geo.txt',
-              locator: null,
-            },
-          ],
-        }),
-      ])
+      const citations = [
+        {
+          number: 1,
+          document_id: 'doc-1',
+          chunk_id: 'chunk-1',
+          char_start: 0,
+          char_end: 10,
+          file_name: 'geo.txt',
+          locator: null,
+        },
+      ]
+      mockSearchStream(
+        [
+          sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
+          sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
+          sseFrame('done', { summary: 'Paris is the capital of France [1].', citations }),
+        ],
+        {},
+        [
+          userMessage('What is the capital of France?'),
+          assistantMessage({ content: 'Paris is the capital of France [1].', citations }),
+        ],
+      )
 
       const user = userEvent.setup()
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => {
         expect(screen.getByText(/paris is the capital of france/i)).toBeInTheDocument()
@@ -457,12 +535,13 @@ describe('KBDetailPage', () => {
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'a question')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => {
         expect(screen.getByText('Partial answer only')).toBeInTheDocument()
       })
 
+      mockInquiryMessages = [userMessage('a question'), assistantMessage({ content: 'Partial answer only, complete.' })]
       resolveSecondDelta()
       await waitFor(() => {
         expect(screen.getByText('Partial answer only, complete.')).toBeInTheDocument()
@@ -470,41 +549,49 @@ describe('KBDetailPage', () => {
     })
 
     it('lists relevant files under the answer in RRF-fused rank order, not re-sorted', async () => {
-      mockSearchStream([
-        sseFrame('retrieved_files', {
-          // Deliberately NOT cited-first: history.txt ranked higher by
-          // retrieval but never ends up cited in the answer, while geo.txt
-          // ranks lower but IS cited. If the frontend re-sorted (e.g. cited
-          // files first) instead of rendering retrieved_files as received,
-          // this order would flip and the test below would catch it.
-          retrieved_files: [
-            { document_id: 'doc-2', file_name: 'history.txt' },
-            { document_id: 'doc-1', file_name: 'geo.txt' },
-          ],
-        }),
-        sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
-        sseFrame('done', {
-          summary: 'Paris is the capital of France [1].',
-          citations: [
-            {
-              number: 1,
-              document_id: 'doc-1',
-              chunk_id: 'chunk-1',
-              char_start: 0,
-              char_end: 10,
-              file_name: 'geo.txt',
-              locator: null,
-            },
-          ],
-        }),
-      ])
+      // Deliberately NOT cited-first: history.txt ranked higher by
+      // retrieval but never ends up cited in the answer, while geo.txt
+      // ranks lower but IS cited. If the frontend re-sorted (e.g. cited
+      // files first) instead of rendering retrieved_files as received,
+      // this order would flip and the test below would catch it.
+      const retrievedFiles = [
+        { document_id: 'doc-2', file_name: 'history.txt' },
+        { document_id: 'doc-1', file_name: 'geo.txt' },
+      ]
+      const citations = [
+        {
+          number: 1,
+          document_id: 'doc-1',
+          chunk_id: 'chunk-1',
+          char_start: 0,
+          char_end: 10,
+          file_name: 'geo.txt',
+          locator: null,
+        },
+      ]
+      mockSearchStream(
+        [
+          sseFrame('retrieved_files', { retrieved_files: retrievedFiles }),
+          sseFrame('delta', { text: 'Paris is the capital of France [1].' }),
+          sseFrame('done', { summary: 'Paris is the capital of France [1].', citations }),
+        ],
+        {},
+        [
+          userMessage('What is the capital of France?'),
+          assistantMessage({
+            content: 'Paris is the capital of France [1].',
+            citations,
+            retrieved_documents: retrievedFiles,
+          }),
+        ],
+      )
 
       const user = userEvent.setup()
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'What is the capital of France?')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       // "geo.txt" now also renders as the inline citation marker (not
       // "[1]"), so wait on the relevant-files list itself rather than an
@@ -516,47 +603,55 @@ describe('KBDetailPage', () => {
     })
 
     it('shows the cited page numbers next to a relevant file, aggregated from its citations', async () => {
-      mockSearchStream([
-        sseFrame('retrieved_files', {
-          retrieved_files: [
-            { document_id: 'doc-1', file_name: 'report.pdf' },
-            { document_id: 'doc-2', file_name: 'uncited.txt' },
-          ],
-        }),
-        sseFrame('delta', { text: 'The findings span several pages [1][2].' }),
-        sseFrame('done', {
-          summary: 'The findings span several pages [1][2].',
-          citations: [
-            {
-              number: 1,
-              document_id: 'doc-1',
-              chunk_id: 'chunk-1',
-              char_start: 0,
-              char_end: 10,
-              file_name: 'report.pdf',
-              locator: { type: 'page', value: 12 },
-            },
-            // Same file, a different (and out-of-order, to check sorting)
-            // page — and a duplicate of citation 1's page, to check dedup.
-            {
-              number: 2,
-              document_id: 'doc-1',
-              chunk_id: 'chunk-2',
-              char_start: 0,
-              char_end: 10,
-              file_name: 'report.pdf',
-              locator: { type: 'page', value: 3 },
-            },
-          ],
-        }),
-      ])
+      const retrievedFiles = [
+        { document_id: 'doc-1', file_name: 'report.pdf' },
+        { document_id: 'doc-2', file_name: 'uncited.txt' },
+      ]
+      const citations = [
+        {
+          number: 1,
+          document_id: 'doc-1',
+          chunk_id: 'chunk-1',
+          char_start: 0,
+          char_end: 10,
+          file_name: 'report.pdf',
+          locator: { type: 'page', value: 12 },
+        },
+        // Same file, a different (and out-of-order, to check sorting)
+        // page — and a duplicate of citation 1's page, to check dedup.
+        {
+          number: 2,
+          document_id: 'doc-1',
+          chunk_id: 'chunk-2',
+          char_start: 0,
+          char_end: 10,
+          file_name: 'report.pdf',
+          locator: { type: 'page', value: 3 },
+        },
+      ]
+      mockSearchStream(
+        [
+          sseFrame('retrieved_files', { retrieved_files: retrievedFiles }),
+          sseFrame('delta', { text: 'The findings span several pages [1][2].' }),
+          sseFrame('done', { summary: 'The findings span several pages [1][2].', citations }),
+        ],
+        {},
+        [
+          userMessage('what does the report say?'),
+          assistantMessage({
+            content: 'The findings span several pages [1][2].',
+            citations,
+            retrieved_documents: retrievedFiles,
+          }),
+        ],
+      )
 
       const user = userEvent.setup()
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'what does the report say?')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => expect(screen.getByText('uncited.txt')).toBeInTheDocument())
       // Sorted ascending and deduped, not insertion order (12 then 3 in the
@@ -567,27 +662,57 @@ describe('KBDetailPage', () => {
     })
 
     it('shows the not-found summary and an empty relevant-files state when retrieval found nothing', async () => {
-      mockSearchStream([
-        sseFrame('retrieved_files', { retrieved_files: [] }),
-        sseFrame('delta', { text: 'I could not find relevant information to answer this question.' }),
-        sseFrame('done', {
-          summary: 'I could not find relevant information to answer this question.',
-          citations: [],
-        }),
-      ])
+      mockSearchStream(
+        [
+          sseFrame('retrieved_files', { retrieved_files: [] }),
+          sseFrame('delta', { text: 'I could not find relevant information to answer this question.' }),
+          sseFrame('done', { summary: 'I could not find relevant information to answer this question.', citations: [] }),
+        ],
+        {},
+        [
+          userMessage('unanswerable question'),
+          assistantMessage({ content: 'I could not find relevant information to answer this question.' }),
+        ],
+      )
 
       const user = userEvent.setup()
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'unanswerable question')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => {
         expect(screen.getByText(/could not find relevant information/i)).toBeInTheDocument()
       })
       expect(screen.getByText(/no relevant files found/i)).toBeInTheDocument()
-      expect(screen.getByText(/found 0 files in \d+ms/i)).toBeInTheDocument()
+    })
+
+    it('shows retrieval timing while a search is streaming, before it completes', async () => {
+      let releaseDone: () => void = () => {}
+      const gate = new Promise<void>((resolve) => {
+        releaseDone = resolve
+      })
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const encoder = new TextEncoder()
+          controller.enqueue(encoder.encode(sseFrame('retrieved_files', { retrieved_files: [] })))
+          await gate
+          controller.enqueue(encoder.encode(sseFrame('done', { summary: 'the answer', citations: [] })))
+          controller.close()
+        },
+      })
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })))
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'a question')
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
+
+      await waitFor(() => expect(screen.getByText(/found 0 files in \d+ms/i)).toBeInTheDocument())
+      releaseDone()
     })
 
     it('shows placeholder text before the retrieved_files and done events arrive', async () => {
@@ -612,11 +737,12 @@ describe('KBDetailPage', () => {
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'a question')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => expect(screen.getByText(/awaiting llm summarization/i)).toBeInTheDocument())
       expect(screen.getByText(/finding relevant files/i)).toBeInTheDocument()
 
+      mockInquiryMessages = [userMessage('a question'), assistantMessage({ content: 'the answer' })]
       releaseStream()
       await waitFor(() => expect(screen.getByText('the answer')).toBeInTheDocument())
     })
@@ -629,7 +755,7 @@ describe('KBDetailPage', () => {
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'broken query')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => {
         expect(screen.getByText(/search failed/i)).toBeInTheDocument()
@@ -648,34 +774,118 @@ describe('KBDetailPage', () => {
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'a question')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
       await waitFor(() => {
         expect(screen.getByText(/generation failed/i)).toBeInTheDocument()
       })
     })
 
-    it('re-runs the search when Search is clicked again with an unchanged query', async () => {
-      mockSearchStream([
-        sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
-        sseFrame('done', { summary: 'first answer', citations: [] }),
-      ])
+    it('clears the input after submitting, and re-submitting the same text again starts a new turn', async () => {
+      mockSearchStream(
+        [
+          sseFrame('retrieved_files', { retrieved_files: [{ document_id: 'doc-1', file_name: 'geo.txt' }] }),
+          sseFrame('done', { summary: 'first answer', citations: [] }),
+        ],
+        {},
+        [userMessage('same question', 'msg-1'), assistantMessage({ id: 'msg-2', content: 'first answer' })],
+      )
 
       const user = userEvent.setup()
       renderKBDetailPage()
       await screen.findByRole('heading', { name: 'Test KB' })
 
       await user.type(screen.getByRole('textbox'), 'same question')
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
       await waitFor(() => expect(screen.getByText('first answer')).toBeInTheDocument())
 
       expect(fetch).toHaveBeenCalledTimes(1)
+      expect(screen.getByRole('textbox')).toHaveValue('')
 
-      // Same query text, clicked again — must actually re-run, not silently
-      // no-op just because the submitted string didn't change.
-      await user.click(screen.getByRole('button', { name: /^search$/i }))
+      // Retyping and resubmitting the identical text must genuinely re-run,
+      // not silently no-op just because the string is unchanged — there's
+      // no cached-on-query-text mechanism standing in the way of that.
+      mockSearchStream(
+        [sseFrame('retrieved_files', { retrieved_files: [] }), sseFrame('done', { summary: 'second answer', citations: [] })],
+        {},
+        [
+          userMessage('same question', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'first answer' }),
+          userMessage('same question', 'msg-3'),
+          assistantMessage({ id: 'msg-4', content: 'second answer' }),
+        ],
+      )
+      await user.type(screen.getByRole('textbox'), 'same question')
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
 
-      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(screen.getByText('second answer')).toBeInTheDocument())
+      expect(fetch).toHaveBeenCalledTimes(1) // mockSearchStream's second call replaced the stub; count resets
+    })
+
+    describe('re-evaluate', () => {
+      it('re-runs the original query and appends the result, marked as re-evaluated, without touching the original', async () => {
+        mockInquiryMessages = [
+          userMessage('what is the capital of France?', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'Paris is the capital.' }),
+        ]
+        vi.stubGlobal('fetch', vi.fn())
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+        await screen.findByText('Paris is the capital.')
+
+        mockSearchStream(
+          [sseFrame('done', { summary: 'Paris remains the capital.', citations: [] })],
+          {},
+          [
+            userMessage('what is the capital of France?', 'msg-1'),
+            assistantMessage({ id: 'msg-2', content: 'Paris is the capital.' }),
+            assistantMessage({ id: 'msg-3', content: 'Paris remains the capital.', supersedes_message_id: 'msg-2' }),
+          ],
+        )
+        await user.click(screen.getByRole('button', { name: /re-evaluate against the current knowledge base/i }))
+
+        expect(fetch).toHaveBeenCalledWith(
+          expect.stringContaining('/kbs/kb-1/inquiry/messages/msg-2/reevaluate'),
+          expect.objectContaining({ method: 'POST' }),
+        )
+        await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
+        // The original answer is still there, not overwritten.
+        expect(screen.getByText('Paris is the capital.')).toBeInTheDocument()
+        expect(screen.getByText(/re-evaluated answer/i)).toBeInTheDocument()
+      })
+
+      it('shows the re-evaluation streaming in directly under the message being re-answered', async () => {
+        mockInquiryMessages = [
+          userMessage('a question', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'an answer' }),
+        ]
+        let releaseDone: () => void = () => {}
+        const gate = new Promise<void>((resolve) => {
+          releaseDone = resolve
+        })
+        const body = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(new TextEncoder().encode(sseFrame('delta', { text: 'partial re-eval' })))
+            await gate
+            controller.enqueue(new TextEncoder().encode(sseFrame('done', { summary: 'partial re-eval, complete', citations: [] })))
+            controller.close()
+          },
+        })
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })))
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+        await screen.findByText('an answer')
+
+        await user.click(screen.getByRole('button', { name: /re-evaluate against the current knowledge base/i }))
+
+        await waitFor(() => expect(screen.getByText('partial re-eval')).toBeInTheDocument())
+        // Still mid-stream: the original answer is untouched and the
+        // in-progress re-evaluation renders right after it, not replacing it.
+        expect(screen.getByText('an answer')).toBeInTheDocument()
+        releaseDone()
+      })
     })
   })
 
@@ -691,6 +901,9 @@ describe('KBDetailPage', () => {
         }
         if (path === '/kbs/{kbId}/documents') {
           return Promise.resolve({ data: { items: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/inquiry') {
+          return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)

@@ -14,7 +14,7 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { api } from '@/api/client'
 import { uploadDocument } from '@/api/upload'
-import { searchStream } from '@/api/searchStream'
+import { searchStream, reevaluateStream, type SearchStreamEvent } from '@/api/searchStream'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -28,7 +28,7 @@ import { toast } from '@/hooks/use-toast'
 import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
 import { StatusRing } from '@/components/StatusRing'
-import { getDraftQuery, setDraftQuery, getSubmittedQuery, setSubmittedQuery } from '@/lib/search-state'
+import { getDraftQuery, setDraftQuery } from '@/lib/search-state'
 import { fileIconSrc } from '@/lib/file-icons'
 import { cn } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
@@ -37,6 +37,27 @@ type Document = components['schemas']['Document']
 type DocStatus = Document['status']
 type Citation = components['schemas']['Citation']
 type RetrievedFile = components['schemas']['RetrievedFile']
+type InquiryMessage = components['schemas']['InquiryMessage']
+
+// PendingTurnKind identifies a pending turn without the streaming-state
+// fields — passed into runStream and spread into PendingTurn once
+// streaming starts. Kept as its own type because Omit doesn't distribute
+// over a union the way spreading this in does: Omit<PendingTurn, ...>
+// collapses the discriminated union into an invalid merged shape.
+type PendingTurnKind = { kind: 'search' } | { kind: 'reevaluate'; anchorMessageId: string }
+
+// PendingTurn is the turn currently streaming in, not yet reconciled with
+// the persisted Inquiry. 'search' turns render after every historical
+// message; 'reevaluate' turns render inline under anchorMessageId, the
+// assistant message being re-answered.
+type PendingTurn = PendingTurnKind & {
+  status: 'loading' | 'error'
+  summary: string
+  citations: Citation[]
+  retrievedFiles: RetrievedFile[]
+  retrievalMs: number | null
+  error: unknown
+}
 
 const TERMINAL: DocStatus[] = ['indexed', 'failed']
 
@@ -139,11 +160,103 @@ function makeMarkdownComponents(citations: Citation[]): Components {
   }
 }
 
+// AnswerBlock renders one answer's report-style card — used for both a
+// historical (already-persisted) Inquiry message and the turn currently
+// streaming in. isStreaming gates the "still in progress" placeholders
+// (an empty body, retrieval not back yet); a historical message is never
+// in either state, so it always renders its final content directly.
+function AnswerBlock({
+  content,
+  citations,
+  retrievedFiles,
+  retrievalMs,
+  isStreaming,
+}: {
+  content: string
+  citations: Citation[]
+  retrievedFiles: RetrievedFile[]
+  retrievalMs: number | null
+  isStreaming: boolean
+}) {
+  const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
+
+  return (
+    <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
+      {content === '' && isStreaming ? (
+        <p className="text-muted-foreground">Awaiting LLM summarization…</p>
+      ) : (
+        <ReactMarkdown components={mdComponents}>{preprocessCitations(content)}</ReactMarkdown>
+      )}
+
+      <div className="mt-4 border-t border-border pt-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Relevant files
+          </span>
+          {isStreaming && retrievalMs !== null && (
+            <span className="text-[11px] text-muted-foreground">
+              Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in {retrievalMs}ms
+            </span>
+          )}
+        </div>
+        {isStreaming && retrievalMs === null ? (
+          <p className="mt-2 text-xs text-muted-foreground">Finding relevant files…</p>
+        ) : retrievedFiles.length === 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">No relevant files found.</p>
+        ) : (
+          <>
+            <p className="mt-1 text-[11px] text-muted-foreground">Ranked most to least relevant</p>
+            <ul className="mt-2 flex flex-col gap-1.5">
+              {retrievedFiles.map((f) => {
+                const pages = citedPagesFor(f.document_id, citations)
+                return (
+                  <li key={f.document_id} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <img src={fileIconSrc(f.file_name)} alt="" className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 truncate">
+                      {f.file_name}
+                      {pages.length > 0 && (
+                        <span className="text-muted-foreground/70">{` · p. ${pages.join(', ')}`}</span>
+                      )}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function describeError(error: unknown, fallback = 'Something went wrong. Try again.'): string {
   if (error && typeof error === 'object' && typeof (error as { error?: unknown }).error === 'string') {
     return (error as { error: string }).error
   }
   return fallback
+}
+
+// PendingAnswerBlock renders the turn currently streaming in — an
+// AnswerBlock while it's in progress, or the error state if the stream
+// failed. Once it completes, the caller refetches the Inquiry and this
+// disappears in favor of the now-persisted message (see runStream).
+function PendingAnswerBlock({ pending }: { pending: PendingTurn }) {
+  if (pending.status === 'error') {
+    return (
+      <p className="py-4 text-center text-sm text-destructive">
+        {describeError(pending.error, 'Search failed. Try again.')}
+      </p>
+    )
+  }
+  return (
+    <AnswerBlock
+      content={pending.summary}
+      citations={pending.citations}
+      retrievedFiles={pending.retrievedFiles}
+      retrievalMs={pending.retrievalMs}
+      isStreaming
+    />
+  )
 }
 
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB']
@@ -165,14 +278,6 @@ export function KBDetailPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [duplicateQueue, setDuplicateQueue] = useState<File[]>([])
   const [query, setQuery] = useState(() => getDraftQuery(kbId!))
-  const [submittedQuery, setSubmittedQueryState] = useState(() => getSubmittedQuery(kbId!))
-  // Forces the search effect below to re-run even when submittedQuery is
-  // textually unchanged: React's setState bails out of re-rendering when a
-  // string setter receives the same value, so re-clicking Search with an
-  // identical query would otherwise silently no-op — stale even after the
-  // KB's underlying data has changed (e.g. a newly uploaded document).
-  // Search should always be re-runnable on demand, not cached on the query text.
-  const [searchNonce, setSearchNonce] = useState(0)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
   const { data: kb, error: kbError } = useQuery({
@@ -215,84 +320,83 @@ export function KBDetailPage() {
 
   const docs: Document[] = useMemo(() => docPage?.items ?? [], [docPage])
 
-  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
-  const [summary, setSummary] = useState('')
-  const [citations, setCitations] = useState<Citation[]>([])
-  const [retrievedFiles, setRetrievedFiles] = useState<RetrievedFile[]>([])
-  // How long retrieval took, in ms, measured client-side from the moment the
-  // search request went out to the retrieved_files event arriving — not a
-  // server-reported figure. null means "not back yet"; that's also what
-  // gates the "Finding relevant files…" vs. "Found N file(s) in Xms" text.
-  const [retrievalMs, setRetrievalMs] = useState<number | null>(null)
-  const [searchError, setSearchError] = useState<unknown>(null)
+  // The persisted turn history for this KB's Inquiry — the source of truth
+  // for everything already asked and answered. A fresh KB with no searches
+  // yet has messages: [], not an error (see GET /kbs/{id}/inquiry).
+  const { data: inquiryData } = useQuery({
+    queryKey: ['inquiry', kbId],
+    queryFn: async () => {
+      const { data, error } = await api.GET('/kbs/{id}/inquiry', { params: { path: { id: kbId! } } })
+      if (error) throw error
+      return data
+    },
+    enabled: !!kbId,
+  })
+  const messages: InquiryMessage[] = inquiryData?.messages ?? []
+
+  // The turn currently streaming in — a fresh search (kind: 'search',
+  // appended after every historical turn) or a re-evaluation (kind:
+  // 'reevaluate', rendered inline under the message it's re-answering via
+  // anchorMessageId). Cleared once the Inquiry refetch above picks up the
+  // now-persisted message, so the canonical, ID-bearing copy from the
+  // server takes over rendering — see runStream.
+  const [pending, setPending] = useState<PendingTurn | null>(null)
 
   // Streaming (not react-query) because the response arrives incrementally
   // as Server-Sent Events, not as one resolved value — see api/searchStream.
-  // Re-runs whenever the submitted query changes; an in-flight stream for a
-  // now-stale query is aborted so its late events can't clobber a newer one.
-  useEffect(() => {
-    // Nothing to search: every render path below is already gated on
-    // `submittedQuery &&`, so searchStatus's stale value is simply never
-    // read in that case — no need to reset it here.
-    if (!kbId || !submittedQuery) {
-      return
-    }
+  const runStream = useCallback(
+    async (base: PendingTurnKind, stream: (onEvent: (e: SearchStreamEvent) => void, signal: AbortSignal) => Promise<void>) => {
+      const controller = new AbortController()
+      setPending({ ...base, status: 'loading', summary: '', citations: [], retrievedFiles: [], retrievalMs: null, error: null })
+      const startedAt = performance.now()
+      // An "error" SSE event doesn't reject the stream() promise below — the
+      // HTTP request itself succeeded, it's the generation that failed
+      // server-side after streaming had already started (see the search
+      // handler's doc comment on this distinction). Track it separately so
+      // a successful stream() resolution isn't mistaken for a successful
+      // turn and refetched over the error state just set.
+      let streamErrored = false
 
-    const controller = new AbortController()
-    /* eslint-disable react-hooks/set-state-in-effect -- resetting local
-       render state before kicking off the async fetch is the standard
-       "synchronize with an external system" effect pattern documented at
-       react.dev/learn/synchronizing-with-effects#fetching-data; this rule
-       doesn't special-case it. */
-    setSearchStatus('loading')
-    setSummary('')
-    setCitations([])
-    setRetrievedFiles([])
-    setRetrievalMs(null)
-    setSearchError(null)
-    /* eslint-enable react-hooks/set-state-in-effect */
-    const startedAt = performance.now()
+      try {
+        await stream((event) => {
+          switch (event.type) {
+            case 'retrieved_files':
+              setPending((p) => (p ? { ...p, retrievedFiles: event.retrieved_files, retrievalMs: Math.round(performance.now() - startedAt) } : p))
+              break
+            case 'delta':
+              // Live-typing preview. The done event below replaces this
+              // wholesale with the authoritative parsed summary — see
+              // footerFilter's doc comment on why the two can rarely
+              // diverge for the tail of a response, and why that's fine.
+              setPending((p) => (p ? { ...p, summary: p.summary + event.text } : p))
+              break
+            case 'done':
+              setPending((p) => (p ? { ...p, summary: event.summary, citations: event.citations } : p))
+              break
+            case 'error':
+              // Shaped like the API's usual {error: string} body so the
+              // shared describeError helper below renders it the same way.
+              streamErrored = true
+              setPending((p) => (p ? { ...p, status: 'error', error: { error: event.error } } : p))
+              break
+          }
+        }, controller.signal)
+        if (controller.signal.aborted) return
+        if (streamErrored) return
+        // The stream completed successfully: refetch so the canonical,
+        // persisted (and ID-bearing, re-evaluatable) message replaces this
+        // pending turn in the list above.
+        await queryClient.invalidateQueries({ queryKey: ['inquiry', kbId] })
+        setPending(null)
+      } catch (err) {
+        if (controller.signal.aborted) return
+        setPending((p) => (p ? { ...p, status: 'error', error: err } : p))
+      }
 
-    searchStream(
-      kbId,
-      submittedQuery,
-      (event) => {
-        switch (event.type) {
-          case 'retrieved_files':
-            setRetrievedFiles(event.retrieved_files)
-            setRetrievalMs(Math.round(performance.now() - startedAt))
-            break
-          case 'delta':
-            // Live-typing preview. The done event below replaces this
-            // wholesale with the authoritative parsed summary — see
-            // footerFilter's doc comment on why the two can rarely diverge
-            // for the tail of a response, and why that's fine.
-            setSummary((prev) => prev + event.text)
-            break
-          case 'done':
-            setSummary(event.summary)
-            setCitations(event.citations)
-            setSearchStatus('success')
-            break
-          case 'error':
-            // Shaped like the API's usual {error: string} body so the
-            // shared describeError helper below renders it the same way.
-            setSearchError({ error: event.error })
-            setSearchStatus('error')
-            break
-        }
-      },
-      controller.signal,
-    ).catch((err) => {
-      if (controller.signal.aborted) return
-      setSearchError(err)
-      setSearchStatus('error')
-    })
-
-    return () => controller.abort()
-  }, [kbId, submittedQuery, searchNonce])
-
-  const mdComponents = useMemo(() => makeMarkdownComponents(citations), [citations])
+      return controller
+    },
+    [kbId, queryClient],
+  )
 
   const deleteKBMutation = useDeleteKB({ onSuccess: () => navigate('/kbs') })
 
@@ -363,18 +467,22 @@ export function KBDetailPage() {
 
   function submit() {
     const trimmed = query.trim()
-    if (trimmed) {
-      setSubmittedQueryState(trimmed)
-      setSubmittedQuery(kbId!, trimmed)
-      // Always bump the nonce, even when trimmed === submittedQuery already —
-      // that's precisely the "re-run an unchanged query" case this exists for.
-      setSearchNonce((n) => n + 1)
-    }
+    if (!trimmed || pending?.status === 'loading') return
+    setQuery('')
+    setDraftQuery(kbId!, '')
+    void runStream({ kind: 'search' }, (onEvent, signal) => searchStream(kbId!, trimmed, onEvent, signal))
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     submit()
+  }
+
+  function reevaluate(messageId: string) {
+    if (pending?.status === 'loading') return
+    void runStream({ kind: 'reevaluate', anchorMessageId: messageId }, (onEvent, signal) =>
+      reevaluateStream(kbId!, messageId, onEvent, signal),
+    )
   }
 
   const uploadPanel = (
@@ -510,7 +618,7 @@ export function KBDetailPage() {
         </aside>
 
         <section>
-          <form onSubmit={handleSubmit} className="mb-8 flex items-start gap-2">
+          <form onSubmit={handleSubmit} className="flex items-start gap-2">
             <div className="relative flex-1">
               <SearchIcon className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
               <textarea
@@ -527,7 +635,7 @@ export function KBDetailPage() {
                     submit()
                   }
                 }}
-                placeholder="Ask a question about this knowledge base…"
+                placeholder="Query this knowledge base…"
                 className={cn(
                   'flex w-full resize-none overflow-hidden rounded-md border border-input bg-background px-3 py-2 pl-9',
                   'text-sm leading-6 shadow-sm outline-none transition-colors placeholder:text-muted-foreground',
@@ -535,79 +643,59 @@ export function KBDetailPage() {
                 )}
               />
             </div>
-            <Button type="submit" disabled={!query.trim() || searchStatus === 'loading'} className="lift">
+            <Button type="submit" disabled={!query.trim() || pending?.status === 'loading'} className="lift">
               <SearchIcon className="h-4 w-4" />
-              Search
+              Query
             </Button>
           </form>
+          <p className="mb-8 mt-1.5 text-[11px] text-muted-foreground">
+            Each query is answered independently — it won't reference earlier queries in this inquiry.
+          </p>
 
-          {!submittedQuery && (
+          {messages.length === 0 && !pending && (
             <p className="py-16 text-center text-sm text-muted-foreground">
-              Ask a question above to search this knowledge base.
+              Query this knowledge base above to begin your inquiry.
             </p>
           )}
 
-          {submittedQuery && searchStatus === 'error' && (
-            <p className="py-16 text-center text-sm text-destructive">
-              {describeError(searchError, 'Search failed. Try again.')}
-            </p>
-          )}
-
-          {submittedQuery && searchStatus !== 'error' && searchStatus !== 'idle' && (
-            <div className="rise rounded-lg border border-border bg-card p-5 text-sm leading-relaxed shadow-sm">
-              {summary === '' ? (
-                <p className="text-muted-foreground">Awaiting LLM summarization…</p>
+          <div className="flex flex-col gap-4">
+            {messages.map((m) =>
+              m.role === 'user' ? (
+                <p key={m.id} className="text-sm font-medium">
+                  {m.content}
+                </p>
               ) : (
-                <ReactMarkdown components={mdComponents}>{preprocessCitations(summary)}</ReactMarkdown>
-              )}
-
-              <div className="mt-4 border-t border-border pt-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Relevant files
-                  </span>
-                  {retrievalMs !== null && (
-                    <span className="text-[11px] text-muted-foreground">
-                      Found {retrievedFiles.length} file{retrievedFiles.length === 1 ? '' : 's'} in{' '}
-                      {retrievalMs}ms
+                <div key={m.id} className="flex flex-col gap-2">
+                  {m.supersedes_message_id && (
+                    <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                      <RotateCw className="h-3 w-3" />
+                      Re-evaluated answer
                     </span>
                   )}
+                  <AnswerBlock
+                    content={m.content}
+                    citations={m.citations}
+                    retrievedFiles={m.retrieved_documents}
+                    retrievalMs={null}
+                    isStreaming={false}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => reevaluate(m.id)}
+                    disabled={pending?.status === 'loading'}
+                    className="self-start text-[11px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    Re-evaluate against the current knowledge base
+                  </button>
+                  {pending?.kind === 'reevaluate' && pending.anchorMessageId === m.id && (
+                    <PendingAnswerBlock pending={pending} />
+                  )}
                 </div>
-                {retrievalMs === null ? (
-                  <p className="mt-2 text-xs text-muted-foreground">Finding relevant files…</p>
-                ) : retrievedFiles.length === 0 ? (
-                  <p className="mt-2 text-xs text-muted-foreground">No relevant files found.</p>
-                ) : (
-                  <>
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      Ranked most to least relevant
-                    </p>
-                    <ul className="mt-2 flex flex-col gap-1.5">
-                      {retrievedFiles.map((f) => {
-                        const pages = citedPagesFor(f.document_id, citations)
-                        return (
-                          <li
-                            key={f.document_id}
-                            className="flex items-center gap-2 text-sm text-muted-foreground"
-                          >
-                            <img src={fileIconSrc(f.file_name)} alt="" className="h-3.5 w-3.5 shrink-0" />
-                            <span className="min-w-0 truncate">
-                              {f.file_name}
-                              {pages.length > 0 && (
-                                <span className="text-muted-foreground/70">
-                                  {` · p. ${pages.join(', ')}`}
-                                </span>
-                              )}
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
+              ),
+            )}
+
+            {pending?.kind === 'search' && <PendingAnswerBlock pending={pending} />}
+          </div>
         </section>
       </div>
     </div>

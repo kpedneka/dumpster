@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { searchStream, type SearchStreamEvent } from './searchStream'
+import { searchStream, reevaluateStream, type SearchStreamEvent } from './searchStream'
 
 function sseResponse(frames: string[], init: { ok?: boolean; status?: number } = {}): Response {
   const body = new ReadableStream<Uint8Array>({
@@ -93,5 +93,49 @@ describe('searchStream', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
 
     await expect(searchStream('kb-1', 'question', () => {})).rejects.toThrow(/no body/)
+  })
+})
+
+describe('reevaluateStream', () => {
+  it('invokes onEvent for each frame in order', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse([
+          frame('delta', { text: 'updated ' }),
+          frame('delta', { text: 'answer.' }),
+          frame('done', { summary: 'updated answer.', citations: [] }),
+        ]),
+      ),
+    )
+
+    const events: SearchStreamEvent[] = []
+    await reevaluateStream('kb-1', 'msg-1', (e) => events.push(e))
+
+    expect(events).toEqual([
+      { type: 'delta', text: 'updated ' },
+      { type: 'delta', text: 'answer.' },
+      { type: 'done', summary: 'updated answer.', citations: [] },
+    ])
+  })
+
+  it('posts to the reevaluate endpoint for the given message with no body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse([frame('done', { summary: 'x', citations: [] })]))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await reevaluateStream('kb-42', 'msg-7', () => {})
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/kbs/kb-42/inquiry/messages/msg-7/reevaluate'),
+      expect.objectContaining({ method: 'POST', body: null }),
+    )
+  })
+
+  it('throws for a non-OK response before invoking onEvent', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 400 })))
+
+    const onEvent = vi.fn()
+    await expect(reevaluateStream('kb-1', 'msg-1', onEvent)).rejects.toThrow(/400/)
+    expect(onEvent).not.toHaveBeenCalled()
   })
 })
