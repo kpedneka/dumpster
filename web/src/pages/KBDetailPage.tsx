@@ -82,6 +82,15 @@ function preprocessCitations(summary: string): string {
 // point of "which page do I check" is most valuable for long documents),
 // and doesn't work on mobile at all. This has no such dependency — it's
 // static text, always visible, answering the same question up front.
+// fetchInquiry is shared between the mount-time useQuery and runStream's
+// post-completion re-fetch (via queryClient.fetchQuery) so both go through
+// identical fetch/error logic — see runStream for why that reuse matters.
+async function fetchInquiry(kbId: string) {
+  const { data, error } = await api.GET('/kbs/{id}/inquiry', { params: { path: { id: kbId } } })
+  if (error) throw error
+  return data
+}
+
 function citedPagesFor(documentId: string, citations: Citation[]): number[] {
   const pages = new Set<number>()
   for (const c of citations) {
@@ -325,11 +334,7 @@ export function KBDetailPage() {
   // yet has messages: [], not an error (see GET /kbs/{id}/inquiry).
   const { data: inquiryData } = useQuery({
     queryKey: ['inquiry', kbId],
-    queryFn: async () => {
-      const { data, error } = await api.GET('/kbs/{id}/inquiry', { params: { path: { id: kbId! } } })
-      if (error) throw error
-      return data
-    },
+    queryFn: () => fetchInquiry(kbId!),
     enabled: !!kbId,
   })
   const messages: InquiryMessage[] = inquiryData?.messages ?? []
@@ -383,14 +388,27 @@ export function KBDetailPage() {
         }, controller.signal)
         if (controller.signal.aborted) return
         if (streamErrored) return
-        // The stream completed successfully: refetch so the canonical,
-        // persisted (and ID-bearing, re-evaluatable) message replaces this
-        // pending turn in the list above.
-        await queryClient.invalidateQueries({ queryKey: ['inquiry', kbId] })
-        setPending(null)
       } catch (err) {
         if (controller.signal.aborted) return
         setPending((p) => (p ? { ...p, status: 'error', error: err } : p))
+        return controller
+      }
+
+      // The stream completed successfully: refetch so the canonical,
+      // persisted (and ID-bearing, re-evaluatable) message replaces this
+      // pending turn in the list above. Deliberately its own try/catch, not
+      // folded into the one above — a failed refetch here (e.g. persistence
+      // silently didn't happen server-side) must not be treated the same as
+      // a failed *generation*: the answer the researcher just watched
+      // stream in is still good, so on refetch failure pending is simply
+      // left showing it as-is rather than discarded or replaced with an
+      // error. It reconciles with the server on the next successful fetch
+      // (e.g. a later reload).
+      try {
+        await queryClient.fetchQuery({ queryKey: ['inquiry', kbId], queryFn: () => fetchInquiry(kbId!) })
+        setPending(null)
+      } catch {
+        // Leave pending as-is — see comment above.
       }
 
       return controller

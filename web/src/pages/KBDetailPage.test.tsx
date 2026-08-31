@@ -822,6 +822,51 @@ describe('KBDetailPage', () => {
       expect(fetch).toHaveBeenCalledTimes(1) // mockSearchStream's second call replaced the stub; count resets
     })
 
+    // Regression test: a real bug found while manually testing this against
+    // a dev database missing the Inquiry migration. Persistence failing
+    // server-side made the post-completion GET /kbs/{id}/inquiry refetch
+    // 500, and the original code cleared the completed answer unconditionally
+    // once that refetch attempt merely finished — regardless of whether it
+    // had actually succeeded — discarding an answer the researcher had just
+    // watched stream in successfully.
+    it('keeps showing the completed answer if the post-completion refetch fails', async () => {
+      let inquiryCalls = 0
+      vi.mocked(api.GET).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}') {
+          return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
+        }
+        if (path === '/kbs/{kbId}/documents') {
+          return Promise.resolve({ data: { items: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/inquiry') {
+          inquiryCalls++
+          // First call: the initial mount fetch, succeeds empty. Second
+          // call: the post-search refetch, fails — e.g. persistence didn't
+          // actually happen server-side (a missing migration, in the bug
+          // this reproduces).
+          if (inquiryCalls === 1) {
+            return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+          }
+          return Promise.resolve({ data: undefined, error: { error: 'internal error' }, response: { status: 500 } })
+        }
+        throw new Error(`unexpected api.GET call: ${path}`)
+      }) as never)
+      mockSearchStream([sseFrame('done', { summary: 'the answer', citations: [] })])
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+      await screen.findByRole('heading', { name: 'Test KB' })
+
+      await user.type(screen.getByRole('textbox'), 'a question')
+      await user.click(screen.getByRole('button', { name: /^query$/i }))
+
+      await waitFor(() => expect(screen.getByText('the answer')).toBeInTheDocument())
+      // The bug: this text would vanish moments later once the failed
+      // refetch "completed" and pending was cleared unconditionally.
+      await new Promise((r) => setTimeout(r, 50))
+      expect(screen.getByText('the answer')).toBeInTheDocument()
+    })
+
     describe('re-evaluate', () => {
       it('re-runs the original query and appends the result, marked as re-evaluated, without touching the original', async () => {
         mockInquiryMessages = [
