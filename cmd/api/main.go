@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	canonicalpg "github.com/kunalpednekar/dumpster/internal/canonical/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
@@ -89,6 +90,7 @@ func main() {
 		Objects:      obj,
 		Publisher:    qpg.New(pool),
 		Manifest:     manifestpg.New(txRunner),
+		Canonical:    canonicalpg.New(txRunner),
 		Searcher:     searcher,
 		Inquiries:    inquirypg.New(txRunner),
 		Sessions:     sessionpg.New(pool),

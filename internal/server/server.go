@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
+	"github.com/kunalpednekar/dumpster/internal/canonical"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/inquiry"
 	"github.com/kunalpednekar/dumpster/internal/kb"
@@ -27,6 +28,10 @@ type Deps struct {
 	Objects   objectstore.ObjectStore
 	Publisher queue.Publisher
 	Manifest  manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
+	// Canonical is optional; when nil, deleting a document skips reversing
+	// its contribution to canonical entity stats (acceptable before
+	// canonicalization is wired up — there is nothing to reverse yet).
+	Canonical canonical.Repository
 	Searcher  search.Searcher
 	// Inquiries is optional; when nil, search results are not persisted as
 	// Inquiry history (search itself still works — persistence is a
@@ -66,7 +71,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Canonical, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments)

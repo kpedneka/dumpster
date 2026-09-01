@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/kunalpednekar/dumpster/internal/canonical"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/manifest"
@@ -54,6 +55,7 @@ type docHandler struct {
 	objects           objectstore.ObjectStore
 	publisher         queue.Publisher
 	manifest          manifest.Repository    // nil when manifest not yet available
+	canonical         canonical.Repository   // nil when canonicalization not yet available
 	instruments       *telemetry.Instruments // nil when metrics are not configured
 	maxUpload         int64
 	maxDocsPerSession int
@@ -66,6 +68,7 @@ func registerDocRoutes(
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
 	manifestRepo manifest.Repository,
+	canonicalRepo canonical.Repository,
 	instruments *telemetry.Instruments,
 	maxUploadBytes int64,
 	maxDocsPerSession int,
@@ -82,6 +85,7 @@ func registerDocRoutes(
 		objects:           objects,
 		publisher:         publisher,
 		manifest:          manifestRepo,
+		canonical:         canonicalRepo,
 		instruments:       instruments,
 		maxUpload:         maxUploadBytes,
 		maxDocsPerSession: maxDocsPerSession,
@@ -410,6 +414,19 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 	if doc.Status == document.StatusProcessing {
 		writeError(w, http.StatusConflict, "document is being indexed and cannot be deleted yet")
 		return
+	}
+
+	// Reverse this document's contribution to canonical entity stats before
+	// its entities row are cascade-deleted by the document delete below —
+	// the mention -> canonical linkage DecrementForDocument needs to
+	// reverse it is gone once that cascade runs. Mirrors EntityHandler's
+	// re-extraction path, the only other place entities disappear.
+	if h.canonical != nil {
+		if err := h.canonical.DecrementForDocument(r.Context(), userID, docID); err != nil {
+			h.recordDelete(r.Context(), "failure")
+			writeError(w, http.StatusInternalServerError, "failed to update canonical entities")
+			return
+		}
 	}
 
 	if err := h.objects.Delete(r.Context(), doc.S3Key); err != nil {

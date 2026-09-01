@@ -48,6 +48,11 @@ type Entity struct {
 	// Score is the extractor's confidence for this mention, in [0, 1].
 	// Extractors that do not produce a confidence score may leave this 0.
 	Score float32
+	// CanonicalEntityID links this mention to its resolved canonical
+	// identity (internal/canonical.CanonicalEntity). Nil until the async
+	// canonicalization job stage has run for the document this mention
+	// belongs to.
+	CanonicalEntityID *uuid.UUID
 }
 
 // Repository is the persistence boundary for Entity records. Every method
@@ -64,6 +69,10 @@ type Repository interface {
 	// re-running extraction on an already-processed document idempotent,
 	// without touching that document's chunks or embeddings.
 	DeleteByDocument(ctx context.Context, userID, documentID uuid.UUID) error
+	// BulkSetCanonicalEntityID links each mention (keyed by mention ID) to
+	// the canonical entity ID it was resolved to. Used by
+	// internal/canonical.ResolveNew once canonicalization has run.
+	BulkSetCanonicalEntityID(ctx context.Context, userID uuid.UUID, mentionToCanonical map[uuid.UUID]uuid.UUID) error
 }
 
 // Extractor runs entity extraction over a batch of chunks and returns the

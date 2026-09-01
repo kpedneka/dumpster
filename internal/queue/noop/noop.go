@@ -39,4 +39,10 @@ func (p *Publisher) PublishRegionClassification(_ context.Context, evt queue.Reg
 	return nil
 }
 
+// PublishCanonicalization logs the event instead of enqueuing it.
+func (p *Publisher) PublishCanonicalization(_ context.Context, evt queue.CanonicalizationRequested) error {
+	log.Printf("queue: CanonicalizationRequested{document_id=%s user_id=%s}", evt.DocumentID, evt.UserID)
+	return nil
+}
+
 var _ queue.Publisher = (*Publisher)(nil)

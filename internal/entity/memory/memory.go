@@ -70,4 +70,22 @@ func (r *Repository) DeleteByDocument(_ context.Context, userID, documentID uuid
 	return nil
 }
 
+// BulkSetCanonicalEntityID links each mention in mentionToCanonical (keyed
+// by mention ID) to its resolved canonical entity ID, scoped to userID.
+// Mention IDs not belonging to userID (or not found) are silently skipped,
+// matching the pgstore implementation's WHERE-scoped UPDATE semantics.
+func (r *Repository) BulkSetCanonicalEntityID(_ context.Context, userID uuid.UUID, mentionToCanonical map[uuid.UUID]uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for mentionID, canonicalID := range mentionToCanonical {
+		e, ok := r.rows[mentionID]
+		if !ok || e.UserID != userID {
+			continue
+		}
+		id := canonicalID
+		e.CanonicalEntityID = &id
+	}
+	return nil
+}
+
 var _ entity.Repository = (*Repository)(nil)

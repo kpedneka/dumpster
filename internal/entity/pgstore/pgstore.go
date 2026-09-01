@@ -55,7 +55,7 @@ func (s *Store) ListByDocument(ctx context.Context, userID, documentID uuid.UUID
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
 			`SELECT e.id, e.chunk_id, e.document_id, e.kb_id, e.user_id,
-			        e.entity_type, e.text, e.char_start, e.char_end, e.score
+			        e.entity_type, e.text, e.char_start, e.char_end, e.score, e.canonical_entity_id
 			 FROM entities e
 			 JOIN chunks c ON c.id = e.chunk_id
 			 WHERE e.document_id = $1 AND e.user_id = $2
@@ -71,7 +71,7 @@ func (s *Store) ListByDocument(ctx context.Context, userID, documentID uuid.UUID
 			var entityType string
 			if err := rows.Scan(
 				&e.ID, &e.ChunkID, &e.DocumentID, &e.KBID, &e.UserID,
-				&entityType, &e.Text, &e.Start, &e.End, &e.Score,
+				&entityType, &e.Text, &e.Start, &e.End, &e.Score, &e.CanonicalEntityID,
 			); err != nil {
 				return err
 			}
@@ -84,6 +84,35 @@ func (s *Store) ListByDocument(ctx context.Context, userID, documentID uuid.UUID
 		return nil, fmt.Errorf("entity: list by document %v: %w", documentID, err)
 	}
 	return results, nil
+}
+
+// BulkSetCanonicalEntityID links each mention in mentionToCanonical (keyed
+// by mention ID) to its resolved canonical entity ID, scoped to userID.
+func (s *Store) BulkSetCanonicalEntityID(ctx context.Context, userID uuid.UUID, mentionToCanonical map[uuid.UUID]uuid.UUID) error {
+	if len(mentionToCanonical) == 0 {
+		return nil
+	}
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		batch := &pgx.Batch{}
+		for mentionID, canonicalID := range mentionToCanonical {
+			batch.Queue(
+				`UPDATE entities SET canonical_entity_id = $1 WHERE id = $2 AND user_id = $3`,
+				canonicalID, mentionID, userID,
+			)
+		}
+		results := tx.SendBatch(ctx, batch)
+		for range mentionToCanonical {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
+				return err
+			}
+		}
+		return results.Close()
+	})
+	if err != nil {
+		return fmt.Errorf("entity: bulk set canonical entity id: %w", err)
+	}
+	return nil
 }
 
 // DeleteByDocument removes all entities for documentID. Re-running

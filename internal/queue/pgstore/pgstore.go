@@ -93,6 +93,22 @@ func (s *Store) PublishRegionClassification(ctx context.Context, evt queue.Regio
 	return nil
 }
 
+// PublishCanonicalization inserts a pending canonicalization job for the
+// given document. This is a distinct job type from edge extraction so it
+// can be queued and re-run independently after an entity re-run completes.
+func (s *Store) PublishCanonicalization(ctx context.Context, evt queue.CanonicalizationRequested) error {
+	_, err := s.pool.Exec(ctx,
+		`INSERT INTO jobs (document_id, user_id, job_type)
+		 VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
+		evt.DocumentID, evt.UserID, string(queue.JobTypeCanonicalization),
+	)
+	if err != nil {
+		return fmt.Errorf("queue: enqueue canonicalization for document %s: %w", evt.DocumentID, err)
+	}
+	return nil
+}
+
 // Dequeue claims the next available job using SELECT FOR UPDATE SKIP LOCKED.
 // Returns ErrNoJobs when no pending jobs are ready to run.
 func (s *Store) Dequeue(ctx context.Context) (*queue.Job, error) {
