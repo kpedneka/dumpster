@@ -29,6 +29,7 @@ import (
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/stats"
 	statspg "github.com/kunalpednekar/dumpster/internal/stats/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 	"github.com/kunalpednekar/dumpster/internal/worker"
@@ -111,7 +112,7 @@ func main() {
 	// Session sweep runs on a ticker inside this always-on process so no
 	// external scheduler (cron, Fly Machines cron job, etc.) is required.
 	// Cadence is controlled by SWEEP_INTERVAL (default 5m).
-	go runSweepLoop(ctx, cfg.SweepInterval, pool, obj, txRunner, logger)
+	go runSweepLoop(ctx, cfg.SweepInterval, pool, obj, txRunner, statsRepo, logger)
 
 	// Job-reclaim runs on the same cadence as the session sweep — both are
 	// periodic maintenance with no need for independent tuning at this
@@ -131,7 +132,7 @@ func main() {
 
 // runSweepLoop runs the session sweep immediately on startup and then on every
 // tick of interval. It exits when ctx is cancelled (worker shutdown).
-func runSweepLoop(ctx context.Context, interval time.Duration, pool *pgxpool.Pool, obj *s3store.Store, txRunner *rls.TxRunner, logger *slog.Logger) {
+func runSweepLoop(ctx context.Context, interval time.Duration, pool *pgxpool.Pool, obj *s3store.Store, txRunner *rls.TxRunner, statsRepo stats.Repository, logger *slog.Logger) {
 	sessions := sessionpg.New(pool)
 	deleter := account.New(sessions, obj, docpg.New(txRunner))
 	sweep := account.NewSweep(sessions, deleter)
@@ -149,6 +150,11 @@ func runSweepLoop(ctx context.Context, interval time.Duration, pool *pgxpool.Poo
 		)
 		for _, sweepErr := range result.Errors {
 			logger.Error("sweep: per-session error", "err", sweepErr)
+		}
+		if result.Deleted > 0 {
+			if err := statsRepo.RecordSessionsSwept(ctx, result.Deleted); err != nil {
+				logger.Error("sweep: record sessions swept", "err", err)
+			}
 		}
 	}
 

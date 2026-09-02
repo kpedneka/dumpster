@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/session"
+	"github.com/kunalpednekar/dumpster/internal/stats"
 )
 
 const sessionCookieName = "session_id"
@@ -23,8 +24,11 @@ const sessionCookieName = "session_id"
 // over plain http is silently dropped by the browser, which would otherwise
 // mint a fresh session (and therefore a fresh tenant identity) on every request.
 //
+// statsRepo is optional; when nil, minted sessions aren't recorded into the
+// durable, cross-tenant usage counters (see internal/stats).
+//
 // This handler never returns 401: every request gets a valid session identity.
-func Middleware(sessions session.SessionStore, secure bool, next http.Handler) http.Handler {
+func Middleware(sessions session.SessionStore, secure bool, statsRepo stats.Repository, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sess := resolveSession(r, sessions)
 		if sess == nil {
@@ -43,6 +47,11 @@ func Middleware(sessions session.SessionStore, secure bool, next http.Handler) h
 				SameSite: http.SameSiteLaxMode,
 				Path:     "/",
 			})
+			if statsRepo != nil {
+				if err := statsRepo.RecordSessionCreated(r.Context()); err != nil {
+					slog.Error("auth: record session created", "err", err)
+				}
+			}
 		}
 
 		next.ServeHTTP(w, r.WithContext(WithUserID(r.Context(), sess.ID)))

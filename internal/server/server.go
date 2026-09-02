@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/canonical"
+	"github.com/kunalpednekar/dumpster/internal/community"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/inquiry"
 	"github.com/kunalpednekar/dumpster/internal/kb"
@@ -33,7 +35,15 @@ type Deps struct {
 	// its contribution to canonical entity stats (acceptable before
 	// canonicalization is wired up — there is nothing to reverse yet).
 	Canonical canonical.Repository
-	Searcher  search.Searcher
+	// Communities is optional; when nil, POST/GET /kbs/{id}/communities are
+	// not registered.
+	Communities community.Repository
+	// MaxCommunityGraphEntities and CommunityDetectionTimeout guard
+	// POST /kbs/{id}/communities against a pathological KB. Both 0 default
+	// (5000 entities, 30s) — see communityhandler.go.
+	MaxCommunityGraphEntities int
+	CommunityDetectionTimeout time.Duration
+	Searcher                  search.Searcher
 	// Inquiries is optional; when nil, search results are not persisted as
 	// Inquiry history (search itself still works — persistence is a
 	// convenience layered on top, not a dependency search needs).
@@ -84,8 +94,11 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments, deps.Stats)
 	}
+	if deps.Communities != nil {
+		registerCommunityRoutes(authed, deps.KBs, deps.Communities, deps.MaxCommunityGraphEntities, deps.CommunityDetectionTimeout)
+	}
 
-	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, authed)
+	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, deps.Stats, authed)
 	if deps.RateLimiter != nil {
 		handler = ratelimit.Middleware(deps.RateLimiter, handler)
 	}

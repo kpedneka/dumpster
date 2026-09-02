@@ -20,6 +20,8 @@ type statsResponse struct {
 	AvgDocumentSizeBytes float64 `json:"avg_document_size_bytes"`
 	QueriesExecuted      int64   `json:"queries_executed"`
 	AvgQueryDurationMs   float64 `json:"avg_query_duration_ms"`
+	SessionsCreated      int64   `json:"sessions_created"`
+	SessionsSwept        int64   `json:"sessions_swept"`
 }
 
 func statsHandlerFunc(repo stats.Repository) http.HandlerFunc {
@@ -34,6 +36,8 @@ func statsHandlerFunc(repo stats.Repository) http.HandlerFunc {
 			AvgDocumentSizeBytes: snap.AvgDocumentSizeBytes,
 			QueriesExecuted:      snap.QueriesExecuted,
 			AvgQueryDurationMs:   snap.AvgQueryDurationMs,
+			SessionsCreated:      snap.SessionsCreated,
+			SessionsSwept:        snap.SessionsSwept,
 		})
 	}
 }

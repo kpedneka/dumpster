@@ -54,6 +54,33 @@ SET    queries_executed_count    = queries_executed_count + 1,
 	return nil
 }
 
+// RecordSessionCreated increments the sessions-created counter.
+func (s *Store) RecordSessionCreated(ctx context.Context) error {
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+UPDATE usage_stats
+SET    sessions_created_count = sessions_created_count + 1,
+       updated_at             = NOW()`)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("stats: record session created: %w", err)
+	}
+	return nil
+}
+
+// RecordSessionsSwept increments the sessions-swept counter by count.
+func (s *Store) RecordSessionsSwept(ctx context.Context, count int) error {
+	const q = `
+UPDATE usage_stats
+SET    sessions_swept_count = sessions_swept_count + $1,
+       updated_at           = NOW()`
+	if err := s.exec(ctx, q, int64(count)); err != nil {
+		return fmt.Errorf("stats: record sessions swept: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) exec(ctx context.Context, q string, arg int64) error {
 	return s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, q, arg)
@@ -63,18 +90,24 @@ func (s *Store) exec(ctx context.Context, q string, arg int64) error {
 
 // Get returns the current site-wide totals.
 func (s *Store) Get(ctx context.Context) (stats.Snapshot, error) {
-	var docsCount, docsBytes, queriesCount, queriesMs int64
+	var docsCount, docsBytes, queriesCount, queriesMs, sessionsCreated, sessionsSwept int64
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		return tx.QueryRow(ctx, `
 SELECT documents_indexed_count, documents_indexed_bytes_total,
-       queries_executed_count, queries_duration_ms_total
-FROM   usage_stats`).Scan(&docsCount, &docsBytes, &queriesCount, &queriesMs)
+       queries_executed_count, queries_duration_ms_total,
+       sessions_created_count, sessions_swept_count
+FROM   usage_stats`).Scan(&docsCount, &docsBytes, &queriesCount, &queriesMs, &sessionsCreated, &sessionsSwept)
 	})
 	if err != nil {
 		return stats.Snapshot{}, fmt.Errorf("stats: get: %w", err)
 	}
 
-	snap := stats.Snapshot{DocumentsIndexed: docsCount, QueriesExecuted: queriesCount}
+	snap := stats.Snapshot{
+		DocumentsIndexed: docsCount,
+		QueriesExecuted:  queriesCount,
+		SessionsCreated:  sessionsCreated,
+		SessionsSwept:    sessionsSwept,
+	}
 	if docsCount > 0 {
 		snap.AvgDocumentSizeBytes = float64(docsBytes) / float64(docsCount)
 	}

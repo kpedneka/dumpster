@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
+	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
 )
 
 const sessionCookie = "session_id"
@@ -35,7 +36,7 @@ func TestMiddleware_noCookie_mintsSession(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	auth.Middleware(sessions, true, sessionHandler(t)).ServeHTTP(w, req)
+	auth.Middleware(sessions, true, nil, sessionHandler(t)).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
@@ -69,7 +70,7 @@ func TestMiddleware_secureFlag_followsParameter(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		w := httptest.NewRecorder()
 
-		auth.Middleware(sessions, secure, sessionHandler(t)).ServeHTTP(w, req)
+		auth.Middleware(sessions, secure, nil, sessionHandler(t)).ServeHTTP(w, req)
 
 		var found bool
 		for _, c := range w.Result().Cookies() {
@@ -107,7 +108,7 @@ func TestMiddleware_validCookie_resumesSession(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sess.ID.String()})
 	w := httptest.NewRecorder()
 
-	auth.Middleware(sessions, true, handler).ServeHTTP(w, req)
+	auth.Middleware(sessions, true, nil, handler).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
@@ -141,7 +142,7 @@ func TestMiddleware_sweptSession_mintsFresh(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: swept.ID.String()})
 	w := httptest.NewRecorder()
 
-	auth.Middleware(sessions, true, handler).ServeHTTP(w, req)
+	auth.Middleware(sessions, true, nil, handler).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want 200", w.Code)
@@ -179,7 +180,7 @@ func TestMiddleware_sameSessionAcrossRequests(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	mw := auth.Middleware(sessions, true, handler)
+	mw := auth.Middleware(sessions, true, nil, handler)
 	for range 2 {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: sess.ID.String()})
@@ -191,5 +192,49 @@ func TestMiddleware_sameSessionAcrossRequests(t *testing.T) {
 	}
 	if ids[0] != ids[1] {
 		t.Errorf("session ID must be stable: first=%v second=%v", ids[0], ids[1])
+	}
+}
+
+// TestMiddleware_recordsSessionCreated_onlyOnMint verifies statsRepo gets a
+// RecordSessionCreated call exactly once per freshly minted session — not
+// once per request, since a request resuming an existing session (via a
+// valid cookie) shouldn't inflate the counter.
+func TestMiddleware_recordsSessionCreated_onlyOnMint(t *testing.T) {
+	sessions := sessionmock.New()
+	statsRepo := statsmem.New()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	auth.Middleware(sessions, true, statsRepo, sessionHandler(t)).ServeHTTP(w, req)
+
+	snap, err := statsRepo.Get(context.TODO())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.SessionsCreated != 1 {
+		t.Fatalf("SessionsCreated after mint: got %d, want 1", snap.SessionsCreated)
+	}
+
+	// Resume the just-minted session on a second request; the counter must
+	// not increment again.
+	var cookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == sessionCookie {
+			cookie = c
+		}
+	}
+	if cookie == nil {
+		t.Fatal("expected a session cookie from the first request")
+	}
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req2.AddCookie(cookie)
+	auth.Middleware(sessions, true, statsRepo, sessionHandler(t)).ServeHTTP(httptest.NewRecorder(), req2)
+
+	snap, err = statsRepo.Get(context.TODO())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.SessionsCreated != 1 {
+		t.Errorf("SessionsCreated after resuming an existing session: got %d, want still 1", snap.SessionsCreated)
 	}
 }
