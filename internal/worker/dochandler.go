@@ -12,6 +12,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/llm"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/stats"
 )
 
 // DocumentHandler transitions document status through the processing lifecycle,
@@ -27,6 +28,10 @@ type DocumentHandler struct {
 	// optional so existing callers/tests that only care about chunking and
 	// embedding keep working unmodified.
 	publisher queue.Publisher
+	// stats, when non-nil, records a successful index into the durable,
+	// cross-tenant usage counters (see internal/stats). Optional for the
+	// same reason publisher is.
+	stats stats.Repository
 }
 
 // NewDocumentHandler creates a DocumentHandler wired to the given dependencies.
@@ -56,6 +61,14 @@ func (h *DocumentHandler) WithEntityExtractionPublisher(publisher queue.Publishe
 	return h
 }
 
+// WithStats wires repo into h so that every document this handler
+// successfully indexes is recorded into the durable, cross-tenant usage
+// counters. Optional, matching WithEntityExtractionPublisher.
+func (h *DocumentHandler) WithStats(repo stats.Repository) *DocumentHandler {
+	h.stats = repo
+	return h
+}
+
 // Handle runs the full ingestion pipeline for one document job:
 // pending → processing → (read, split, embed, persist) → indexed.
 // A document that is already indexed is skipped (idempotent).
@@ -81,6 +94,15 @@ func (h *DocumentHandler) Handle(ctx context.Context, job *queue.Job) error {
 
 	if err := h.docs.UpdateStatus(ctx, job.UserID, job.DocumentID, document.StatusIndexed); err != nil {
 		return fmt.Errorf("dochandler: mark indexed: %w", err)
+	}
+
+	// A stats-recording failure is logged, not fatal, for the same reason
+	// a publish failure below isn't: indexing has already succeeded and
+	// must not be rolled back because a side accounting write failed.
+	if h.stats != nil {
+		if err := h.stats.RecordDocumentIndexed(ctx, doc.SizeBytes); err != nil {
+			log.Printf("dochandler: failed to record usage stats for document %s: %v", job.DocumentID, err)
+		}
 	}
 
 	// Queue the entity-extraction stage as a distinct job, inline in the

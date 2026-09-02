@@ -1,5 +1,7 @@
 // Package pgstore provides a Postgres-backed graphrag.GraphRetriever that
-// queries the entity_edges table built during ingestion.
+// queries the entity_edges table built during ingestion, seeded via
+// canonical_entities so a query resolves to every mention of an identity
+// across the KB rather than one chunk-local mention row.
 package pgstore
 
 import (
@@ -27,12 +29,21 @@ func New(runner db.TxRunner) graphrag.GraphRetriever {
 	return &Store{runner: runner}
 }
 
-// AggregationLeg returns up to k chunks co-occurring with any seed entity
-// whose text appears in query. Results are ordered by total co-occurrence
-// weight so the highest-signal chunks rank first.
+// AggregationLeg returns up to k chunks co-occurring with any mention of a
+// canonical entity whose normalized text appears in query. Seeds resolve
+// through canonical_entities first, then expand to every mention of that
+// identity across the KB — not just whichever single chunk-local mention
+// happened to match — so results are ordered by total co-occurrence weight
+// so the highest-signal chunks rank first.
 //
-// A minimum entity text length of 3 characters guards against trivially
+// A minimum normalized-text length of 3 characters guards against trivially
 // short strings (single letters, punctuation) matching everything.
+//
+// A canonical entity not yet linked from a mention (canonicalization is an
+// async job stage that can briefly lag entity extraction) is invisible to
+// this leg until that job runs; the hybrid vector/keyword legs still cover
+// the document in the meantime, and a re-evaluate picks up the graph boost
+// once canonicalization catches up.
 func (s *Store) AggregationLeg(ctx context.Context, kbID uuid.UUID, query string, k int) ([]retrieval.ScoredChunk, error) {
 	userID, ok := auth.UserIDFromContext(ctx)
 	if !ok {
@@ -40,13 +51,19 @@ func (s *Store) AggregationLeg(ctx context.Context, kbID uuid.UUID, query string
 	}
 
 	const q = `
-WITH seeds AS (
-    SELECT DISTINCT id
-    FROM   entities
+WITH seed_canonicals AS (
+    SELECT id
+    FROM   canonical_entities
     WHERE  kb_id   = $1
       AND  user_id = $2
-      AND  LENGTH(text) >= 3
-      AND  LOWER($3) LIKE '%' || LOWER(text) || '%'
+      AND  LENGTH(normalized_text) >= 3
+      AND  LOWER($3) LIKE '%' || normalized_text || '%'
+),
+seeds AS (
+    SELECT DISTINCT e.id
+    FROM   entities e
+    JOIN   seed_canonicals sc ON e.canonical_entity_id = sc.id
+    WHERE  e.kb_id = $1 AND e.user_id = $2
 ),
 edge_chunks AS (
     SELECT   ee.chunk_id,
@@ -81,9 +98,27 @@ LIMIT  $4`
 }
 
 // TraversalLeg returns up to k chunks reachable via two-hop traversal from
-// seed entities whose text appears in query. It follows seed → hop-1
-// neighbors → their co-occurring chunks, excluding chunks already returned by
-// the aggregation leg (seed co-occurrence chunks).
+// mentions of a canonical entity whose normalized text appears in query. It
+// follows seed → hop-1 neighbors → hop-1's *other* mentions of the same
+// canonical identity (possibly in other chunks/documents entirely) → their
+// co-occurring chunks, excluding chunks already returned by the aggregation
+// leg (seed co-occurrence chunks).
+//
+// The canonical expansion between hop-1 and hop-2 is the fix for this leg's
+// previous behavior: entity_edges is chunk-scoped, and entity mentions are
+// per-chunk with no dedup, so a specific hop-1 mention row can only ever
+// have edges within the one chunk it was extracted in — hopping on the raw
+// mention ID therefore only ever reaches chunks already excluded as seed
+// chunks, guaranteeing zero rows. Expanding hop-1 to every mention sharing
+// its canonical identity is what makes a second, genuinely new hop possible:
+// hop-2 can now reach a chunk where some *other* mention of that same
+// real-world entity co-occurred with something else entirely.
+//
+// A hop-1 mention not yet linked to a canonical entity (canonicalization is
+// an async job stage that can briefly lag entity extraction) contributes no
+// expansion for that specific mention on this call; the hybrid legs still
+// cover the document in the meantime, and a re-evaluate picks up the graph
+// boost once canonicalization catches up.
 func (s *Store) TraversalLeg(ctx context.Context, kbID uuid.UUID, query string, k int) ([]retrieval.ScoredChunk, error) {
 	userID, ok := auth.UserIDFromContext(ctx)
 	if !ok {
@@ -91,13 +126,19 @@ func (s *Store) TraversalLeg(ctx context.Context, kbID uuid.UUID, query string, 
 	}
 
 	const q = `
-WITH seeds AS (
-    SELECT DISTINCT id
-    FROM   entities
+WITH seed_canonicals AS (
+    SELECT id
+    FROM   canonical_entities
     WHERE  kb_id   = $1
       AND  user_id = $2
-      AND  LENGTH(text) >= 3
-      AND  LOWER($3) LIKE '%' || LOWER(text) || '%'
+      AND  LENGTH(normalized_text) >= 3
+      AND  LOWER($3) LIKE '%' || normalized_text || '%'
+),
+seeds AS (
+    SELECT DISTINCT e.id
+    FROM   entities e
+    JOIN   seed_canonicals sc ON e.canonical_entity_id = sc.id
+    WHERE  e.kb_id = $1 AND e.user_id = $2
 ),
 seed_chunk_ids AS (
     SELECT DISTINCT ee.chunk_id
@@ -107,7 +148,7 @@ seed_chunk_ids AS (
     WHERE  ee.kb_id   = $1
       AND  ee.user_id = $2
 ),
-hop1_entity_ids AS (
+hop1_mentions AS (
     SELECT DISTINCT
         CASE WHEN ee.entity_a_id = s.id
              THEN ee.entity_b_id
@@ -119,11 +160,19 @@ hop1_entity_ids AS (
     WHERE  ee.kb_id   = $1
       AND  ee.user_id = $2
 ),
+hop1_expanded AS (
+    SELECT DISTINCT e2.id
+    FROM   hop1_mentions h1
+    JOIN   entities e1 ON e1.id = h1.id AND e1.kb_id = $1 AND e1.user_id = $2
+    JOIN   entities e2 ON e2.canonical_entity_id = e1.canonical_entity_id
+                      AND e2.kb_id = $1 AND e2.user_id = $2
+    WHERE  e1.canonical_entity_id IS NOT NULL
+),
 hop2_chunk_ids AS (
     SELECT DISTINCT ee2.chunk_id
-    FROM   hop1_entity_ids h1
+    FROM   hop1_expanded h1e
     JOIN   entity_edges ee2
-             ON ee2.entity_a_id = h1.id OR ee2.entity_b_id = h1.id
+             ON ee2.entity_a_id = h1e.id OR ee2.entity_b_id = h1e.id
     WHERE  ee2.kb_id   = $1
       AND  ee2.user_id = $2
       AND  ee2.chunk_id NOT IN (SELECT chunk_id FROM seed_chunk_ids)

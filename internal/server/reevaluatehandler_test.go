@@ -13,6 +13,7 @@ import (
 	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
+	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
 )
 
 // seedOneTurn runs a real search through the handler so the resulting
@@ -260,5 +261,41 @@ func TestReevaluate_CrossTenant(t *testing.T) {
 
 	if w.Code == http.StatusOK {
 		t.Error("other tenant should not be able to reevaluate owner's message")
+	}
+}
+
+// TestReevaluate_CountsAsASeparateQueryExecuted verifies a re-evaluation
+// increments the durable usage counters (see internal/stats) same as an
+// original search — it re-runs retrieval and generation in full, so it's a
+// distinct query execution, not a repeat of the one it supersedes.
+func TestReevaluate_CountsAsASeparateQueryExecuted(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	statsRepo := deps.Stats.(*statsmem.Repository)
+	inquiryRepo := deps.Inquiries.(*inquirymem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "first answer"})
+	seedOneTurn(t, deps, k.ID, userID, "what changed?")
+
+	inq, _ := inquiryRepo.Get(context.TODO(), userID, k.ID)
+	before, _ := inquiryRepo.ListMessages(context.TODO(), userID, inq.ID)
+	original := before[1]
+
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "second answer"})
+	router := NewRouter(deps)
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+k.ID.String()+"/inquiry/messages/"+original.ID.String()+"/reevaluate", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	snap, err := statsRepo.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.QueriesExecuted != 2 {
+		t.Errorf("QueriesExecuted = %d, want 2 (original search + reevaluate)", snap.QueriesExecuted)
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/server"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
+	statspg "github.com/kunalpednekar/dumpster/internal/stats/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
@@ -56,6 +57,10 @@ func main() {
 	defer pool.Close()
 
 	txRunner := rls.New(pool)
+	// usage_stats has no RLS policy and is read by the public,
+	// unauthenticated GET /stats endpoint, so it deliberately uses a plain
+	// TxRunner rather than the RLS-aware one everything else here does.
+	statsRepo := statspg.New(db.NewTxRunner(pool))
 
 	logger.Info("object storage config",
 		"endpoint", cfg.S3Endpoint,
@@ -94,6 +99,7 @@ func main() {
 		Searcher:     searcher,
 		Inquiries:    inquirypg.New(txRunner),
 		Sessions:     sessionpg.New(pool),
+		Stats:        statsRepo,
 		Instruments:  instruments,
 		SPADir:       "web/dist",
 		CookieSecure: cfg.CookieSecure,

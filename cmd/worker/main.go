@@ -29,6 +29,7 @@ import (
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
+	statspg "github.com/kunalpednekar/dumpster/internal/stats/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
@@ -64,6 +65,9 @@ func main() {
 	defer pool.Close()
 
 	txRunner := rls.New(pool)
+	// usage_stats has no RLS policy, so it deliberately uses a plain
+	// TxRunner rather than the RLS-aware one everything else here does.
+	statsRepo := statspg.New(db.NewTxRunner(pool))
 
 	obj := s3store.New(s3store.Config{
 		Endpoint:     cfg.S3Endpoint,
@@ -88,10 +92,11 @@ func main() {
 	layoutExtractor := layout.New(layout.Config{BaseURL: cfg.InferenceServiceURL})
 
 	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
-		WithEntityExtractionPublisher(q)
+		WithEntityExtractionPublisher(q).
+		WithStats(statsRepo)
 	regionHandler := worker.NewRegionClassificationHandler(
 		docs, obj, chunks, manifestRepo, layoutExtractor, embedder, q,
-	)
+	).WithStats(statsRepo)
 	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, cfg.EntityTypes).
 		WithDownstreamPublisher(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
