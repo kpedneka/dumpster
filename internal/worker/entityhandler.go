@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
+	"github.com/kunalpednekar/dumpster/internal/canonical"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/entity"
@@ -23,14 +24,21 @@ type EntityHandler struct {
 	chunks    chunk.Repository
 	entities  entity.Repository
 	extractor entity.Extractor
+	// canonical reverses a document's prior contribution to canonical
+	// entity stats before its stale entity rows are replaced — see
+	// canonical.Repository.DecrementForDocument. Required: unlike edge
+	// extraction, this must run synchronously in the same replace step,
+	// since the mention -> canonical linkage it reads is gone once the old
+	// entities rows are deleted.
+	canonical canonical.Repository
 	// allowedTypes is the config-driven, domain-agnostic entity type set
 	// (see internal/config ENTITY_TYPES). Adding a type is a config change,
 	// not a code change, and requires no migration.
 	allowedTypes []entity.Type
-	// publisher, when non-nil, is used to enqueue a distinct edge-extraction
-	// job once entities are successfully persisted. Optional so existing
-	// callers and tests that only care about entity extraction keep working
-	// unmodified.
+	// publisher, when non-nil, is used to enqueue the distinct edge-
+	// extraction and canonicalization jobs once entities are successfully
+	// persisted. Optional so existing callers and tests that only care
+	// about entity extraction keep working unmodified.
 	publisher queue.Publisher
 }
 
@@ -41,6 +49,7 @@ func NewEntityHandler(
 	chunks chunk.Repository,
 	entities entity.Repository,
 	extractor entity.Extractor,
+	canonicalRepo canonical.Repository,
 	allowedTypes []string,
 ) *EntityHandler {
 	types := make([]entity.Type, len(allowedTypes))
@@ -52,14 +61,16 @@ func NewEntityHandler(
 		chunks:       chunks,
 		entities:     entities,
 		extractor:    extractor,
+		canonical:    canonicalRepo,
 		allowedTypes: types,
 	}
 }
 
-// WithEdgeExtractionPublisher wires publisher into h so that, after entities
-// are successfully persisted, a distinct edge-extraction job is queued for
-// the same document. Mirrors DocumentHandler's WithEntityExtractionPublisher.
-func (h *EntityHandler) WithEdgeExtractionPublisher(publisher queue.Publisher) *EntityHandler {
+// WithDownstreamPublisher wires publisher into h so that, after entities are
+// successfully persisted, distinct edge-extraction and canonicalization jobs
+// are queued for the same document. Mirrors DocumentHandler's
+// WithEntityExtractionPublisher.
+func (h *EntityHandler) WithDownstreamPublisher(publisher queue.Publisher) *EntityHandler {
 	h.publisher = publisher
 	return h
 }
@@ -94,6 +105,18 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 		return fmt.Errorf("entityhandler: extract: %w", err)
 	}
 
+	// Reverse this document's current contribution to canonical entity
+	// stats before its entity rows are replaced: canonical_entities counts
+	// are cross-document state, so the delete-and-recreate idempotency
+	// pattern below (safe for entities/edges, which are wholly owned by one
+	// document) cannot apply to them directly — a canonical row can be
+	// shared with other documents' mentions. This must happen before the
+	// delete, since the mention -> canonical linkage it reads is gone once
+	// the old rows are.
+	if err := h.canonical.DecrementForDocument(ctx, job.UserID, job.DocumentID); err != nil {
+		return fmt.Errorf("entityhandler: decrement canonical entities: %w", err)
+	}
+
 	// Delete any entities from a previous run before persisting the new
 	// set, so re-running extraction (e.g. after a type-set change) is
 	// idempotent and doesn't leave stale rows from the old type set
@@ -118,17 +141,24 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 		return fmt.Errorf("entityhandler: persist entities: %w", err)
 	}
 
-	// Queue the edge-extraction stage as a distinct job, inline in the
-	// ingestion flow behind the existing queue/job-stage seam: it can be
-	// retried or re-run independently of (re-)extracting entities. A
-	// publish failure here is logged, not fatal — entity extraction has
-	// already succeeded and must not be rolled back.
+	// Queue the edge-extraction and canonicalization stages as distinct
+	// jobs, inline in the ingestion flow behind the existing queue/job-stage
+	// seam: each can be retried or re-run independently of (re-)extracting
+	// entities and of each other. A publish failure here is logged, not
+	// fatal — entity extraction has already succeeded and must not be
+	// rolled back.
 	if h.publisher != nil {
 		if err := h.publisher.PublishEdgeExtraction(ctx, queue.EdgeExtractionRequested{
 			DocumentID: job.DocumentID,
 			UserID:     job.UserID,
 		}); err != nil {
 			log.Printf("entityhandler: failed to queue edge extraction for document %s: %v", job.DocumentID, err)
+		}
+		if err := h.publisher.PublishCanonicalization(ctx, queue.CanonicalizationRequested{
+			DocumentID: job.DocumentID,
+			UserID:     job.UserID,
+		}); err != nil {
+			log.Printf("entityhandler: failed to queue canonicalization for document %s: %v", job.DocumentID, err)
 		}
 	}
 

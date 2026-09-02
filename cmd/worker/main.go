@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kunalpednekar/dumpster/internal/account"
+	canonicalpg "github.com/kunalpednekar/dumpster/internal/canonical/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	chunkpg "github.com/kunalpednekar/dumpster/internal/chunk/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
@@ -78,6 +79,7 @@ func main() {
 	chunks := chunkpg.New(txRunner)
 	entities := entitypg.New(txRunner)
 	edges := graphedgepg.New(txRunner)
+	canonicalRepo := canonicalpg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
 	embedder := llminference.NewDocumentEmbedder(cfg.InferenceServiceURL)
 	extractor := entityinference.New(cfg.InferenceServiceURL)
@@ -90,14 +92,16 @@ func main() {
 	regionHandler := worker.NewRegionClassificationHandler(
 		docs, obj, chunks, manifestRepo, layoutExtractor, embedder, q,
 	)
-	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, cfg.EntityTypes).
-		WithEdgeExtractionPublisher(q)
+	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, cfg.EntityTypes).
+		WithDownstreamPublisher(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
+	canonicalizationHandler := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo)
 
 	w := worker.New(q, docHandler, worker.Config{Instruments: instruments, Concurrency: cfg.WorkerConcurrency})
 	w.RegisterHandler(queue.JobTypeRegionClassification, regionHandler)
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
 	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)
+	w.RegisterHandler(queue.JobTypeCanonicalization, canonicalizationHandler)
 
 	// Session sweep runs on a ticker inside this always-on process so no
 	// external scheduler (cron, Fly Machines cron job, etc.) is required.

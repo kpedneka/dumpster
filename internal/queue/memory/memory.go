@@ -15,6 +15,7 @@ type Publisher struct {
 	entityExtractions     []queue.EntityExtractionRequested
 	edgeExtractions       []queue.EdgeExtractionRequested
 	regionClassifications []queue.RegionClassificationRequested
+	canonicalizations     []queue.CanonicalizationRequested
 }
 
 // New returns an empty in-memory Publisher.
@@ -88,6 +89,24 @@ func (p *Publisher) RegionClassificationEvents() []queue.RegionClassificationReq
 	defer p.mu.Unlock()
 	cp := make([]queue.RegionClassificationRequested, len(p.regionClassifications))
 	copy(cp, p.regionClassifications)
+	return cp
+}
+
+// PublishCanonicalization appends evt to the recorded canonicalization event list.
+func (p *Publisher) PublishCanonicalization(_ context.Context, evt queue.CanonicalizationRequested) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.canonicalizations = append(p.canonicalizations, evt)
+	return nil
+}
+
+// CanonicalizationEvents returns a snapshot of all published
+// CanonicalizationRequested events.
+func (p *Publisher) CanonicalizationEvents() []queue.CanonicalizationRequested {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	cp := make([]queue.CanonicalizationRequested, len(p.canonicalizations))
+	copy(cp, p.canonicalizations)
 	return cp
 }
 

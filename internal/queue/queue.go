@@ -35,6 +35,12 @@ const (
 	// file types. It produces the ingestion manifest and the document's
 	// chunks, then enqueues JobTypeEntityExtraction.
 	JobTypeRegionClassification JobType = "region_classification"
+	// JobTypeCanonicalization resolves a document's entity mentions to
+	// stable canonical entities (internal/canonical), so query-time graph
+	// traversal has a cross-chunk, cross-document identity to hop on.
+	// Depends on entity extraction having populated entities rows, but does
+	// not touch chunks, embeddings, entity text, or entity_edges.
+	JobTypeCanonicalization JobType = "canonicalization"
 )
 
 // DocumentUploaded is published once a document's bytes land in object storage
@@ -54,6 +60,14 @@ type EntityExtractionRequested struct {
 // EdgeExtractionRequested is published to derive co-occurrence edges between
 // entity mentions found in the same chunk, independent of entity extraction.
 type EdgeExtractionRequested struct {
+	DocumentID uuid.UUID
+	UserID     uuid.UUID
+}
+
+// CanonicalizationRequested is published to (re-)resolve a document's entity
+// mentions to canonical entities, independent of entity extraction and edge
+// extraction.
+type CanonicalizationRequested struct {
 	DocumentID uuid.UUID
 	UserID     uuid.UUID
 }
@@ -95,6 +109,10 @@ type Publisher interface {
 	// performs layered region classification, produces chunks + the ingestion
 	// manifest, and then enqueues entity extraction.
 	PublishRegionClassification(ctx context.Context, evt RegionClassificationRequested) error
+	// PublishCanonicalization enqueues a distinct canonicalization job for
+	// an already-entity-extracted document, independently of edge
+	// extraction.
+	PublishCanonicalization(ctx context.Context, evt CanonicalizationRequested) error
 }
 
 // Consumer pulls jobs from the queue for processing.

@@ -14,8 +14,16 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/kunalpednekar/dumpster/internal/canonical"
+	canonicalmem "github.com/kunalpednekar/dumpster/internal/canonical/memory"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
+	"github.com/kunalpednekar/dumpster/internal/entity"
+	entitymem "github.com/kunalpednekar/dumpster/internal/entity/memory"
+	kbmem "github.com/kunalpednekar/dumpster/internal/kb/memory"
+	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
@@ -54,6 +62,10 @@ func (p *failPublisher) PublishEdgeExtraction(_ context.Context, _ queue.EdgeExt
 }
 
 func (p *failPublisher) PublishRegionClassification(_ context.Context, _ queue.RegionClassificationRequested) error {
+	return errors.New("queue unavailable")
+}
+
+func (p *failPublisher) PublishCanonicalization(_ context.Context, _ queue.CanonicalizationRequested) error {
 	return errors.New("queue unavailable")
 }
 
@@ -613,6 +625,65 @@ func TestDocDelete(t *testing.T) {
 	}
 	if _, err := docRepo.Get(context.TODO(), userID, created.ID); err == nil {
 		t.Error("expected document row to be deleted")
+	}
+}
+
+// TestDocDelete_DecrementsCanonicalEntityContribution guards the reason
+// deleting a document must reverse its canonical entity contribution before
+// its entities cascade away: DecrementForDocument's mention -> canonical
+// linkage lookup only works while the entities rows still exist.
+func TestDocDelete_DecrementsCanonicalEntityContribution(t *testing.T) {
+	kbRepo := kbmem.New()
+	docRepo := docmem.New()
+	obj := objmock.New()
+	pub := qmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+
+	deps := testDeps(kbRepo, docRepo, obj, pub)
+	deps.Canonical = canonicalRepo
+	router := NewRouter(deps)
+	userID := uuid.New()
+	ctx := context.TODO()
+
+	kb, _ := kbRepo.Create(ctx, userID, "kb1")
+	s3Key := "documents/test/canon.txt"
+	if err := obj.Put(ctx, s3Key, bytes.NewReader([]byte("x")), 1, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	created, _ := docRepo.Create(ctx, &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "canon.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusPending,
+	})
+
+	// Seed one already-canonicalized mention belonging to this document,
+	// mirroring what CanonicalizationHandler would have produced.
+	if err := entities.BulkCreate(ctx, []*entity.Entity{{
+		KBID: kb.ID, UserID: userID, DocumentID: created.ID, ChunkID: uuid.New(),
+		Type: "person", Text: "Ada",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := entities.ListByDocument(ctx, userID, created.ID)
+	resolved, err := canonicalRepo.Canonicalize(ctx, stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := entities.BulkSetCanonicalEntityID(ctx, userID, resolved); err != nil {
+		t.Fatal(err)
+	}
+	canonicalID := resolved[stored[0].ID]
+
+	req := authedRequest(t, deps, http.MethodDelete,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d, want 204 — body: %s", w.Code, w.Body)
+	}
+	if _, err := canonicalRepo.Get(ctx, userID, canonicalID); err != canonical.ErrNotFound {
+		t.Errorf("expected the canonical entity to be cleaned up once its only contributing document was deleted, got err=%v", err)
 	}
 }
 

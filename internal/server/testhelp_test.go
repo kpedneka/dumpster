@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	canonicalmem "github.com/kunalpednekar/dumpster/internal/canonical/memory"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
 	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
@@ -28,6 +29,7 @@ func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.St
 		Docs:      docRepo,
 		Objects:   obj,
 		Publisher: pub,
+		Canonical: canonicalmem.New(),
 		Searcher:  searchmock.NewSearcher(search.Result{}),
 		Inquiries: inquirymem.New(),
 		Sessions:  sessionmock.New(),
