@@ -105,6 +105,22 @@ type Config struct {
 	// been observed taking several minutes) isn't reclaimed out from under
 	// a worker still actively running it.
 	JobStaleTimeout time.Duration
+
+	// MaxCommunityGraphEntities caps how many canonical entities a KB may
+	// have before POST /kbs/{id}/communities refuses to run Louvain
+	// synchronously in the request handler. A cheap pre-check (a COUNT
+	// query) against this ceiling runs before the graph is ever built, so a
+	// pathological KB never gets far enough to risk the API process's
+	// memory. Defaults to 5000 — generous for any realistic KB under the
+	// current 20-document/32MB-each upload limits, small enough to keep
+	// worst-case memory and runtime bounded on the API's 256MB Fly VM.
+	MaxCommunityGraphEntities int
+	// CommunityDetectionTimeout bounds one POST /kbs/{id}/communities call.
+	// Backstop, not the primary guard — internal/community.Louvain polls
+	// for context cancellation between passes, so this actually stops the
+	// computation rather than just abandoning the HTTP response while it
+	// keeps running. Defaults to 30 seconds.
+	CommunityDetectionTimeout time.Duration
 }
 
 func Load() *Config {
@@ -142,6 +158,9 @@ func Load() *Config {
 		SweepInterval:          getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
 		JobStaleTimeout:        getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
 		WorkerConcurrency:      getEnvInt("WORKER_CONCURRENCY", 5),
+
+		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
+		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),
 	}
 }
 

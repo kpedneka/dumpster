@@ -247,6 +247,27 @@ components:
             $ref: "#/components/schemas/InquiryMessage"
       required: [id, messages]
 
+    CommunityResult:
+      type: object
+      description: >-
+        A knowledge base's most recent Louvain community-detection run.
+        computed_at is null when detection has never been run for this
+        knowledge base — a normal first-run state, not an error.
+      properties:
+        computed_at:
+          type: string
+          format: date-time
+          nullable: true
+        modularity:
+          type: number
+        community_count:
+          type: integer
+        node_count:
+          type: integer
+        edge_count:
+          type: integer
+      required: [computed_at, modularity, community_count, node_count, edge_count]
+
     KBPage:
       type: object
       properties:
@@ -329,6 +350,10 @@ paths:
                     type: integer
                   avg_query_duration_ms:
                     type: number
+                  sessions_created:
+                    type: integer
+                  sessions_swept:
+                    type: integer
 
   /account/status:
     get:
@@ -557,6 +582,86 @@ paths:
             Search failed before any event was streamed (e.g. retrieval
             itself failed) — a normal JSON error, since nothing has been
             written yet at this point.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/communities:
+    get:
+      summary: Get a knowledge base's most recent community-detection result
+      description: >-
+        Returns a zero-value result (null computed_at) rather than a 404
+        when community detection has never been run for this knowledge
+        base yet — that's a normal first-run state, not an error.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The knowledge base's community-detection summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommunityResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Recompute community detection over a knowledge base's entity graph
+      description: >-
+        Manually triggered, synchronous: runs Louvain community detection
+        over the canonical-entity graph and fully replaces the previous
+        result. Not run automatically on document upload/delete.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The new community-detection summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommunityResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            The knowledge base has too many canonical entities to compute
+            communities synchronously.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "504":
+          description: Community detection did not finish within the configured deadline.
           content:
             application/json:
               schema:

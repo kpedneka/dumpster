@@ -47,6 +47,22 @@ func (r *Repository) RecordQueryExecuted(_ context.Context, durationMs int64) er
 	return nil
 }
 
+// RecordSessionCreated increments the sessions-created counter.
+func (r *Repository) RecordSessionCreated(_ context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.SessionsCreated++
+	return nil
+}
+
+// RecordSessionsSwept increments the sessions-swept counter by count.
+func (r *Repository) RecordSessionsSwept(_ context.Context, count int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.snap.SessionsSwept += int64(count)
+	return nil
+}
+
 // Get returns the current site-wide totals.
 func (r *Repository) Get(_ context.Context) (stats.Snapshot, error) {
 	r.mu.Lock()

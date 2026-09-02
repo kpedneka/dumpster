@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	canonicalmem "github.com/kunalpednekar/dumpster/internal/canonical/memory"
+	communitymem "github.com/kunalpednekar/dumpster/internal/community/memory"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
 	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
@@ -26,15 +27,16 @@ import (
 // testDeps assembles a Deps with all in-memory/mock implementations.
 func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.Store, pub *qmem.Publisher) Deps {
 	return Deps{
-		KBs:       kbRepo,
-		Docs:      docRepo,
-		Objects:   obj,
-		Publisher: pub,
-		Canonical: canonicalmem.New(),
-		Searcher:  searchmock.NewSearcher(search.Result{}),
-		Inquiries: inquirymem.New(),
-		Sessions:  sessionmock.New(),
-		Stats:     statsmem.New(),
+		KBs:         kbRepo,
+		Docs:        docRepo,
+		Objects:     obj,
+		Publisher:   pub,
+		Canonical:   canonicalmem.New(),
+		Communities: communitymem.New(),
+		Searcher:    searchmock.NewSearcher(search.Result{}),
+		Inquiries:   inquirymem.New(),
+		Sessions:    sessionmock.New(),
+		Stats:       statsmem.New(),
 	}
 }
 

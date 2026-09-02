@@ -7,6 +7,7 @@ import (
 	"os"
 
 	canonicalpg "github.com/kunalpednekar/dumpster/internal/canonical/pgstore"
+	communitypg "github.com/kunalpednekar/dumpster/internal/community/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
@@ -90,19 +91,22 @@ func main() {
 	)
 
 	deps := server.Deps{
-		KBs:          kbpg.New(txRunner),
-		Docs:         docpg.New(txRunner),
-		Objects:      obj,
-		Publisher:    qpg.New(pool),
-		Manifest:     manifestpg.New(txRunner),
-		Canonical:    canonicalpg.New(txRunner),
-		Searcher:     searcher,
-		Inquiries:    inquirypg.New(txRunner),
-		Sessions:     sessionpg.New(pool),
-		Stats:        statsRepo,
-		Instruments:  instruments,
-		SPADir:       "web/dist",
-		CookieSecure: cfg.CookieSecure,
+		KBs:                       kbpg.New(txRunner),
+		Docs:                      docpg.New(txRunner),
+		Objects:                   obj,
+		Publisher:                 qpg.New(pool),
+		Manifest:                  manifestpg.New(txRunner),
+		Canonical:                 canonicalpg.New(txRunner),
+		Communities:               communitypg.New(txRunner),
+		MaxCommunityGraphEntities: cfg.MaxCommunityGraphEntities,
+		CommunityDetectionTimeout: cfg.CommunityDetectionTimeout,
+		Searcher:                  searcher,
+		Inquiries:                 inquirypg.New(txRunner),
+		Sessions:                  sessionpg.New(pool),
+		Stats:                     statsRepo,
+		Instruments:               instruments,
+		SPADir:                    "web/dist",
+		CookieSecure:              cfg.CookieSecure,
 	}
 
 	router := server.NewRouter(deps)
