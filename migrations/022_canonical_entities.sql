@@ -9,7 +9,7 @@
 CREATE TABLE canonical_entities (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     kb_id           UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id         UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     -- canonical_text is a display form (the first mention text seen for
     -- this identity); normalized_text is the matching key mentions are
     -- deduped against. The two diverge on casing/whitespace/unicode form
