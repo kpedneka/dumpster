@@ -18,6 +18,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/ratelimit"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/session"
+	"github.com/kunalpednekar/dumpster/internal/stats"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
@@ -38,6 +39,9 @@ type Deps struct {
 	// convenience layered on top, not a dependency search needs).
 	Inquiries inquiry.Repository
 	Sessions  session.SessionStore
+	// Stats is optional; when nil, the public GET /stats endpoint is not
+	// registered and query execution doesn't get recorded into it.
+	Stats stats.Repository
 	// Instruments is optional; when nil, document upload/delete metrics are
 	// not recorded.
 	Instruments    *telemetry.Instruments
@@ -61,20 +65,24 @@ type Deps struct {
 }
 
 // NewRouter constructs the application HTTP router. All routes (other than
-// /healthz and /openapi.yaml) are wrapped by anonymous session middleware,
-// which mints a new session cookie when none is present and never returns 401.
+// /healthz, /openapi.yaml, and /stats) are wrapped by anonymous session
+// middleware, which mints a new session cookie when none is present and
+// never returns 401.
 func NewRouter(deps Deps) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", healthz)
 	mux.HandleFunc("GET /openapi.yaml", serveOpenAPI)
+	if deps.Stats != nil {
+		registerStatsRoutes(mux, deps.Stats)
+	}
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
 	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Canonical, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
-		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments)
+		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments, deps.Stats)
 	}
 
 	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, authed)

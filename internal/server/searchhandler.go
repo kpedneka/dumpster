@@ -14,6 +14,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/inquiry"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/search"
+	"github.com/kunalpednekar/dumpster/internal/stats"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
@@ -23,10 +24,11 @@ type searchHandler struct {
 	searcher    search.Searcher
 	inquiryRepo inquiry.Repository     // nil disables Inquiry history persistence
 	instruments *telemetry.Instruments // nil when metrics are not configured
+	stats       stats.Repository       // nil disables durable usage-stats recording
 }
 
-func registerSearchRoutes(mux *http.ServeMux, kbRepo kb.Repository, docRepo document.Repository, searcher search.Searcher, inquiryRepo inquiry.Repository, instruments *telemetry.Instruments) {
-	h := &searchHandler{kbRepo: kbRepo, docRepo: docRepo, searcher: searcher, inquiryRepo: inquiryRepo, instruments: instruments}
+func registerSearchRoutes(mux *http.ServeMux, kbRepo kb.Repository, docRepo document.Repository, searcher search.Searcher, inquiryRepo inquiry.Repository, instruments *telemetry.Instruments, statsRepo stats.Repository) {
+	h := &searchHandler{kbRepo: kbRepo, docRepo: docRepo, searcher: searcher, inquiryRepo: inquiryRepo, instruments: instruments, stats: statsRepo}
 	mux.HandleFunc("POST /kbs/{id}/search", h.search)
 	mux.HandleFunc("GET /kbs/{id}/inquiry", h.getInquiry)
 	mux.HandleFunc("POST /kbs/{id}/inquiry/messages/{messageId}/reevaluate", h.reevaluate)
@@ -331,7 +333,9 @@ func (h *searchHandler) streamAndAnswer(w http.ResponseWriter, r *http.Request, 
 		startStream()
 		writeSSE(w, flusher, toWireEvent(e, fileNames))
 	})
-	h.recordSearchLatency(r.Context(), started)
+	elapsed := time.Since(started)
+	h.recordSearchLatency(r.Context(), elapsed)
+	h.recordQueryExecuted(r.Context(), elapsed)
 
 	if err != nil {
 		if !streamStarted {
@@ -442,11 +446,26 @@ func (h *searchHandler) fileNames(ctx context.Context, userID, kbID uuid.UUID) m
 // recordSearchLatency records SearchLatency for the full search request
 // regardless of outcome, since end-to-end latency is meaningful whether or
 // not the search ultimately succeeded.
-func (h *searchHandler) recordSearchLatency(ctx context.Context, started time.Time) {
+func (h *searchHandler) recordSearchLatency(ctx context.Context, elapsed time.Duration) {
 	if h.instruments == nil {
 		return
 	}
-	h.instruments.SearchLatency.Record(ctx, float64(time.Since(started).Microseconds())/1000)
+	h.instruments.SearchLatency.Record(ctx, float64(elapsed.Microseconds())/1000)
+}
+
+// recordQueryExecuted records this query in the durable, cross-tenant usage
+// counters (see internal/stats) — unlike SearchLatency, this survives
+// process restarts and the requesting session expiring. Recorded regardless
+// of outcome, matching recordSearchLatency, and once per completed request
+// including a re-evaluation, since that re-runs retrieval and generation in
+// full just like an original query.
+func (h *searchHandler) recordQueryExecuted(ctx context.Context, elapsed time.Duration) {
+	if h.stats == nil {
+		return
+	}
+	if err := h.stats.RecordQueryExecuted(ctx, elapsed.Milliseconds()); err != nil {
+		slog.Error("stats: record query executed failed", "err", err)
+	}
 }
 
 // sseEvent is one Server-Sent Event frame: "event: <name>\ndata: <json>\n\n".

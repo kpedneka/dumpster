@@ -15,6 +15,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
+	"github.com/kunalpednekar/dumpster/internal/stats"
 )
 
 // LayoutExtractor classifies PDF regions via the Python layered classifier
@@ -57,6 +58,18 @@ type RegionClassificationHandler struct {
 	layout    LayoutExtractor // nil for image uploads (bypassed)
 	embedder  llm.Embedder
 	publisher queue.Publisher
+	// stats, when non-nil, records a successful index into the durable,
+	// cross-tenant usage counters (see internal/stats). Optional, wired via
+	// WithStats so existing call sites keep working unmodified.
+	stats stats.Repository
+}
+
+// WithStats wires repo into h so that every document this handler
+// successfully indexes is recorded into the durable, cross-tenant usage
+// counters.
+func (h *RegionClassificationHandler) WithStats(repo stats.Repository) *RegionClassificationHandler {
+	h.stats = repo
+	return h
 }
 
 // NewRegionClassificationHandler creates a handler. layoutExtractor may be
@@ -108,6 +121,12 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 
 	if err := h.docs.UpdateStatus(ctx, job.UserID, job.DocumentID, document.StatusIndexed); err != nil {
 		return fmt.Errorf("regionhandler: mark indexed: %w", err)
+	}
+
+	if h.stats != nil {
+		if err := h.stats.RecordDocumentIndexed(ctx, doc.SizeBytes); err != nil {
+			log.Printf("regionhandler: failed to record usage stats for document %s: %v", job.DocumentID, err)
+		}
 	}
 
 	if h.publisher != nil {

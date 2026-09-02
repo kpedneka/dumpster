@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/auth"
+	"github.com/kunalpednekar/dumpster/internal/chunk"
 	chunkmem "github.com/kunalpednekar/dumpster/internal/chunk/memory"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
@@ -14,8 +15,8 @@ import (
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	queuemem "github.com/kunalpednekar/dumpster/internal/queue/memory"
+	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
 	"github.com/kunalpednekar/dumpster/internal/worker"
-	"github.com/kunalpednekar/dumpster/internal/chunk"
 )
 
 const testDims = 4
@@ -242,6 +243,63 @@ func TestDocumentHandler_Handle_NilPublisher_NoPanic(t *testing.T) {
 	ctx := auth.WithUserID(context.Background(), userID)
 
 	// No WithEntityExtractionPublisher call: publisher stays nil.
+	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), mock.NewEmbedder(testDims))
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestDocumentHandler_Handle_RecordsStatsOnIndexed(t *testing.T) {
+	docs := docmem.New()
+	objects := objmock.New()
+	chunks := chunkmem.New()
+	statsRepo := statsmem.New()
+
+	userID := uuid.New()
+	ctx := auth.WithUserID(context.Background(), userID)
+	content := makeText(50)
+	s3Key := "uploads/" + uuid.New().String()
+	doc, err := docs.Create(ctx, &document.Document{
+		KBID: uuid.New(), UserID: userID, Filename: "test.txt",
+		S3Key: s3Key, ContentType: "text/plain", SizeBytes: int64(len(content)),
+		Status: document.StatusPending,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := objects.Put(ctx, s3Key, bytes.NewReader([]byte(content)), int64(len(content)), "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	job := &queue.Job{ID: uuid.New(), DocumentID: doc.ID, UserID: userID, MaxAttempts: 3}
+
+	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), mock.NewEmbedder(testDims)).
+		WithStats(statsRepo)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	snap, err := statsRepo.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.DocumentsIndexed != 1 {
+		t.Errorf("DocumentsIndexed = %d, want 1", snap.DocumentsIndexed)
+	}
+	if snap.AvgDocumentSizeBytes != float64(len(content)) {
+		t.Errorf("AvgDocumentSizeBytes = %v, want %v", snap.AvgDocumentSizeBytes, len(content))
+	}
+}
+
+func TestDocumentHandler_Handle_NilStats_NoPanic(t *testing.T) {
+	docs := docmem.New()
+	objects := objmock.New()
+	chunks := chunkmem.New()
+
+	content := makeText(20)
+	job, userID := makeDocJob(t, docs, objects, document.StatusPending, content)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// No WithStats call: stats stays nil.
 	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), mock.NewEmbedder(testDims))
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v", err)

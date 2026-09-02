@@ -15,6 +15,7 @@ import (
 	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
+	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
 )
 
 var errFakeGeneration = errors.New("generation failed")
@@ -598,5 +599,64 @@ func TestSearch_RecordsLatencyMetric_OnError(t *testing.T) {
 	got := scrapeMetrics(t, metricsHandler)
 	if !hasHistogramCount(got, "search_latency_ms", 1) {
 		t.Errorf("expected search_latency_ms sample even on error, got:\n%s", got)
+	}
+}
+
+// TestSearch_RecordsQueryExecuted verifies a completed search is recorded
+// into the durable, cross-tenant usage counters (see internal/stats) —
+// distinct from search_latency_ms, which is in-process only and resets on
+// restart.
+func TestSearch_RecordsQueryExecuted(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	statsRepo := deps.Stats.(*statsmem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "the answer"})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"what is the answer?"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+	snap, err := statsRepo.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.QueriesExecuted != 1 {
+		t.Errorf("QueriesExecuted = %d, want 1", snap.QueriesExecuted)
+	}
+}
+
+// TestSearch_RecordsQueryExecuted_OnError verifies a search that fails still
+// counts as an executed query, matching recordSearchLatency's existing
+// regardless-of-outcome behavior.
+func TestSearch_RecordsQueryExecuted_OnError(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	statsRepo := deps.Stats.(*statsmem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewErrorSearcher("index unavailable")
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hello"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500", w.Code)
+	}
+	snap, err := statsRepo.Get(context.Background())
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.QueriesExecuted != 1 {
+		t.Errorf("QueriesExecuted = %d, want 1 even on error", snap.QueriesExecuted)
 	}
 }

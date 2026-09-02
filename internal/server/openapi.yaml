@@ -306,6 +306,30 @@ paths:
               schema:
                 type: string
 
+  /stats:
+    get:
+      summary: Site-wide usage stats
+      description: >
+        Aggregate totals across every tenant — not scoped to the caller's
+        session. Public and unauthenticated.
+      security: []
+      responses:
+        "200":
+          description: Current usage totals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents_indexed:
+                    type: integer
+                  avg_document_size_bytes:
+                    type: number
+                  queries_executed:
+                    type: integer
+                  avg_query_duration_ms:
+                    type: number
+
   /account/status:
     get:
       summary: Get the current session's expiry status

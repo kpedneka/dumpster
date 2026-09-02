@@ -17,6 +17,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
+	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
@@ -317,6 +318,52 @@ func TestRegionHandler_OnFailed_MarksDocumentFailed(t *testing.T) {
 
 func TestRegionHandler_ImplementsHandler(t *testing.T) {
 	var _ worker.Handler = (*worker.RegionClassificationHandler)(nil)
+}
+
+func TestRegionHandler_Handle_RecordsStatsOnIndexed(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+	pub := qmem.New()
+	statsRepo := statsmem.New()
+
+	job, userID := seedRegionJob(t, docs, objects, "fakeimagebytes", "image/png")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, nil, fakeEmbedder{}, pub,
+	).WithStats(statsRepo)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	snap, err := statsRepo.Get(ctx)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.DocumentsIndexed != 1 {
+		t.Errorf("DocumentsIndexed = %d, want 1", snap.DocumentsIndexed)
+	}
+}
+
+func TestRegionHandler_Handle_NilStats_NoPanic(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+	pub := qmem.New()
+
+	job, userID := seedRegionJob(t, docs, objects, "fakeimagebytes", "image/png")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// No WithStats call: stats stays nil.
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, nil, fakeEmbedder{}, pub,
+	)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
 }
 
 // Ensure layout extractor interface is satisfied by the fake.

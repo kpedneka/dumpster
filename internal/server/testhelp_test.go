@@ -20,6 +20,7 @@ import (
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 	"github.com/kunalpednekar/dumpster/internal/session"
 	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
+	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
 )
 
 // testDeps assembles a Deps with all in-memory/mock implementations.
@@ -33,6 +34,7 @@ func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.St
 		Searcher:  searchmock.NewSearcher(search.Result{}),
 		Inquiries: inquirymem.New(),
 		Sessions:  sessionmock.New(),
+		Stats:     statsmem.New(),
 	}
 }
 
