@@ -99,7 +99,9 @@ func main() {
 		docs, obj, chunks, manifestRepo, layoutExtractor, embedder, q,
 	).WithStats(statsRepo)
 	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, cfg.EntityTypes).
-		WithDownstreamPublisher(q)
+		WithDownstreamPublisher(q).
+		WithBatchSize(cfg.EntityExtractionBatchSize).
+		WithHeartbeat(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
 	canonicalizationHandler := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo)
 

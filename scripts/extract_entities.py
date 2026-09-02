@@ -50,6 +50,7 @@ does not try to recover mid-loop and keep serving.
 """
 import json
 import sys
+import time
 
 import spacy
 
@@ -121,6 +122,7 @@ def _handle_request(nlp, model, line):
     """Parses one JSON request line and returns the JSON response text
     (without a trailing newline). Isolated from main()'s I/O loop so it's
     testable with fake nlp/model objects, without a real GLiNER model."""
+    t_start = time.perf_counter()
     request = json.loads(line)
     allowed_types = request.get("allowed_types", [])
     chunks = request.get("chunks", [])
@@ -131,6 +133,7 @@ def _handle_request(nlp, model, line):
             e["chunk_id"] = c["chunk_id"]
             out_entities.append(e)
 
+    print(f"extract_entities: {len(chunks)} chunks -> {len(out_entities)} entities in {time.perf_counter() - t_start:.2f}s")
     return json.dumps({"entities": out_entities})
 
 

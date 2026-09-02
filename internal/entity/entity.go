@@ -73,6 +73,14 @@ type Repository interface {
 	// the canonical entity ID it was resolved to. Used by
 	// internal/canonical.ResolveNew once canonicalization has run.
 	BulkSetCanonicalEntityID(ctx context.Context, userID uuid.UUID, mentionToCanonical map[uuid.UUID]uuid.UUID) error
+	// ChunkIDsWithEntities returns the set of chunk IDs that currently have
+	// at least one persisted entity for documentID. Used to resume an
+	// extraction job interrupted mid-way (see EntityHandler) without
+	// re-processing chunks it already finished — a chunk that legitimately
+	// extracts zero entities is indistinguishable from one not yet
+	// processed, and gets harmlessly re-sent on retry; this is a known,
+	// accepted imprecision, not a correctness bug.
+	ChunkIDsWithEntities(ctx context.Context, userID, documentID uuid.UUID) (map[uuid.UUID]bool, error)
 }
 
 // Extractor runs entity extraction over a batch of chunks and returns the

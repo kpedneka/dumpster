@@ -115,6 +115,34 @@ func (s *Store) BulkSetCanonicalEntityID(ctx context.Context, userID uuid.UUID, 
 	return nil
 }
 
+// ChunkIDsWithEntities returns the set of chunk IDs that currently have at
+// least one persisted entity for documentID.
+func (s *Store) ChunkIDsWithEntities(ctx context.Context, userID, documentID uuid.UUID) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool)
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT DISTINCT chunk_id FROM entities WHERE document_id = $1 AND user_id = $2`,
+			documentID, userID,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			out[id] = true
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("entity: chunk ids with entities %v: %w", documentID, err)
+	}
+	return out, nil
+}
+
 // DeleteByDocument removes all entities for documentID. Re-running
 // extraction calls this first so a re-run is idempotent without touching
 // the document's chunks or embeddings.

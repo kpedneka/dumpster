@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/google/uuid"
+
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/canonical"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
@@ -12,6 +14,13 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/entity"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 )
+
+// Heartbeater is the narrow capability EntityHandler needs from the queue
+// to protect a long-running, multi-batch job from a false staleness
+// reclaim — see WithHeartbeat. queue.Consumer satisfies this.
+type Heartbeater interface {
+	Heartbeat(ctx context.Context, jobID uuid.UUID) error
+}
 
 // EntityHandler runs local entity extraction over a document's existing
 // chunks. It is a distinct job stage from DocumentHandler: it reads chunks
@@ -40,7 +49,21 @@ type EntityHandler struct {
 	// persisted. Optional so existing callers and tests that only care
 	// about entity extraction keep working unmodified.
 	publisher queue.Publisher
+	// batchSize caps how many chunks are sent to the Extractor in one call.
+	// 0 defaults to defaultEntityExtractionBatchSize.
+	batchSize int
+	// heartbeat, when non-nil, is called after each successful batch so
+	// ReclaimStale doesn't mistake a long, actively-progressing document
+	// for a stuck one — a real job was observed getting reclaimed and its
+	// attempt count burned mid-extraction despite steadily persisting
+	// progress, purely because nothing touched updated_at between batches.
+	// Optional so existing callers/tests keep working unmodified.
+	heartbeat Heartbeater
 }
+
+// defaultEntityExtractionBatchSize applies when batchSize is unset — see
+// WithBatchSize.
+const defaultEntityExtractionBatchSize = 50
 
 // NewEntityHandler creates an EntityHandler wired to the given dependencies.
 // allowedTypes is the entity type set read from config.
@@ -75,11 +98,52 @@ func (h *EntityHandler) WithDownstreamPublisher(publisher queue.Publisher) *Enti
 	return h
 }
 
+// WithBatchSize sets how many chunks are sent to the Extractor per call.
+// Bounds worst-case single-request duration regardless of document size —
+// see defaultEntityExtractionBatchSize's doc for why this matters.
+func (h *EntityHandler) WithBatchSize(n int) *EntityHandler {
+	h.batchSize = n
+	return h
+}
+
+// WithHeartbeat wires heartbeater into h so that a long, multi-batch
+// extraction keeps the job's staleness clock from firing on it while it's
+// actively making progress. See the heartbeat field's doc for why.
+func (h *EntityHandler) WithHeartbeat(heartbeater Heartbeater) *EntityHandler {
+	h.heartbeat = heartbeater
+	return h
+}
+
+func (h *EntityHandler) batchSizeOrDefault() int {
+	if h.batchSize <= 0 {
+		return defaultEntityExtractionBatchSize
+	}
+	return h.batchSize
+}
+
 // Handle runs entity extraction for one document job: it fetches the
 // document's existing chunks (without re-chunking or re-embedding them),
-// runs the configured Extractor over them, and replaces any previously
-// stored entities for that document. Replacing rather than appending makes
-// re-running extraction on an already-processed document idempotent.
+// runs the configured Extractor over them in batches (see WithBatchSize),
+// persisting each batch's results as it completes rather than accumulating
+// everything in memory until the end.
+//
+// job.Attempts distinguishes a fresh run from a retry of this same job — a
+// real, persisted counter on the job's row (see queue/pgstore.go), carried
+// through both Nack and staleness-reclaim redelivery, not reset per retry:
+//   - Attempts == 0 (first dequeue): reverses this document's prior
+//     canonical-entity contribution and wipes any entities from a previous,
+//     unrelated extraction run (e.g. before a type-set change), same as
+//     before this change — this is what makes re-running extraction on an
+//     already-processed document idempotent.
+//   - Attempts > 0 (retry of an interrupted attempt of this same job):
+//     skips the wipe and resumes, sending only the chunks that don't
+//     already have persisted entities from this job's earlier progress.
+//
+// A large document's extraction was measured taking long enough in one
+// unbatched call to exceed JOB_STALE_TIMEOUT under normal operation, no
+// deploy/restart involved — discarding all completed work on every retry.
+// Batching bounds per-request duration; per-batch persistence plus this
+// resume logic means a retry doesn't restart from zero.
 func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 	ctx = auth.WithUserID(ctx, job.UserID)
 
@@ -100,45 +164,72 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 		return nil
 	}
 
-	entities, err := h.extractor.Extract(ctx, chunks, h.allowedTypes)
+	if job.Attempts == 0 {
+		// Reverse this document's current contribution to canonical entity
+		// stats before its entity rows are replaced: canonical_entities
+		// counts are cross-document state, so the delete-and-recreate
+		// idempotency pattern below (safe for entities/edges, which are
+		// wholly owned by one document) cannot apply to them directly — a
+		// canonical row can be shared with other documents' mentions. This
+		// must happen before the delete, since the mention -> canonical
+		// linkage it reads is gone once the old rows are.
+		if err := h.canonical.DecrementForDocument(ctx, job.UserID, job.DocumentID); err != nil {
+			return fmt.Errorf("entityhandler: decrement canonical entities: %w", err)
+		}
+		// Delete any entities from a previous run before persisting the new
+		// set, so re-running extraction (e.g. after a type-set change) is
+		// idempotent and doesn't leave stale rows from the old type set
+		// around. Only on the first attempt — a retry of this same job
+		// must not wipe the partial progress it's about to resume from.
+		if err := h.entities.DeleteByDocument(ctx, job.UserID, job.DocumentID); err != nil {
+			return fmt.Errorf("entityhandler: clear existing entities: %w", err)
+		}
+	}
+
+	alreadyDone, err := h.entities.ChunkIDsWithEntities(ctx, job.UserID, job.DocumentID)
 	if err != nil {
-		return fmt.Errorf("entityhandler: extract: %w", err)
+		return fmt.Errorf("entityhandler: list chunks already extracted: %w", err)
+	}
+	remaining := make([]*chunk.Chunk, 0, len(chunks))
+	for _, c := range chunks {
+		if !alreadyDone[c.ID] {
+			remaining = append(remaining, c)
+		}
 	}
 
-	// Reverse this document's current contribution to canonical entity
-	// stats before its entity rows are replaced: canonical_entities counts
-	// are cross-document state, so the delete-and-recreate idempotency
-	// pattern below (safe for entities/edges, which are wholly owned by one
-	// document) cannot apply to them directly — a canonical row can be
-	// shared with other documents' mentions. This must happen before the
-	// delete, since the mention -> canonical linkage it reads is gone once
-	// the old rows are.
-	if err := h.canonical.DecrementForDocument(ctx, job.UserID, job.DocumentID); err != nil {
-		return fmt.Errorf("entityhandler: decrement canonical entities: %w", err)
-	}
+	batchSize := h.batchSizeOrDefault()
+	for start := 0; start < len(remaining); start += batchSize {
+		end := start + batchSize
+		if end > len(remaining) {
+			end = len(remaining)
+		}
+		batch := remaining[start:end]
 
-	// Delete any entities from a previous run before persisting the new
-	// set, so re-running extraction (e.g. after a type-set change) is
-	// idempotent and doesn't leave stale rows from the old type set
-	// around. This only touches the entities table — chunks and their
-	// embeddings are never modified here.
-	if err := h.entities.DeleteByDocument(ctx, job.UserID, job.DocumentID); err != nil {
-		return fmt.Errorf("entityhandler: clear existing entities: %w", err)
-	}
+		entities, err := h.extractor.Extract(ctx, batch, h.allowedTypes)
+		if err != nil {
+			return fmt.Errorf("entityhandler: extract: %w", err)
+		}
+		if len(entities) > 0 {
+			// The extractor is not required to populate UserID; backfill
+			// from the job so persisted rows are always correctly
+			// tenant-scoped regardless of the Extractor implementation.
+			for _, e := range entities {
+				e.UserID = job.UserID
+			}
+			if err := h.entities.BulkCreate(ctx, entities); err != nil {
+				return fmt.Errorf("entityhandler: persist entities: %w", err)
+			}
+		}
 
-	if len(entities) == 0 {
-		return nil
-	}
-
-	// The extractor is not required to populate UserID; backfill from the
-	// job so persisted rows are always correctly tenant-scoped regardless
-	// of the Extractor implementation.
-	for _, e := range entities {
-		e.UserID = job.UserID
-	}
-
-	if err := h.entities.BulkCreate(ctx, entities); err != nil {
-		return fmt.Errorf("entityhandler: persist entities: %w", err)
+		if h.heartbeat != nil {
+			if err := h.heartbeat.Heartbeat(ctx, job.ID); err != nil {
+				// A missed heartbeat risks a false staleness reclaim later,
+				// not data loss now — this batch's entities are already
+				// persisted above. Log and keep going rather than fail the
+				// whole job over an accounting write.
+				log.Printf("entityhandler: heartbeat for job %s failed: %v", job.ID, err)
+			}
+		}
 	}
 
 	// Queue the edge-extraction and canonicalization stages as distinct

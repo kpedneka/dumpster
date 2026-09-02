@@ -58,6 +58,20 @@ func (r *Repository) ListByDocument(_ context.Context, userID, documentID uuid.U
 	return out, nil
 }
 
+// ChunkIDsWithEntities returns the set of chunk IDs that currently have at
+// least one persisted entity for documentID belonging to userID.
+func (r *Repository) ChunkIDsWithEntities(_ context.Context, userID, documentID uuid.UUID) (map[uuid.UUID]bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[uuid.UUID]bool)
+	for _, e := range r.rows {
+		if e.UserID == userID && e.DocumentID == documentID {
+			out[e.ChunkID] = true
+		}
+	}
+	return out, nil
+}
+
 // DeleteByDocument removes all entities for documentID belonging to userID.
 func (r *Repository) DeleteByDocument(_ context.Context, userID, documentID uuid.UUID) error {
 	r.mu.Lock()

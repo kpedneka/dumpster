@@ -121,6 +121,15 @@ type Config struct {
 	// computation rather than just abandoning the HTTP response while it
 	// keeps running. Defaults to 30 seconds.
 	CommunityDetectionTimeout time.Duration
+
+	// EntityExtractionBatchSize caps how many chunks EntityHandler sends to
+	// the inference service's /entities endpoint in one request. Bounds
+	// worst-case single-request duration regardless of document size —
+	// a document with hundreds of chunks sent in one unbatched call was
+	// measured taking long enough to exceed JOB_STALE_TIMEOUT under normal
+	// operation, no deploy/restart involved (see the production ingestion
+	// incident writeup). Defaults to 50.
+	EntityExtractionBatchSize int
 }
 
 func Load() *Config {
@@ -161,6 +170,8 @@ func Load() *Config {
 
 		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
 		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),
+
+		EntityExtractionBatchSize: getEnvInt("ENTITY_EXTRACTION_BATCH_SIZE", 50),
 	}
 }
 

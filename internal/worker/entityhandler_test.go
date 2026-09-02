@@ -3,6 +3,7 @@ package worker_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -300,6 +301,236 @@ func TestEntityHandler_NilPublisher_NoEdgePublish(t *testing.T) {
 
 func TestEntityHandler_ImplementsHandler(t *testing.T) {
 	var _ worker.Handler = (*worker.EntityHandler)(nil)
+}
+
+// TestEntityHandler_Handle_BatchesLargeChunkSets verifies chunks are sent
+// to the Extractor in batches of at most WithBatchSize, not all at once —
+// the fix for a large document's extraction taking long enough in one
+// unbatched call to exceed JOB_STALE_TIMEOUT under normal operation.
+func TestEntityHandler_Handle_BatchesLargeChunkSets(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	job, userID := seedEntityJob(t, docs, chunks, 7)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	var batchSizes []int
+	extractor := entitymock.New()
+	extractor.ExtractFn = func(_ context.Context, batch []*chunk.Chunk, _ []entity.Type) ([]*entity.Entity, error) {
+		batchSizes = append(batchSizes, len(batch))
+		return nil, nil
+	}
+
+	h := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, []string{"person"}).
+		WithBatchSize(3)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	want := []int{3, 3, 1}
+	if len(batchSizes) != len(want) {
+		t.Fatalf("Extract call count: got %d %v, want %d %v", len(batchSizes), batchSizes, len(want), want)
+	}
+	for i := range want {
+		if batchSizes[i] != want[i] {
+			t.Errorf("batch %d size: got %d, want %d", i, batchSizes[i], want[i])
+		}
+	}
+}
+
+// TestEntityHandler_Handle_PersistsPerBatch verifies entities from an
+// earlier batch are persisted even when a later batch fails — proving
+// persistence happens incrementally, not accumulated in memory and written
+// only after every batch succeeds (which would lose everything on a
+// mid-document failure, same as the pre-fix unbatched behavior).
+func TestEntityHandler_Handle_PersistsPerBatch(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	job, userID := seedEntityJob(t, docs, chunks, 4)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	storedChunks, err := chunks.ListByDocument(ctx, userID, job.DocumentID)
+	if err != nil || len(storedChunks) != 4 {
+		t.Fatalf("setup: expected 4 chunks, got %d (err: %v)", len(storedChunks), err)
+	}
+
+	callCount := 0
+	extractor := entitymock.New()
+	extractor.ExtractFn = func(_ context.Context, batch []*chunk.Chunk, _ []entity.Type) ([]*entity.Entity, error) {
+		callCount++
+		if callCount == 2 {
+			return nil, errors.New("inference service unavailable")
+		}
+		out := make([]*entity.Entity, len(batch))
+		for i, c := range batch {
+			out[i] = &entity.Entity{DocumentID: job.DocumentID, KBID: c.KBID, ChunkID: c.ID, Type: "person", Text: "X", Start: 0, End: 1}
+		}
+		return out, nil
+	}
+
+	h := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, []string{"person"}).
+		WithBatchSize(2)
+	if err := h.Handle(ctx, job); err == nil {
+		t.Fatal("expected an error from the second batch")
+	}
+
+	got, err := entities.ListByDocument(ctx, userID, job.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("entities persisted from the first (successful) batch: got %d, want 2", len(got))
+	}
+}
+
+// TestEntityHandler_Handle_RetryResumesWithoutWipingOrReprocessing is the
+// core regression test for the resume logic: a retry (Attempts > 0) of a
+// job interrupted mid-document must not wipe entities already persisted by
+// its earlier attempt, and must only send the still-unprocessed chunks to
+// the Extractor — not the whole document again.
+func TestEntityHandler_Handle_RetryResumesWithoutWipingOrReprocessing(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	job, userID := seedEntityJob(t, docs, chunks, 4)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// First attempt (Attempts == 0): batch 1 succeeds, batch 2 fails,
+	// simulating an interruption partway through the document.
+	callCount := 0
+	firstExtractor := entitymock.New()
+	firstExtractor.ExtractFn = func(_ context.Context, batch []*chunk.Chunk, _ []entity.Type) ([]*entity.Entity, error) {
+		callCount++
+		if callCount == 2 {
+			return nil, errors.New("interrupted")
+		}
+		out := make([]*entity.Entity, len(batch))
+		for i, c := range batch {
+			out[i] = &entity.Entity{DocumentID: job.DocumentID, KBID: c.KBID, ChunkID: c.ID, Type: "person", Text: "X", Start: 0, End: 1}
+		}
+		return out, nil
+	}
+	h1 := worker.NewEntityHandler(docs, chunks, entities, firstExtractor, canonicalRepo, []string{"person"}).
+		WithBatchSize(2)
+	if err := h1.Handle(ctx, job); err == nil {
+		t.Fatal("expected the first attempt to fail on its second batch")
+	}
+	afterFirstAttempt, _ := entities.ListByDocument(ctx, userID, job.DocumentID)
+	if len(afterFirstAttempt) != 2 {
+		t.Fatalf("entities after interrupted first attempt: got %d, want 2", len(afterFirstAttempt))
+	}
+
+	// Retry: same document, Attempts incremented — mirrors what Nack/
+	// ReclaimStale redelivery actually does to the job row.
+	retryJob := &queue.Job{ID: job.ID, Type: job.Type, DocumentID: job.DocumentID, UserID: job.UserID, Attempts: 1, MaxAttempts: job.MaxAttempts}
+
+	var sentChunkIDs []uuid.UUID
+	retryExtractor := entitymock.New()
+	retryExtractor.ExtractFn = func(_ context.Context, batch []*chunk.Chunk, _ []entity.Type) ([]*entity.Entity, error) {
+		out := make([]*entity.Entity, len(batch))
+		for i, c := range batch {
+			sentChunkIDs = append(sentChunkIDs, c.ID)
+			out[i] = &entity.Entity{DocumentID: job.DocumentID, KBID: c.KBID, ChunkID: c.ID, Type: "person", Text: "Y", Start: 0, End: 1}
+		}
+		return out, nil
+	}
+	h2 := worker.NewEntityHandler(docs, chunks, entities, retryExtractor, canonicalRepo, []string{"person"}).
+		WithBatchSize(2)
+	if err := h2.Handle(ctx, retryJob); err != nil {
+		t.Fatalf("retry Handle: %v", err)
+	}
+
+	if len(sentChunkIDs) != 2 {
+		t.Fatalf("chunks sent to Extract on retry: got %d %v, want 2 (only the unprocessed ones)", len(sentChunkIDs), sentChunkIDs)
+	}
+	for _, id := range sentChunkIDs {
+		for _, done := range afterFirstAttempt {
+			if done.ChunkID == id {
+				t.Errorf("retry re-sent chunk %v, which already had a persisted entity from the first attempt", id)
+			}
+		}
+	}
+
+	final, _ := entities.ListByDocument(ctx, userID, job.DocumentID)
+	if len(final) != 4 {
+		t.Fatalf("final entity count: got %d, want 4 (2 from first attempt + 2 from retry, none lost or duplicated)", len(final))
+	}
+}
+
+// stubHeartbeater is a test double for worker.Heartbeater.
+type stubHeartbeater struct {
+	mu  sync.Mutex
+	ids []uuid.UUID
+}
+
+func (h *stubHeartbeater) Heartbeat(_ context.Context, jobID uuid.UUID) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ids = append(h.ids, jobID)
+	return nil
+}
+
+// TestEntityHandler_Handle_HeartbeatsPerBatch is the regression test for a
+// gap found live: a long, multi-batch extraction kept getting reclaimed as
+// stale — its attempt count burned — despite steadily persisting progress,
+// because nothing touched the job row's updated_at between batches.
+// WithHeartbeat must fire once per successfully persisted batch.
+func TestEntityHandler_Handle_HeartbeatsPerBatch(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	job, userID := seedEntityJob(t, docs, chunks, 7)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	extractor := entitymock.New()
+	extractor.ExtractFn = func(_ context.Context, batch []*chunk.Chunk, _ []entity.Type) ([]*entity.Entity, error) {
+		out := make([]*entity.Entity, len(batch))
+		for i, c := range batch {
+			out[i] = &entity.Entity{DocumentID: job.DocumentID, KBID: c.KBID, ChunkID: c.ID, Type: "person", Text: "X", Start: 0, End: 1}
+		}
+		return out, nil
+	}
+	heartbeats := &stubHeartbeater{}
+	h := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, []string{"person"}).
+		WithBatchSize(3).
+		WithHeartbeat(heartbeats)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	// 7 chunks at batch size 3 -> 3 batches (3, 3, 1) -> 3 heartbeats, all
+	// for this job.
+	if len(heartbeats.ids) != 3 {
+		t.Fatalf("heartbeat calls: got %d, want 3", len(heartbeats.ids))
+	}
+	for _, id := range heartbeats.ids {
+		if id != job.ID {
+			t.Errorf("heartbeat called with job %v, want %v", id, job.ID)
+		}
+	}
+}
+
+// TestEntityHandler_Handle_NilHeartbeat_NoPanic confirms WithHeartbeat is
+// genuinely optional.
+func TestEntityHandler_Handle_NilHeartbeat_NoPanic(t *testing.T) {
+	docs := docmem.New()
+	chunks := chunkmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	job, userID := seedEntityJob(t, docs, chunks, 1)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	extractor := entitymock.NewFixed([]*entity.Entity{{Type: "person", Text: "Ada", Start: 0, End: 3}})
+	// No WithHeartbeat call: heartbeat stays nil.
+	h := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, []string{"person"})
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
 }
 
 // TestEntityHandler_Handle_DecrementsCanonicalStatsBeforeReplacingEntities

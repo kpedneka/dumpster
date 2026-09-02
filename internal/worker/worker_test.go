@@ -28,10 +28,18 @@ type stubConsumer struct {
 	ackedIDs         []uuid.UUID
 	nackedIDs        []uuid.UUID
 	deadLetterOnNack bool
+	heartbeatIDs     []uuid.UUID
 	// lastNackCtxErr captures ctx.Err() as observed by the most recent Nack
 	// call — used to prove Nack is invoked with a live context even when
 	// the job's own ctx was already cancelled by the time Handle returned.
 	lastNackCtxErr error
+}
+
+func (c *stubConsumer) Heartbeat(_ context.Context, jobID uuid.UUID) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.heartbeatIDs = append(c.heartbeatIDs, jobID)
+	return nil
 }
 
 func (c *stubConsumer) Dequeue(_ context.Context) (*queue.Job, error) {
