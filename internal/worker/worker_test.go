@@ -28,6 +28,10 @@ type stubConsumer struct {
 	ackedIDs         []uuid.UUID
 	nackedIDs        []uuid.UUID
 	deadLetterOnNack bool
+	// lastNackCtxErr captures ctx.Err() as observed by the most recent Nack
+	// call — used to prove Nack is invoked with a live context even when
+	// the job's own ctx was already cancelled by the time Handle returned.
+	lastNackCtxErr error
 }
 
 func (c *stubConsumer) Dequeue(_ context.Context) (*queue.Job, error) {
@@ -48,10 +52,11 @@ func (c *stubConsumer) Ack(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
-func (c *stubConsumer) Nack(_ context.Context, id uuid.UUID, _ error) (bool, error) {
+func (c *stubConsumer) Nack(ctx context.Context, id uuid.UUID, _ error) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nackedIDs = append(c.nackedIDs, id)
+	c.lastNackCtxErr = ctx.Err()
 	return c.deadLetterOnNack, nil
 }
 
@@ -147,6 +152,49 @@ func TestWorker_NacksOnHandlerError(t *testing.T) {
 	}
 	if len(handler.failedJobs) != 0 {
 		t.Errorf("OnFailed should not be called when not dead-lettered")
+	}
+}
+
+// cancelingHandler simulates a shutdown signal (e.g. a deploy's SIGTERM)
+// arriving mid-Handle: it cancels the worker's own ctx itself before
+// returning an error, exactly what happens when Run's ctx (passed straight
+// through to Handle) gets cancelled while a job is in flight.
+type cancelingHandler struct {
+	cancel context.CancelFunc
+	err    error
+}
+
+func (h *cancelingHandler) Handle(_ context.Context, _ *queue.Job) error {
+	h.cancel()
+	return h.err
+}
+
+func (h *cancelingHandler) OnFailed(_ context.Context, _ *queue.Job) {}
+
+// TestWorker_RecordsOutcomeAfterShutdownDuringHandle is a regression test:
+// a job interrupted by the worker's shutdown context must still get a
+// successful Nack recording the failure, not have that Nack call fail too
+// because it reused the now-cancelled ctx. Before this fix, reusing ctx for
+// outcome-recording meant a job caught mid-Handle by a deploy's SIGTERM
+// would sit stuck in "processing" — nothing recorded the interruption —
+// invisible until the 15-minute stale-job reclaim eventually caught it,
+// rather than being promptly requeued.
+func TestWorker_RecordsOutcomeAfterShutdownDuringHandle(t *testing.T) {
+	job := &queue.Job{ID: uuid.New(), DocumentID: uuid.New(), UserID: uuid.New()}
+	consumer := &stubConsumer{jobs: []*queue.Job{job}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler := &cancelingHandler{cancel: cancel, err: errors.New("interrupted by shutdown")}
+
+	w := worker.New(consumer, handler, worker.Config{PollInterval: 10 * time.Millisecond})
+	_ = w.Run(ctx)
+
+	if len(consumer.nackedIDs) != 1 || consumer.nackedIDs[0] != job.ID {
+		t.Fatalf("expected Nack(%s) even though ctx was cancelled during Handle, got %v", job.ID, consumer.nackedIDs)
+	}
+	if consumer.lastNackCtxErr != nil {
+		t.Errorf("Nack was called with an already-Done context (err=%v) — outcome recording must use a fresh context, not the cancelled shutdown one", consumer.lastNackCtxErr)
 	}
 }
 

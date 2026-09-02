@@ -143,38 +143,58 @@ func (w *Worker) runLoop(ctx context.Context) error {
 	}
 }
 
+// resolutionTimeout bounds the fresh context process derives for recording
+// a job's outcome (Ack/Nack/OnFailed) once Handle has returned or the
+// no-handler-registered case is detected — see process for why this can't
+// just reuse ctx. Generous for one DB write; short enough not to hang
+// shutdown indefinitely.
+const resolutionTimeout = 10 * time.Second
+
 func (w *Worker) process(ctx context.Context, job *queue.Job, started time.Time) {
 	handler, ok := w.handlers[job.Type]
+
+	var handleErr error
 	if !ok {
+		handleErr = errors.New("worker: no handler for job type " + string(job.Type))
 		log.Printf("worker: no handler registered for job %s type %q; nacking", job.ID, job.Type)
-		deadLettered, nackErr := w.consumer.Nack(ctx, job.ID, errors.New("worker: no handler for job type "+string(job.Type)))
-		if nackErr != nil {
-			log.Printf("worker: nack %s: %v", job.ID, nackErr)
-			return
-		}
-		w.recordResolution(ctx, started, "failure", deadLettered)
-		return
+	} else {
+		handleErr = handler.Handle(ctx, job)
 	}
 
-	if err := handler.Handle(ctx, job); err != nil {
-		log.Printf("worker: job %s failed (attempt %d/%d): %v", job.ID, job.Attempts+1, job.MaxAttempts, err)
-		deadLettered, nackErr := w.consumer.Nack(ctx, job.ID, err)
+	// From here on, record the outcome on a fresh, short-lived context
+	// rather than ctx: ctx is the worker process's shutdown context (see
+	// cmd/worker/main.go's signal.NotifyContext), and a job interrupted by
+	// a shutdown signal (e.g. mid-deploy) arrives here with ctx already
+	// cancelled. Reusing it for Nack/Ack would make those calls fail too —
+	// for the exact same reason Handle itself just failed — leaving the
+	// job stuck in "processing" with nothing in the DB reflecting the
+	// interruption, invisible until the 15-minute stale-job reclaim
+	// eventually notices. An independent context lets the outcome actually
+	// get recorded even when shutdown is the reason Handle failed.
+	resolveCtx, cancel := context.WithTimeout(context.Background(), resolutionTimeout)
+	defer cancel()
+
+	if handleErr != nil {
+		if ok {
+			log.Printf("worker: job %s failed (attempt %d/%d): %v", job.ID, job.Attempts+1, job.MaxAttempts, handleErr)
+		}
+		deadLettered, nackErr := w.consumer.Nack(resolveCtx, job.ID, handleErr)
 		if nackErr != nil {
 			log.Printf("worker: nack %s: %v", job.ID, nackErr)
 			return
 		}
-		w.recordResolution(ctx, started, "failure", deadLettered)
-		if deadLettered {
+		w.recordResolution(resolveCtx, started, "failure", deadLettered)
+		if deadLettered && ok {
 			log.Printf("worker: job %s dead-lettered after %d attempts", job.ID, job.MaxAttempts)
-			handler.OnFailed(ctx, job)
+			handler.OnFailed(resolveCtx, job)
 		}
 		return
 	}
-	if err := w.consumer.Ack(ctx, job.ID); err != nil {
+	if err := w.consumer.Ack(resolveCtx, job.ID); err != nil {
 		log.Printf("worker: ack %s: %v", job.ID, err)
 		return
 	}
-	w.recordResolution(ctx, started, "success", false)
+	w.recordResolution(resolveCtx, started, "success", false)
 }
 
 // recordResolution records JobDuration for a job that has just been resolved
