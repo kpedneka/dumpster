@@ -127,6 +127,14 @@ type Consumer interface {
 	// job is rescheduled with exponential backoff and the function returns
 	// (false, nil).
 	Nack(ctx context.Context, jobID uuid.UUID, reason error) (deadLettered bool, err error)
+	// Heartbeat touches jobID's updated_at so ReclaimStale doesn't mistake
+	// a job that's actively making progress for one that's stuck. Intended
+	// for a long-running Handle call that internally makes incremental
+	// progress (e.g. EntityHandler's per-batch persistence) to call between
+	// steps — without it, a job whose total processing time exceeds
+	// JOB_STALE_TIMEOUT gets reclaimed and its attempt count burned even
+	// though nothing was actually wrong with it.
+	Heartbeat(ctx context.Context, jobID uuid.UUID) error
 }
 
 // Queue combines publishing and consuming into a single interface.

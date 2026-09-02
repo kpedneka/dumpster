@@ -157,6 +157,15 @@ func (s *Store) Ack(ctx context.Context, jobID uuid.UUID) error {
 	return nil
 }
 
+// Heartbeat touches jobID's updated_at so ReclaimStale doesn't treat active
+// progress as staleness.
+func (s *Store) Heartbeat(ctx context.Context, jobID uuid.UUID) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE jobs SET updated_at = NOW() WHERE id = $1`, jobID); err != nil {
+		return fmt.Errorf("queue: heartbeat %s: %w", jobID, err)
+	}
+	return nil
+}
+
 // Nack records a processing failure. On the final attempt the job is
 // dead-lettered (status = 'failed') and the function returns (true, nil).
 // Otherwise the job is rescheduled with exponential backoff and returns

@@ -31,6 +31,7 @@ import json
 import resource
 import sys
 import tempfile
+import time
 import os
 
 
@@ -95,11 +96,32 @@ def _unstructured_bbox(element, page_width, page_height):
 
 
 def extract_regions(pdf_bytes):
-    """Main extraction logic: runs layers 1 (pdfplumber) and 2 (unstructured)
-    and returns a list of region dicts ready for JSON serialisation."""
+    """Main extraction logic: unstructured.io (single pass) for text and
+    figure/scan classification, pdfplumber (scoped to tables only) for
+    structured table extraction, and returns a list of region dicts ready
+    for JSON serialisation.
+
+    This used to run pdfplumber and unstructured.io as two fully
+    independent parses of the same document -- pdfplumber for native
+    text+tables, unstructured only for whatever pdfplumber found nothing
+    for -- out of an unmeasured assumption that pdfplumber's extraction was
+    meaningfully higher-fidelity. Measured directly against a real 412-page
+    PDF (see the production ingestion incident writeup): unstructured's
+    "fast" strategy text output had 99.9% word-level coverage against
+    pdfplumber's -- the caution was unfounded for text, so pdfplumber is no
+    longer used for it, cutting this down to one parse for that content.
+    The same measurement found unstructured's "fast" strategy returns ZERO
+    Table elements where pdfplumber found 21 tables (323 cells) on that
+    same document -- a real, confirmed gap, not a minor quality
+    difference -- so pdfplumber is kept, scoped specifically to
+    extract_tables().
+    """
+    t_start = time.perf_counter()
     pdfplumber, partition_pdf, Image = _load_libs()
 
     regions = []
+    page_count = 0
+    text_types = ("Text", "NarrativeText", "Title", "ListItem", "Header", "Footer", "UncategorizedText")
 
     # Write PDF to a temp file; unstructured needs a file path.
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
@@ -107,29 +129,41 @@ def extract_regions(pdf_bytes):
         tmp_path = tmp.name
 
     try:
+        # Text + figure/scan classification: one parse via unstructured.
+        # "fast" strategy avoids heavy model dependencies on CPU-only workers.
+        t_text_start = time.perf_counter()
+        elements = partition_pdf(tmp_path, strategy="fast", include_page_breaks=False)
+        t_text_end = time.perf_counter()
+        print(f"extract_regions: unstructured (strategy=fast) in {t_text_end - t_text_start:.2f}s, {len(elements)} elements")
+
+        # Group text-family elements by page so each page becomes one
+        # native_text region, matching the shape pdfplumber's per-page
+        # extract_text() used to produce -- downstream (chunking) has no
+        # reason to know the extraction source changed.
+        page_text = {}
+        for el in elements:
+            if type(el).__name__ in text_types:
+                page_num = getattr(el.metadata, "page_number", 1) or 1
+                page_text.setdefault(page_num, []).append(str(el))
+        for page_num in sorted(page_text):
+            text = "\n".join(page_text[page_num]).strip()
+            if text:
+                regions.append({
+                    "region_type": "native_text",
+                    "page_number": page_num,
+                    "bbox": [0.0, 0.0, 1.0, 1.0],  # whole-page text region
+                    "text": text,
+                    "image_base64": "",
+                    "needs_vlm": "",
+                })
+
+        # Tables: pdfplumber, scoped to extract_tables() only -- the one
+        # capability with a confirmed fidelity gap (see docstring above).
+        t_tables_start = time.perf_counter()
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            page_count = len(pdf.pages)
             for page_idx, page in enumerate(pdf.pages):
                 page_num = page_idx + 1
-                pw, ph = page.width or 1, page.height or 1
-
-                # Layer 1a: native text blocks.
-                for block in page.extract_words(use_text_flow=True, keep_blank_chars=False) or []:
-                    # Collapse individual words into larger blocks via crop approach.
-                    # Use chars instead for block-level grouping.
-                    pass
-                # Simpler: use extract_text_lines if available, else full page text.
-                text = page.extract_text()
-                if text and text.strip():
-                    regions.append({
-                        "region_type": "native_text",
-                        "page_number": page_num,
-                        "bbox": [0.0, 0.0, 1.0, 1.0],  # whole-page text region
-                        "text": text.strip(),
-                        "image_base64": "",
-                        "needs_vlm": "",
-                    })
-
-                # Layer 1b: native tables.
                 for table in page.extract_tables() or []:
                     rows = []
                     for row in table:
@@ -144,16 +178,17 @@ def extract_regions(pdf_bytes):
                             "image_base64": "",
                             "needs_vlm": "",
                         })
+        t_tables_end = time.perf_counter()
+        print(f"extract_regions: pdfplumber tables-only, {page_count} pages in {t_tables_end - t_tables_start:.2f}s")
 
-        # Layer 2: layout segmentation via unstructured for non-text elements.
-        # Use "fast" strategy to avoid heavy model dependencies on CPU-only workers.
-        elements = partition_pdf(tmp_path, strategy="fast", include_page_breaks=False)
+        # Figures / tables unstructured found that pdfplumber's dedicated
+        # extraction didn't -- from the same unstructured pass above, no
+        # second parse.
         for el in elements:
             el_type = type(el).__name__
             page_num = getattr(el.metadata, "page_number", 1) or 1
 
-            # Skip elements already captured as native text/tables above.
-            if el_type in ("Text", "NarrativeText", "Title", "ListItem", "Header", "Footer"):
+            if el_type in text_types:
                 continue
             if el_type == "Table":
                 # Only include if pdfplumber didn't already get it.
@@ -190,6 +225,7 @@ def extract_regions(pdf_bytes):
         except OSError:
             pass
 
+    print(f"extract_regions: total {time.perf_counter() - t_start:.2f}s for {page_count} pages, {len(regions)} regions, peak_rss={_peak_rss_kb()}KB")
     return regions
 
 
