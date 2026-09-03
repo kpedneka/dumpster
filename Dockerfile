@@ -42,14 +42,8 @@ COPY --from=web-builder /app/web/dist /app/web/dist
 # (a GLiNER dependency) does not publish musl/Alpine wheels, so installing
 # it there forces pip to compile from source or fail outright.
 FROM python:3.11-slim AS inference
-# libgl1/libglib2.0-0/libsm6/libxext6/libxrender1/libxcb1: opencv-python (a
-# transitive dependency of unstructured[pdf], via its PDF/image pipeline)
-# dlopen()s these X11/GL libraries at import time. python:3.11-slim doesn't
-# ship them, so extract_regions.py crashes with "ImportError: libxcb.so.1:
-# cannot open shared object file" the moment it imports unstructured.partition.pdf.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates tzdata \
-    libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # requirements.txt copied and installed before the rest of scripts/ so an
