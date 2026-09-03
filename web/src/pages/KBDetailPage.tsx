@@ -913,9 +913,9 @@ export function KBDetailPage() {
 }
 
 // ExploreSection surfaces KB-wide structure derived from the entity graph —
-// today just community detection (A2); A3 (theme labels) and A4 (graph
-// visualization) add their own buttons here later, both building on the
-// same Louvain computation this triggers rather than duplicating it.
+// today just community detection; theme labels and graph visualization add
+// their own buttons here later, both building on the same Louvain
+// computation this triggers rather than duplicating it.
 function ExploreSection({ kbId }: { kbId: string }) {
   const queryClient = useQueryClient()
 
