@@ -13,8 +13,11 @@ Endpoints:
                        reimplemented.
   POST /regions      — same request/response contract as extract_regions.py's
                        stdin/stdout protocol (see that file's docstring).
-                       Logic is reused verbatim via extract_regions() and
-                       _peak_rss_kb(), not reimplemented.
+                       Runs in a separate, memory-capped child process per
+                       call via extract_regions_isolated(), not directly in
+                       this one — see that function's docstring. At most
+                       REGIONS_MAX_CONCURRENCY (default 1) calls run at
+                       once — see _REGIONS_SEMAPHORE's comment.
   POST /embeddings  — new: {"texts": [...], "is_query": bool} ->
                        {"embeddings": [[...], ...], "dims": int}
   GET  /healthz      — 200 only once all three models have finished loading;
@@ -33,8 +36,10 @@ duration. See each handler's inline comment for the specifics.
 
 Run with: uvicorn inference_service:app --host 0.0.0.0 --port 8000
 """
+import asyncio
 import base64
 import json
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -48,6 +53,19 @@ import extract_regions
 
 _pipelines = {}
 _REQUIRED_PIPELINES = ("nlp", "entity_model", "embed_model")
+
+# Caps how many /regions requests run their extract_regions() call at once.
+# A single large PDF's table extraction has been measured peaking at ~3.1GB
+# RSS on its own (a 412-page document); this process's whole memory budget
+# is 4096mb in production (see fly.inference.toml — that comment's "~1.3GB
+# headroom" figure predates this measurement and is already stale). Two such
+# requests running concurrently is what actually took the process down
+# during local testing, not raw CPU/RAM scarcity — nothing here queued or
+# rejected the second request, so both ran at once and stacked their peaks.
+# Defaults to 1: on the current memory budget, running even two large PDFs
+# concurrently isn't safe. Override via REGIONS_MAX_CONCURRENCY once a real
+# per-request memory budget justifies raising it.
+_REGIONS_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("REGIONS_MAX_CONCURRENCY", "1")))
 
 
 @asynccontextmanager
@@ -133,9 +151,26 @@ async def regions(request: Request):
     # See the matching comment in /entities above: PDF layout classification
     # is the heaviest call in this whole service (can run for seconds to
     # tens of seconds on a large document) and must not run directly on the
-    # event loop.
-    region_list = await run_in_threadpool(extract_regions.extract_regions, pdf_bytes)
-    return {"regions": region_list, "peak_rss_kb": extract_regions._peak_rss_kb()}
+    # event loop. The semaphore acquire below queues this request behind any
+    # already-running /regions call rather than letting both run at once —
+    # see _REGIONS_SEMAPHORE's comment for why. A queued request just waits;
+    # the caller (internal/manifest/layout, called from a queue job with its
+    # own retry/backoff and stale-job reclaim as backstops) doesn't need any
+    # special handling for that.
+    #
+    # extract_regions_isolated, not extract_regions directly: the actual
+    # extraction runs in a separate, memory-capped child process (see its
+    # docstring). The semaphore above bounds how many such requests run at
+    # once; this bounds how much memory any single one can use — the two
+    # are complementary, not redundant. A document that blows past its
+    # child's memory limit fails cleanly here (500) instead of taking this
+    # whole process, and every other in-flight request, down with it.
+    async with _REGIONS_SEMAPHORE:
+        try:
+            result = await run_in_threadpool(extract_regions.extract_regions_isolated, pdf_bytes)
+        except RuntimeError as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
+    return {"regions": result["regions"], "peak_rss_kb": result["peak_rss_kb"]}
 
 
 class EmbedRequest(BaseModel):

@@ -4,6 +4,7 @@ Mocks all three model-loading functions so this runs fast without the real
 GLiNER/pymupdf/sentence-transformers dependencies installed. Run with:
     python3 -m unittest scripts/test_inference_service.py
 """
+import asyncio
 import base64
 import json
 import time
@@ -101,18 +102,35 @@ class RegionsEndpointTests(InferenceServiceTestCase):
 
     def test_success_decodes_and_extracts(self):
         fake_regions = [{"region_type": "native_text", "page_number": 1}]
+        fake_result = {"regions": fake_regions, "peak_rss_kb": 456}
         with mock.patch.object(
-            inference_service.extract_regions, "extract_regions", return_value=fake_regions
-        ) as extract, mock.patch.object(
-            inference_service.extract_regions, "_peak_rss_kb", return_value=456
-        ):
+            inference_service.extract_regions, "extract_regions_isolated", return_value=fake_result
+        ) as extract:
             resp = self.client.post(
                 "/regions", json={"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
             )
 
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.json(), {"regions": fake_regions, "peak_rss_kb": 456})
+        self.assertEqual(resp.json(), fake_result)
         extract.assert_called_once_with(b"fake pdf bytes")
+
+    def test_extraction_failure_returns_500_not_a_crash(self):
+        # extract_regions_isolated raises RuntimeError for anything the
+        # isolated child couldn't recover from (its own memory limit,
+        # a crash, a timeout, or being killed outright) — confirms the
+        # endpoint turns that into a clean response instead of a 500 with
+        # a leaked stack trace, or worse, an unhandled exception.
+        with mock.patch.object(
+            inference_service.extract_regions,
+            "extract_regions_isolated",
+            side_effect=RuntimeError("region extraction exceeded the 1536MB memory limit"),
+        ):
+            resp = self.client.post(
+                "/regions", json={"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
+            )
+
+        self.assertEqual(resp.status_code, 500)
+        self.assertIn("memory limit", resp.json()["error"])
 
     def test_malformed_json_returns_400(self):
         resp = self.client.post("/regions", content=b"not json", headers={"Content-Type": "application/json"})
@@ -159,14 +177,24 @@ class ConcurrencyTests(InferenceServiceTestCase):
     genuinely overlap in wall-clock time rather than one waiting for the
     other's synchronous call to complete first."""
 
-    def test_regions_does_not_block_a_concurrent_regions_request(self):
+    def test_regions_serializes_concurrent_regions_requests_by_default(self):
+        # Two large PDFs' /regions calls running at once is what actually
+        # OOM-killed this process during local testing — a single one has
+        # been measured peaking at ~3.1GB RSS on its own, well past what's
+        # safe to double up within this process's memory budget. This is the
+        # opposite assertion from before _REGIONS_SEMAPHORE existed: back
+        # then, concurrent /regions calls running concurrently (not serially)
+        # was the fix for a different incident (see the class docstring).
+        # Both are true at once: /regions no longer blocks unrelated
+        # endpoints (still tested below), but does now queue behind another
+        # /regions call specifically, on purpose.
         def slow_extract(_pdf_bytes):
             time.sleep(0.2)
-            return []
+            return {"regions": [], "peak_rss_kb": 1}
 
         with mock.patch.object(
-            inference_service.extract_regions, "extract_regions", side_effect=slow_extract
-        ), mock.patch.object(inference_service.extract_regions, "_peak_rss_kb", return_value=1):
+            inference_service.extract_regions, "extract_regions_isolated", side_effect=slow_extract
+        ):
             body = {"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
             started = time.monotonic()
             with ThreadPoolExecutor(max_workers=2) as pool:
@@ -176,11 +204,33 @@ class ConcurrencyTests(InferenceServiceTestCase):
 
         for resp in responses:
             self.assertEqual(resp.status_code, 200)
-        # Two 0.2s extractions running concurrently should take close to
-        # 0.2s total. Before dispatching via run_in_threadpool, the second
-        # request couldn't even start until the first's direct, synchronous
-        # call returned, so this would take closer to 0.4s.
-        self.assertLess(elapsed, 0.35, "requests ran serially, not concurrently")
+        # Two 0.2s extractions serialized behind the default concurrency-1
+        # cap should take close to 0.4s total, not ~0.2s.
+        self.assertGreaterEqual(elapsed, 0.35, "requests ran concurrently, not serially")
+
+    def test_regions_concurrency_cap_is_configurable(self):
+        # Raising the cap (e.g. once a real per-request memory budget
+        # justifies it) should let that many /regions calls actually run at
+        # once again, same as before the cap existed.
+        def slow_extract(_pdf_bytes):
+            time.sleep(0.2)
+            return {"regions": [], "peak_rss_kb": 1}
+
+        with mock.patch.object(
+            inference_service, "_REGIONS_SEMAPHORE", asyncio.Semaphore(2)
+        ), mock.patch.object(
+            inference_service.extract_regions, "extract_regions_isolated", side_effect=slow_extract
+        ):
+            body = {"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
+            started = time.monotonic()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(self.client.post, "/regions", json=body) for _ in range(2)]
+                responses = [f.result(timeout=5) for f in futures]
+            elapsed = time.monotonic() - started
+
+        for resp in responses:
+            self.assertEqual(resp.status_code, 200)
+        self.assertLess(elapsed, 0.35, "requests ran serially despite a cap of 2")
 
     def test_regions_does_not_block_a_concurrent_healthz_request(self):
         # The more visible symptom in production: an unrelated, cheap
@@ -188,11 +238,11 @@ class ConcurrencyTests(InferenceServiceTestCase):
         # search query) stalling behind a single slow /regions call.
         def slow_extract(_pdf_bytes):
             time.sleep(0.2)
-            return []
+            return {"regions": [], "peak_rss_kb": 1}
 
         with mock.patch.object(
-            inference_service.extract_regions, "extract_regions", side_effect=slow_extract
-        ), mock.patch.object(inference_service.extract_regions, "_peak_rss_kb", return_value=1):
+            inference_service.extract_regions, "extract_regions_isolated", side_effect=slow_extract
+        ):
             body = {"pdf_base64": base64.b64encode(b"fake pdf bytes").decode()}
             with ThreadPoolExecutor(max_workers=2) as pool:
                 regions_future = pool.submit(self.client.post, "/regions", json=body)
