@@ -1,0 +1,20 @@
+pre-commit:
+  parallel: true
+  commands:
+    gitleaks:
+      run: gitleaks protect --staged --verbose
+    gofmt:
+      glob: "*.go"
+      run: |
+        unformatted=$(gofmt -l {staged_files})
+        if [ -n "$unformatted" ]; then
+          echo "The following files are not gofmt-formatted:"
+          echo "$unformatted"
+          echo "Fix with: gofmt -w $unformatted"
+          exit 1
+        fi
+    govet:
+      glob: "*.go"
+      run: |
+        pkgs=$(echo {staged_files} | tr ' ' '\n' | xargs -n1 dirname | sort -u | sed 's|^|./|')
+        go vet $pkgs
