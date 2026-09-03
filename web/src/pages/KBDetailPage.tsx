@@ -12,6 +12,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -420,9 +421,17 @@ function plural(n: number, noun: string, pluralNoun = `${noun}s`): string {
 // (confirmed against the live endpoint: computed_at is set even for a KB
 // with no entities yet), not an error, but "0 topic areas across 0
 // entities" reads like something broke rather than "nothing to find yet".
-function describeCommunityStructure(result: CommunityResult): string {
+// hasDocuments disambiguates *why* there are zero entities: entity
+// extraction runs as an invisible background stage after a document's
+// upload already shows "indexed" (see StatusRing/status-ring.ts — there's
+// no graph-specific status to poll), so a KB with real, indexed documents
+// but zero entities yet almost always just means extraction hasn't caught
+// up, not that anything is wrong.
+function describeCommunityStructure(result: CommunityResult, hasDocuments: boolean): string {
   if (result.node_count === 0) {
-    return 'No entities found yet. Documents may still be processing, or none have been uploaded.'
+    return hasDocuments
+      ? "Entity extraction hasn't caught up with your documents yet — check back in a bit, or hit Refresh to try again."
+      : 'No documents in this knowledge base yet — upload one to start finding topic areas.'
   }
   const base = `${plural(result.community_count, 'topic area')} across ${plural(result.node_count, 'entity', 'entities')}`
   if (result.community_count <= 1) return base
@@ -769,8 +778,6 @@ export function KBDetailPage() {
               {uploadPanel}
             </div>
 
-            <ExploreSection kbId={kbId!} />
-
             <section>
               <button
                 type="button"
@@ -834,9 +841,11 @@ export function KBDetailPage() {
               Query
             </Button>
           </form>
-          <p className="mb-8 mt-1.5 text-[11px] text-muted-foreground">
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
             Each query is answered independently — it won't reference earlier queries in this inquiry.
           </p>
+
+          <ExploreSection kbId={kbId!} hasDocuments={docs.length > 0} />
 
           {turns.length === 0 && !pending && (
             <p className="py-16 text-center text-sm text-muted-foreground">
@@ -918,8 +927,115 @@ export function KBDetailPage() {
 // today just community detection; theme labels and graph visualization add
 // their own buttons here later, both building on the same Louvain
 // computation this triggers rather than duplicating it.
-function ExploreSection({ kbId }: { kbId: string }) {
+type ExploreIcon = React.ComponentType<{ className?: string }>
+type ExplorePanelKind = 'communities' | 'themes'
+
+// ExplorePill is the always-visible trigger row under the search bar.
+// Deliberately does not run any query/mutation itself — clicking only
+// toggles panel visibility (aria-pressed reflects that state for screen
+// readers). The actual compute/recompute action lives inside the panel it
+// opens, so a stray double-click here can never re-trigger a paid LLM call
+// (relevant for the Themes pill specifically) or redundant work.
+function ExplorePill({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  colorClass,
+  buttonRef,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: ExploreIcon
+  label: string
+  colorClass: string
+  buttonRef: React.Ref<HTMLButtonElement>
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+        active
+          ? colorClass
+          : 'border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground',
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
+  )
+}
+
+// ExplorePanel is the dismissible card a pill opens. Moves focus to its own
+// heading on mount so a screen reader user gets an explicit cue that
+// something appeared (rather than a silent DOM change), matching how a
+// newly opened dialog is usually handled.
+function ExplorePanel({
+  icon: Icon,
+  title,
+  colorClass,
+  onDismiss,
+  children,
+}: {
+  icon: ExploreIcon
+  title: string
+  colorClass: string
+  onDismiss: () => void
+  children: React.ReactNode
+}) {
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [])
+
+  return (
+    <div className={cn('rise flex flex-col gap-2 rounded-lg border p-3 shadow-sm', colorClass)}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 ref={headingRef} tabIndex={-1} className="flex items-center gap-1.5 text-sm font-semibold outline-none">
+          <Icon className="h-4 w-4" />
+          {title}
+        </h3>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label={`Dismiss ${title}`}
+          className="rounded p-1 text-current/70 transition-colors hover:bg-black/5 hover:text-current dark:hover:bg-white/10"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: boolean }) {
   const queryClient = useQueryClient()
+  const [openPanels, setOpenPanels] = useState<Set<ExplorePanelKind>>(new Set())
+  const communitiesPillRef = useRef<HTMLButtonElement>(null)
+  const themesPillRef = useRef<HTMLButtonElement>(null)
+
+  function togglePanel(kind: ExplorePanelKind) {
+    setOpenPanels((prev) => {
+      const next = new Set(prev)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      return next
+    })
+  }
+
+  function dismissPanel(kind: ExplorePanelKind, returnFocusTo: React.RefObject<HTMLButtonElement | null>) {
+    setOpenPanels((prev) => {
+      const next = new Set(prev)
+      next.delete(kind)
+      return next
+    })
+    returnFocusTo.current?.focus()
+  }
 
   const { data: communities } = useQuery({
     queryKey: ['communities', kbId],
@@ -986,71 +1102,100 @@ function ExploreSection({ kbId }: { kbId: string }) {
   const themes = themeResult?.themes ?? []
   const hasThemes = themes.length > 0
 
+  const communitiesColor = 'border-communities-foreground/25 bg-communities text-communities-foreground'
+  const themesColor = 'border-themes-foreground/25 bg-themes text-themes-foreground'
+
   return (
-    <section>
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Explore
-        </span>
+    <div className="mb-6 flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2">
+        <ExplorePill
+          buttonRef={communitiesPillRef}
+          active={openPanels.has('communities')}
+          onClick={() => togglePanel('communities')}
+          icon={Network}
+          label="Communities"
+          colorClass={communitiesColor}
+        />
+        <ExplorePill
+          buttonRef={themesPillRef}
+          active={openPanels.has('themes')}
+          onClick={() => togglePanel('themes')}
+          icon={Sparkles}
+          label="Themes"
+          colorClass={themesColor}
+        />
       </div>
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
+
+      {openPanels.has('communities') && (
+        <ExplorePanel
+          icon={Network}
+          title="Communities"
+          colorClass={communitiesColor}
+          onDismiss={() => dismissPanel('communities', communitiesPillRef)}
+        >
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="self-start"
+            className="self-start bg-transparent"
             onClick={() => recomputeMutation.mutate()}
             disabled={recomputeMutation.isPending}
           >
             <Network className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
-            {hasResult ? 'Refresh communities' : 'Communities'}
+            {hasResult ? 'Refresh' : 'Compute'}
           </Button>
           {recomputeMutation.isPending ? (
-            <p className="text-xs text-muted-foreground">Finding topic areas…</p>
+            <p className="text-xs">Finding topic areas…</p>
           ) : hasResult && communities ? (
-            <p className="text-xs text-muted-foreground">
-              {describeCommunityStructure(communities)} · updated {formatTimestamp(communities.computed_at!)}
+            <p className="text-xs">
+              {describeCommunityStructure(communities, hasDocuments)} · updated {formatTimestamp(communities.computed_at!)}
             </p>
           ) : (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               Not yet computed. Run this after uploading documents to find clusters of related entities.
             </p>
           )}
-        </div>
+        </ExplorePanel>
+      )}
 
-        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
+      {openPanels.has('themes') && (
+        <ExplorePanel
+          icon={Sparkles}
+          title="Themes"
+          colorClass={themesColor}
+          onDismiss={() => dismissPanel('themes', themesPillRef)}
+        >
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="self-start"
+            className="self-start bg-transparent"
             onClick={() => themesMutation.mutate()}
             disabled={themesMutation.isPending}
           >
             <Sparkles className={cn('h-3.5 w-3.5', themesMutation.isPending && 'animate-spin')} />
-            {hasThemes ? 'Refresh themes' : 'Themes'}
+            {hasThemes ? 'Refresh' : 'Compute'}
           </Button>
           {themesMutation.isPending ? (
-            <p className="text-xs text-muted-foreground">Labeling your knowledge base's biggest topics…</p>
+            <p className="text-xs">Labeling your knowledge base's biggest topics…</p>
           ) : hasThemes ? (
             <ul className="flex flex-col gap-2">
               {themes.map((t) => (
                 <li key={t.community_id}>
                   <p className="text-xs font-medium">{t.label}</p>
-                  <p className="text-xs text-muted-foreground">{t.summary}</p>
+                  <p className="text-xs opacity-90">{t.summary}</p>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs">
               No themes yet. Compute communities first, then run this for a plain-language label on
               your knowledge base's biggest topics.
             </p>
           )}
-        </div>
-      </div>
-    </section>
+        </ExplorePanel>
+      )}
+    </div>
   )
 }
 

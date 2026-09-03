@@ -434,220 +434,329 @@ describe('KBDetailPage', () => {
   })
 
   describe('explore section', () => {
-    function mockCommunities(result: unknown) {
+    function mockExplore(overrides: { communities?: unknown; themes?: unknown; docs?: unknown[] } = {}) {
       vi.mocked(api.GET).mockImplementation(((path: string) => {
         if (path === '/kbs/{id}') {
           return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
         }
         if (path === '/kbs/{kbId}/documents') {
-          return Promise.resolve({ data: { items: [] }, error: undefined })
-        }
-        if (path === '/kbs/{id}/inquiry') {
-          return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
-        }
-        if (path === '/kbs/{id}/communities') {
-          return Promise.resolve({ data: result, error: undefined })
-        }
-        if (path === '/kbs/{id}/themes') {
-          return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
-        }
-        throw new Error(`unexpected api.GET call: ${path}`)
-      }) as never)
-    }
-
-    it('shows a first-run-empty state before communities have ever been computed', async () => {
-      mockCommunities({ computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
-      renderKBDetailPage()
-
-      await screen.findByRole('button', { name: /^communities$/i })
-      expect(screen.getByText(/not yet computed/i)).toBeInTheDocument()
-    })
-
-    it('shows the plain-language result, not raw stats, once communities have been computed', async () => {
-      mockCommunities({
-        computed_at: '2026-01-01T00:00:00Z',
-        modularity: 0.62,
-        community_count: 8,
-        node_count: 45,
-        edge_count: 120,
-      })
-      renderKBDetailPage()
-
-      const summary = await screen.findByText(/8 topic areas across 45 entities/i)
-      // The raw modularity decimal never appears — it's translated into a
-      // qualitative descriptor instead.
-      expect(summary).toHaveTextContent(/well-separated/i)
-      expect(summary.textContent).not.toContain('0.62')
-      expect(screen.getByRole('button', { name: /refresh communities/i })).toBeInTheDocument()
-    })
-
-    it('shows a distinct message for a real-but-empty result, not "0 topic areas across 0 entities"', async () => {
-      // A real response shape confirmed against the live endpoint: a KB
-      // with no entities yet still gets a non-null computed_at.
-      mockCommunities({ computed_at: '2026-01-01T00:00:00Z', modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
-      renderKBDetailPage()
-
-      expect(await screen.findByText(/no entities found yet/i)).toBeInTheDocument()
-      expect(screen.queryByText(/0 topic areas/i)).not.toBeInTheDocument()
-    })
-
-    it('describes low-modularity communities as closely overlapping, not well-separated', async () => {
-      mockCommunities({
-        computed_at: '2026-01-01T00:00:00Z',
-        modularity: 0.05,
-        community_count: 3,
-        node_count: 20,
-        edge_count: 40,
-      })
-      renderKBDetailPage()
-
-      expect(await screen.findByText(/closely overlapping/i)).toBeInTheDocument()
-    })
-
-    it('recomputes on click and shows the new result', async () => {
-      mockCommunities({ computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
-      vi.mocked(api.POST).mockResolvedValue({
-        data: {
-          computed_at: '2026-01-02T00:00:00Z',
-          modularity: 0.5,
-          community_count: 4,
-          node_count: 30,
-          edge_count: 60,
-        },
-        error: undefined,
-      } as never)
-
-      const user = userEvent.setup()
-      renderKBDetailPage()
-
-      const button = await screen.findByRole('button', { name: /^communities$/i })
-      await user.click(button)
-
-      expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/communities', { params: { path: { id: 'kb-1' } } })
-      expect(await screen.findByText(/4 topic areas across 30 entities/i)).toBeInTheDocument()
-    })
-
-    it('shows an error toast when recompute fails, e.g. too many entities', async () => {
-      mockCommunities({ computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
-      vi.mocked(api.POST).mockResolvedValue({
-        data: undefined,
-        error: { error: 'knowledge base has too many entities to compute communities' },
-      } as never)
-
-      const user = userEvent.setup()
-      renderKBDetailPage()
-
-      const button = await screen.findByRole('button', { name: /^communities$/i })
-      await user.click(button)
-
-      await waitFor(() => {
-        expect(toast).toHaveBeenCalledWith(
-          expect.objectContaining({
-            variant: 'destructive',
-            title: 'Failed to compute communities',
-            description: 'knowledge base has too many entities to compute communities',
-          }),
-        )
-      })
-    })
-
-    function mockThemes(result: unknown) {
-      vi.mocked(api.GET).mockImplementation(((path: string) => {
-        if (path === '/kbs/{id}') {
-          return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
-        }
-        if (path === '/kbs/{kbId}/documents') {
-          return Promise.resolve({ data: { items: [] }, error: undefined })
+          return Promise.resolve({ data: { items: overrides.docs ?? [] }, error: undefined })
         }
         if (path === '/kbs/{id}/inquiry') {
           return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
         }
         if (path === '/kbs/{id}/communities') {
           return Promise.resolve({
-            data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+            data: overrides.communities ?? { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
             error: undefined,
           })
         }
         if (path === '/kbs/{id}/themes') {
-          return Promise.resolve({ data: result, error: undefined })
+          return Promise.resolve({
+            data: overrides.themes ?? { computed_at: null, themes: [] },
+            error: undefined,
+          })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
     }
 
-    it('shows a first-run-empty state before themes have ever been generated', async () => {
-      mockThemes({ computed_at: null, themes: [] })
-      renderKBDetailPage()
+    describe('pills', () => {
+      it('are visible up front, with no panel open, before either is clicked', async () => {
+        mockExplore()
+        renderKBDetailPage()
 
-      await screen.findByRole('button', { name: /^themes$/i })
-      expect(screen.getByText(/no themes yet/i)).toBeInTheDocument()
-    })
-
-    it('shows the generated theme labels and summaries once computed', async () => {
-      mockThemes({
-        computed_at: '2026-01-01T00:00:00Z',
-        themes: [
-          { community_id: 3, label: 'Distributed Systems', summary: 'Entities related to resilient software.', entity_count: 12 },
-        ],
+        const communitiesPill = await screen.findByRole('button', { name: 'Communities' })
+        const themesPill = screen.getByRole('button', { name: 'Themes' })
+        expect(communitiesPill).toHaveAttribute('aria-pressed', 'false')
+        expect(themesPill).toHaveAttribute('aria-pressed', 'false')
+        expect(screen.queryByRole('heading', { name: 'Communities' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('heading', { name: 'Themes' })).not.toBeInTheDocument()
       })
-      renderKBDetailPage()
 
-      expect(await screen.findByText('Distributed Systems')).toBeInTheDocument()
-      expect(screen.getByText('Entities related to resilient software.')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /refresh themes/i })).toBeInTheDocument()
+      it('opens the matching panel on click and reflects that in aria-pressed', async () => {
+        mockExplore()
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        const pill = await screen.findByRole('button', { name: 'Communities' })
+        await user.click(pill)
+
+        expect(pill).toHaveAttribute('aria-pressed', 'true')
+        expect(await screen.findByRole('heading', { name: 'Communities' })).toBeInTheDocument()
+      })
+
+      it('clicking the pill again closes its panel without recomputing', async () => {
+        mockExplore()
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        const pill = await screen.findByRole('button', { name: 'Communities' })
+        await user.click(pill)
+        await screen.findByRole('heading', { name: 'Communities' })
+        await user.click(pill)
+
+        expect(pill).toHaveAttribute('aria-pressed', 'false')
+        expect(screen.queryByRole('heading', { name: 'Communities' })).not.toBeInTheDocument()
+        // Toggling the pill must never itself call the compute endpoint —
+        // only the button inside the panel does that.
+        expect(api.POST).not.toHaveBeenCalled()
+      })
+
+      it('both panels can be open at once, independently, color-coordinated with their pill', async () => {
+        mockExplore()
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        await user.click(screen.getByRole('button', { name: 'Themes' }))
+
+        const communitiesPanel = screen.getByRole('heading', { name: 'Communities' }).closest('.rise')!
+        const themesPanel = screen.getByRole('heading', { name: 'Themes' }).closest('.rise')!
+        expect(communitiesPanel).toBeInTheDocument()
+        expect(themesPanel).toBeInTheDocument()
+        // Distinct background classes -- a pill and its panel share a
+        // color identity, but the two categories don't share one with
+        // each other.
+        expect(communitiesPanel.className).toContain('bg-communities')
+        expect(themesPanel.className).toContain('bg-themes')
+      })
+
+      it('dismissing a panel returns focus to its pill, not just closes it', async () => {
+        mockExplore()
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        const pill = await screen.findByRole('button', { name: 'Communities' })
+        await user.click(pill)
+        await user.click(screen.getByRole('button', { name: 'Dismiss Communities' }))
+
+        expect(screen.queryByRole('heading', { name: 'Communities' })).not.toBeInTheDocument()
+        expect(pill).toHaveAttribute('aria-pressed', 'false')
+        expect(pill).toHaveFocus()
+      })
     })
 
-    it('recomputes themes on click and shows the new result', async () => {
-      mockThemes({ computed_at: null, themes: [] })
-      vi.mocked(api.POST).mockImplementation(((path: string) => {
-        if (path === '/kbs/{id}/themes') {
-          return Promise.resolve({
-            data: {
-              computed_at: '2026-01-02T00:00:00Z',
-              themes: [{ community_id: 0, label: 'New Theme', summary: 'A fresh summary.', entity_count: 5 }],
-            },
-            error: undefined,
-          })
-        }
-        throw new Error(`unexpected api.POST call: ${path}`)
-      }) as never)
+    describe('communities panel', () => {
+      it('shows a first-run-empty state before communities have ever been computed', async () => {
+        mockExplore()
+        const user = userEvent.setup()
+        renderKBDetailPage()
 
-      const user = userEvent.setup()
-      renderKBDetailPage()
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(screen.getByText(/not yet computed/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Compute' })).toBeInTheDocument()
+      })
 
-      const button = await screen.findByRole('button', { name: /^themes$/i })
-      await user.click(button)
+      it('shows the plain-language result, not raw stats, once communities have been computed', async () => {
+        mockExplore({
+          communities: {
+            computed_at: '2026-01-01T00:00:00Z',
+            modularity: 0.62,
+            community_count: 8,
+            node_count: 45,
+            edge_count: 120,
+          },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
 
-      expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/themes', { params: { path: { id: 'kb-1' } } })
-      expect(await screen.findByText('New Theme')).toBeInTheDocument()
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+
+        const summary = await screen.findByText(/8 topic areas across 45 entities/i)
+        // The raw modularity decimal never appears — it's translated into a
+        // qualitative descriptor instead.
+        expect(summary).toHaveTextContent(/well-separated/i)
+        expect(summary.textContent).not.toContain('0.62')
+        expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument()
+      })
+
+      it('shows a distinct message for a real-but-empty result, not "0 topic areas across 0 entities"', async () => {
+        // A real response shape confirmed against the live endpoint: a KB
+        // with no entities yet still gets a non-null computed_at.
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(screen.queryByText(/0 topic areas/i)).not.toBeInTheDocument()
+      })
+
+      it('tells an empty KB to upload documents when zero entities and zero documents', async () => {
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+          docs: [],
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(await screen.findByText(/no documents in this knowledge base yet/i)).toBeInTheDocument()
+      })
+
+      it('tells a KB with real documents but zero entities to check back later, not to upload', async () => {
+        // Entity extraction is an invisible background stage that runs
+        // after a document already shows "indexed" (see the progress-bar
+        // explanation) -- documents existing but zero entities yet almost
+        // always means extraction hasn't caught up, not that the KB is
+        // empty.
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+          docs: [{ id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 10 }],
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(await screen.findByText(/hasn't caught up with your documents yet/i)).toBeInTheDocument()
+        expect(screen.queryByText(/upload one/i)).not.toBeInTheDocument()
+        // Refresh (not just this message) is what lets them try again once
+        // extraction has actually finished.
+        expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument()
+      })
+
+      it('describes low-modularity communities as closely overlapping, not well-separated', async () => {
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0.05, community_count: 3, node_count: 20, edge_count: 40 },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(await screen.findByText(/closely overlapping/i)).toBeInTheDocument()
+      })
+
+      it('recomputes on click and shows the new result', async () => {
+        mockExplore()
+        vi.mocked(api.POST).mockResolvedValue({
+          data: {
+            computed_at: '2026-01-02T00:00:00Z',
+            modularity: 0.5,
+            community_count: 4,
+            node_count: 30,
+            edge_count: 60,
+          },
+          error: undefined,
+        } as never)
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+
+        expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/communities', { params: { path: { id: 'kb-1' } } })
+        expect(await screen.findByText(/4 topic areas across 30 entities/i)).toBeInTheDocument()
+      })
+
+      it('shows an error toast when recompute fails, e.g. too many entities', async () => {
+        mockExplore()
+        vi.mocked(api.POST).mockResolvedValue({
+          data: undefined,
+          error: { error: 'knowledge base has too many entities to compute communities' },
+        } as never)
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+
+        await waitFor(() => {
+          expect(toast).toHaveBeenCalledWith(
+            expect.objectContaining({
+              variant: 'destructive',
+              title: 'Failed to compute communities',
+              description: 'knowledge base has too many entities to compute communities',
+            }),
+          )
+        })
+      })
     })
 
-    it('shows an error toast when theme generation fails, e.g. communities not computed yet', async () => {
-      mockThemes({ computed_at: null, themes: [] })
-      vi.mocked(api.POST).mockImplementation(((path: string) => {
-        if (path === '/kbs/{id}/themes') {
-          return Promise.resolve({
-            data: undefined,
-            error: { error: 'compute communities before generating themes' },
-          })
-        }
-        throw new Error(`unexpected api.POST call: ${path}`)
-      }) as never)
+    describe('themes panel', () => {
+      it('shows a first-run-empty state before themes have ever been generated', async () => {
+        mockExplore()
+        const user = userEvent.setup()
+        renderKBDetailPage()
 
-      const user = userEvent.setup()
-      renderKBDetailPage()
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        expect(screen.getByText(/no themes yet/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Compute' })).toBeInTheDocument()
+      })
 
-      const button = await screen.findByRole('button', { name: /^themes$/i })
-      await user.click(button)
+      it('shows the generated theme labels and summaries once computed', async () => {
+        mockExplore({
+          themes: {
+            computed_at: '2026-01-01T00:00:00Z',
+            themes: [
+              { community_id: 3, label: 'Distributed Systems', summary: 'Entities related to resilient software.', entity_count: 12 },
+            ],
+          },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
 
-      await waitFor(() => {
-        expect(toast).toHaveBeenCalledWith(
-          expect.objectContaining({
-            variant: 'destructive',
-            title: 'Failed to generate themes',
-            description: 'compute communities before generating themes',
-          }),
-        )
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        expect(await screen.findByText('Distributed Systems')).toBeInTheDocument()
+        expect(screen.getByText('Entities related to resilient software.')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Refresh' })).toBeInTheDocument()
+      })
+
+      it('recomputes themes on click and shows the new result', async () => {
+        mockExplore()
+        vi.mocked(api.POST).mockImplementation(((path: string) => {
+          if (path === '/kbs/{id}/themes') {
+            return Promise.resolve({
+              data: {
+                computed_at: '2026-01-02T00:00:00Z',
+                themes: [{ community_id: 0, label: 'New Theme', summary: 'A fresh summary.', entity_count: 5 }],
+              },
+              error: undefined,
+            })
+          }
+          throw new Error(`unexpected api.POST call: ${path}`)
+        }) as never)
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+
+        expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/themes', { params: { path: { id: 'kb-1' } } })
+        expect(await screen.findByText('New Theme')).toBeInTheDocument()
+      })
+
+      it('shows an error toast when theme generation fails, e.g. communities not computed yet', async () => {
+        mockExplore()
+        vi.mocked(api.POST).mockImplementation(((path: string) => {
+          if (path === '/kbs/{id}/themes') {
+            return Promise.resolve({
+              data: undefined,
+              error: { error: 'compute communities before generating themes' },
+            })
+          }
+          throw new Error(`unexpected api.POST call: ${path}`)
+        }) as never)
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+
+        await waitFor(() => {
+          expect(toast).toHaveBeenCalledWith(
+            expect.objectContaining({
+              variant: 'destructive',
+              title: 'Failed to generate themes',
+              description: 'compute communities before generating themes',
+            }),
+          )
+        })
       })
     })
   })
