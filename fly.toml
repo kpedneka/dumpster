@@ -27,6 +27,17 @@ primary_region = "iad"
   # not the public internet.
   INFERENCE_SERVICE_URL = "http://dumpster-inference.internal:8000"
 
+  # Routes the worker's entity extraction through AWS Batch (GPU, scale-
+  # to-zero) instead of the always-on inference service above. Credentials
+  # (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY) are already set as Fly
+  # secrets — see `fly secrets list --app dumpster`. Only cmd/worker reads
+  # these; harmless (just unused) on the api process, which doesn't run
+  # entity extraction.
+  ENTITY_EXTRACTOR_BACKEND = "awsbatch"
+  AWS_REGION               = "us-east-1"
+  BATCH_JOB_QUEUE          = "dumpster-batch-gpu-pilot-queue"
+  BATCH_JOB_DEFINITION     = "dumpster-entity-extraction"
+
 # Points Fly's built-in Prometheus scraper at the /metrics handler telemetry.Setup
 # already serves on METRICS_PORT, enabling Fly's Grafana dashboards with no new code.
 [metrics]
