@@ -9,8 +9,10 @@ import {
   Network,
   RotateCw,
   Search as SearchIcon,
+  Sparkles,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
@@ -41,6 +43,7 @@ type Citation = components['schemas']['Citation']
 type RetrievedFile = components['schemas']['RetrievedFile']
 type InquiryMessage = components['schemas']['InquiryMessage']
 type CommunityResult = components['schemas']['CommunityResult']
+type ThemeResult = components['schemas']['ThemeResult']
 
 // PendingTurnKind identifies a pending turn without the streaming-state
 // fields — passed into runStream and spread into PendingTurn once
@@ -409,24 +412,56 @@ function plural(n: number, noun: string, pluralNoun = `${noun}s`): string {
 
 // Translates the raw Louvain output into something a non-technical
 // researcher can actually use, rather than showing modularity as a bare
-// decimal or community_count with no context. modularity's thresholds below
-// aren't a precise scientific cutoff — they're a coarse, defensible mapping
-// from "the standard range clustering literature treats as meaningful
-// structure" to plain language; community_count <= 1 skips the descriptor
-// entirely, since "how separated are N groups" doesn't mean anything for
-// zero or one. node_count === 0 is its own case — a real response shape
-// (confirmed against the live endpoint: computed_at is set even for a KB
-// with no entities yet), not an error, but "0 topic areas across 0
-// entities" reads like something broke rather than "nothing to find yet".
-function describeCommunityStructure(result: CommunityResult): string {
+// decimal or community_count with no context. Each branch adds a short
+// plain-language gloss of what that structure generally implies for a
+// knowledge base, not just a label for it — a bare "closely overlapping"
+// or "well-separated" tells a non-technical reader nothing on its own.
+// modularity's thresholds aren't a precise scientific cutoff — they're a
+// coarse, defensible mapping from "the standard range clustering
+// literature treats as meaningful structure" to plain language.
+//
+// avgCommunitySize < 1.5 is checked before modularity and is a distinct
+// case from "closely overlapping", not a variant of it: when most
+// communities are singletons (e.g. 58 communities across 58 entities —
+// modularity near zero, same as genuinely overlapping topics would
+// produce), entities simply aren't connecting to each other yet, which
+// reads completely differently to a user than "your topics blur
+// together" — the former means "not enough signal yet", the latter means
+// "there's a real, if blurry, structure". Conflating them was a real bug
+// this replaces, not just a wording change.
+//
+// community_count <= 1 skips the descriptor entirely, since "how
+// separated are N groups" doesn't mean anything for zero or one.
+// node_count === 0 is its own case — a real response shape (confirmed
+// against the live endpoint: computed_at is set even for a KB with no
+// entities yet), not an error, but "0 topic areas across 0 entities"
+// reads like something broke rather than "nothing to find yet".
+// hasDocuments disambiguates *why* there are zero entities: entity
+// extraction runs as an invisible background stage after a document's
+// upload already shows "indexed" (see StatusRing/status-ring.ts — there's
+// no graph-specific status to poll), so a KB with real, indexed documents
+// but zero entities yet almost always just means extraction hasn't caught
+// up, not that anything is wrong.
+function describeCommunityStructure(result: CommunityResult, hasDocuments: boolean): string {
   if (result.node_count === 0) {
-    return 'No entities found yet. Documents may still be processing, or none have been uploaded.'
+    return hasDocuments
+      ? "Entity extraction hasn't caught up with your documents yet — check back in a bit, or hit Refresh to try again."
+      : 'No documents in this knowledge base yet — upload one to start finding topic areas.'
   }
   const base = `${plural(result.community_count, 'topic area')} across ${plural(result.node_count, 'entity', 'entities')}`
   if (result.community_count <= 1) return base
-  if (result.modularity >= 0.4) return `${base}, well-separated`
-  if (result.modularity >= 0.15) return `${base}, loosely related`
-  return `${base}, closely overlapping`
+
+  const avgCommunitySize = result.node_count / result.community_count
+  if (avgCommunitySize < 1.5) {
+    return `${base}, but barely connected to each other yet — common with few documents, or content that doesn't overlap topically.`
+  }
+  if (result.modularity >= 0.4) {
+    return `${base}, well-separated — your documents cover clearly distinct subject areas.`
+  }
+  if (result.modularity >= 0.15) {
+    return `${base}, loosely related — expect some topics to share common ground.`
+  }
+  return `${base}, closely overlapping — these topics are hard to tell apart, so a search may span several at once.`
 }
 
 export function KBDetailPage() {
@@ -767,8 +802,6 @@ export function KBDetailPage() {
               {uploadPanel}
             </div>
 
-            <ExploreSection kbId={kbId!} />
-
             <section>
               <button
                 type="button"
@@ -832,9 +865,11 @@ export function KBDetailPage() {
               Query
             </Button>
           </form>
-          <p className="mb-8 mt-1.5 text-[11px] text-muted-foreground">
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
             Each query is answered independently — it won't reference earlier queries in this inquiry.
           </p>
+
+          <ExploreSection kbId={kbId!} hasDocuments={docs.length > 0} />
 
           {turns.length === 0 && !pending && (
             <p className="py-16 text-center text-sm text-muted-foreground">
@@ -916,8 +951,120 @@ export function KBDetailPage() {
 // today just community detection; theme labels and graph visualization add
 // their own buttons here later, both building on the same Louvain
 // computation this triggers rather than duplicating it.
-function ExploreSection({ kbId }: { kbId: string }) {
+type ExploreIcon = React.ComponentType<{ className?: string }>
+type ExplorePanelKind = 'communities' | 'themes'
+
+// ExplorePill is the always-visible trigger row under the search bar.
+// Deliberately does not run any query/mutation itself — clicking only
+// toggles panel visibility (aria-pressed reflects that state for screen
+// readers). The actual compute/recompute action lives inside the panel it
+// opens, so a stray double-click here can never re-trigger a paid LLM call
+// (relevant for the Themes pill specifically) or redundant work.
+function ExplorePill({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+  colorClass,
+  buttonRef,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: ExploreIcon
+  label: string
+  colorClass: string
+  buttonRef: React.Ref<HTMLButtonElement>
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+        active
+          ? colorClass
+          : 'border-border bg-background text-muted-foreground hover:border-foreground/30 hover:text-foreground',
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
+  )
+}
+
+// ExplorePanel is the dismissible card a pill opens. Moves focus to its own
+// heading on mount so a screen reader user gets an explicit cue that
+// something appeared (rather than a silent DOM change), matching how a
+// newly opened dialog is usually handled.
+function ExplorePanel({
+  icon: Icon,
+  title,
+  colorClass,
+  action,
+  onDismiss,
+  children,
+}: {
+  icon: ExploreIcon
+  title: string
+  colorClass: string
+  action: React.ReactNode
+  onDismiss: () => void
+  children: React.ReactNode
+}) {
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [])
+
+  return (
+    <div className={cn('rise flex flex-col gap-2 rounded-lg border p-3 shadow-sm', colorClass)}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 ref={headingRef} tabIndex={-1} className="flex items-center gap-1.5 text-sm font-semibold outline-none">
+          <Icon className="h-4 w-4" />
+          {title}
+        </h3>
+        <div className="flex items-center gap-1">
+          {action}
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label={`Dismiss ${title}`}
+            className="rounded p-1 text-current/70 transition-colors hover:bg-black/5 hover:text-current dark:hover:bg-white/10"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: boolean }) {
   const queryClient = useQueryClient()
+  const [openPanels, setOpenPanels] = useState<Set<ExplorePanelKind>>(new Set())
+  const communitiesPillRef = useRef<HTMLButtonElement>(null)
+  const themesPillRef = useRef<HTMLButtonElement>(null)
+
+  function togglePanel(kind: ExplorePanelKind) {
+    setOpenPanels((prev) => {
+      const next = new Set(prev)
+      if (next.has(kind)) next.delete(kind)
+      else next.add(kind)
+      return next
+    })
+  }
+
+  function dismissPanel(kind: ExplorePanelKind, returnFocusTo: React.RefObject<HTMLButtonElement | null>) {
+    setOpenPanels((prev) => {
+      const next = new Set(prev)
+      next.delete(kind)
+      return next
+    })
+    returnFocusTo.current?.focus()
+  }
 
   const { data: communities } = useQuery({
     queryKey: ['communities', kbId],
@@ -950,38 +1097,144 @@ function ExploreSection({ kbId }: { kbId: string }) {
 
   const hasResult = !!communities?.computed_at
 
+  const { data: themeResult } = useQuery({
+    queryKey: ['themes', kbId],
+    queryFn: async () => {
+      const { data, error } = await api.GET('/kbs/{id}/themes', { params: { path: { id: kbId } } })
+      if (error) throw error
+      return data
+    },
+  })
+
+  // Separate trigger from Communities' recompute, deliberately not bundled
+  // into it: Louvain (Communities) is cheap in-process graph math safe to
+  // rerun freely, but this makes one LLM call per selected community — a
+  // real cost/latency hit a user shouldn't pay just to see the raw
+  // community count.
+  const themesMutation = useMutation({
+    mutationFn: async () => {
+      const { data, error, response } = await api.POST('/kbs/{id}/themes', { params: { path: { id: kbId } } })
+      if (error) throw new Error(describeError(error), { cause: response.status })
+      return data
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData<ThemeResult>(['themes', kbId], result)
+    },
+    onError: (error) => {
+      // 422 means communities haven't been computed yet — the panel's own
+      // empty-state text ("Compute communities first...") already says
+      // this, calmly. A second, destructive-styled toast repeating it
+      // reads as "something broke" for a fully expected, predictable
+      // outcome, not an actual error — only surface the toast for
+      // anything else (e.g. a real failure generating themes).
+      if (error instanceof Error && error.cause === 422) return
+      toast({
+        variant: 'destructive',
+        title: 'Failed to generate themes',
+        description: error instanceof Error ? error.message : describeError(error),
+      })
+    },
+  })
+
+  const themes = themeResult?.themes ?? []
+  const hasThemes = themes.length > 0
+
+  const communitiesColor = 'border-communities-foreground/25 bg-communities text-communities-foreground'
+  const themesColor = 'border-themes-foreground/25 bg-themes text-themes-foreground'
+
   return (
-    <section>
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Explore
-        </span>
+    <div className="mb-6 flex flex-col gap-3">
+      <div className="flex flex-wrap gap-2">
+        <ExplorePill
+          buttonRef={communitiesPillRef}
+          active={openPanels.has('communities')}
+          onClick={() => togglePanel('communities')}
+          icon={Network}
+          label="Communities"
+          colorClass={communitiesColor}
+        />
+        <ExplorePill
+          buttonRef={themesPillRef}
+          active={openPanels.has('themes')}
+          onClick={() => togglePanel('themes')}
+          icon={Sparkles}
+          label="Themes"
+          colorClass={themesColor}
+        />
       </div>
-      <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() => recomputeMutation.mutate()}
-          disabled={recomputeMutation.isPending}
+
+      {openPanels.has('communities') && (
+        <ExplorePanel
+          icon={Network}
+          title="Communities"
+          colorClass={communitiesColor}
+          onDismiss={() => dismissPanel('communities', communitiesPillRef)}
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+              onClick={() => recomputeMutation.mutate()}
+              disabled={recomputeMutation.isPending}
+            >
+              <RotateCw className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
+              {hasResult ? 'Refresh' : 'Compute'}
+            </Button>
+          }
         >
-          <Network className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
-          {hasResult ? 'Refresh communities' : 'Communities'}
-        </Button>
-        {recomputeMutation.isPending ? (
-          <p className="text-xs text-muted-foreground">Finding topic areas…</p>
-        ) : hasResult && communities ? (
-          <p className="text-xs text-muted-foreground">
-            {describeCommunityStructure(communities)} · updated {formatTimestamp(communities.computed_at!)}
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Not yet computed. Run this after uploading documents to find clusters of related entities.
-          </p>
-        )}
-      </div>
-    </section>
+          {recomputeMutation.isPending ? (
+            <p className="text-xs">Finding topic areas…</p>
+          ) : hasResult && communities ? (
+            <p className="text-xs">{describeCommunityStructure(communities, hasDocuments)}</p>
+          ) : (
+            <p className="text-xs">
+              Not yet computed. Run this after uploading documents to find clusters of related entities.
+            </p>
+          )}
+        </ExplorePanel>
+      )}
+
+      {openPanels.has('themes') && (
+        <ExplorePanel
+          icon={Sparkles}
+          title="Themes"
+          colorClass={themesColor}
+          onDismiss={() => dismissPanel('themes', themesPillRef)}
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+              onClick={() => themesMutation.mutate()}
+              disabled={themesMutation.isPending}
+            >
+              <RotateCw className={cn('h-3.5 w-3.5', themesMutation.isPending && 'animate-spin')} />
+              {hasThemes ? 'Refresh' : 'Compute'}
+            </Button>
+          }
+        >
+          {themesMutation.isPending ? (
+            <p className="text-xs">Labeling your knowledge base's biggest topics…</p>
+          ) : hasThemes ? (
+            <ul className="flex flex-col gap-2">
+              {themes.map((t) => (
+                <li key={t.community_id}>
+                  <p className="text-xs font-medium">{t.label}</p>
+                  <p className="text-xs opacity-90">{t.summary}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs">
+              No themes yet. Compute communities first, then run this for a plain-language label on
+              your knowledge base's biggest topics.
+            </p>
+          )}
+        </ExplorePanel>
+      )}
+    </div>
   )
 }
 

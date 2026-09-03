@@ -28,6 +28,8 @@ import (
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	statspg "github.com/kunalpednekar/dumpster/internal/stats/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
+	"github.com/kunalpednekar/dumpster/internal/theme"
+	themepg "github.com/kunalpednekar/dumpster/internal/theme/pgstore"
 )
 
 func main() {
@@ -100,6 +102,8 @@ func main() {
 		Communities:               communitypg.New(txRunner),
 		MaxCommunityGraphEntities: cfg.MaxCommunityGraphEntities,
 		CommunityDetectionTimeout: cfg.CommunityDetectionTimeout,
+		Themes:                    themepg.New(txRunner),
+		ThemeSummarizer:           theme.NewSummarizer(generator),
 		Searcher:                  searcher,
 		Inquiries:                 inquirypg.New(txRunner),
 		Sessions:                  sessionpg.New(pool),

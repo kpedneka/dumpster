@@ -268,6 +268,40 @@ components:
           type: integer
       required: [computed_at, modularity, community_count, node_count, edge_count]
 
+    Theme:
+      type: object
+      description: >-
+        One LLM-generated label/summary for a notable community. community_id
+        is only meaningful relative to the community-detection run active
+        when this theme was generated.
+      properties:
+        community_id:
+          type: integer
+        label:
+          type: string
+        summary:
+          type: string
+        entity_count:
+          type: integer
+      required: [community_id, label, summary, entity_count]
+
+    ThemeResult:
+      type: object
+      description: >-
+        A knowledge base's most recently generated theme labels. computed_at
+        is null when themes have never been generated for this knowledge
+        base — a normal first-run state, not an error.
+      properties:
+        computed_at:
+          type: string
+          format: date-time
+          nullable: true
+        themes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Theme"
+      required: [computed_at, themes]
+
     KBPage:
       type: object
       properties:
@@ -662,6 +696,84 @@ paths:
                 $ref: "#/components/schemas/Error"
         "504":
           description: Community detection did not finish within the configured deadline.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/themes:
+    get:
+      summary: Get a knowledge base's most recently generated theme labels
+      description: >-
+        Returns a zero-value result (null computed_at, empty themes) rather
+        than a 404 when themes have never been generated for this
+        knowledge base yet — that's a normal first-run state, not an error.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The knowledge base's theme labels.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThemeResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: >-
+        Generate short LLM labels for a knowledge base's largest entity
+        communities
+      description: >-
+        Manually triggered: selects the largest communities found by the
+        most recent community-detection run and generates a short label
+        and one-sentence summary for each, fully replacing whatever themes
+        were there before. Requires community detection to have already
+        been run at least once for this knowledge base.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The newly generated theme labels.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThemeResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            Community detection has never been run for this knowledge base,
+            so there are no communities to generate themes from.
           content:
             application/json:
               schema:

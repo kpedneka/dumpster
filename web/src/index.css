@@ -33,6 +33,16 @@
   --color-input: hsl(36 24% 87%);
   --color-ring: hsl(18 71% 45%);
   --radius: 0.625rem;
+
+  /* Explore section pill/panel pairs (KBDetailPage) — soft-tint background
+     + saturated foreground, same shape as --color-accent above, one hue
+     per category so a pill and the panel it opens read as visually linked.
+     Color is a reinforcing cue only, never the sole one — each category
+     repeats its icon in both the pill and the panel header. */
+  --color-communities: hsl(190 45% 90%);          /* soft teal tint */
+  --color-communities-foreground: hsl(192 70% 26%); /* deep teal — AA on the tint */
+  --color-themes: hsl(265 45% 93%);               /* soft violet tint */
+  --color-themes-foreground: hsl(265 55% 38%);    /* deep violet — AA on the tint */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -57,6 +67,11 @@
     --color-border: hsl(36 22% 17%);             /* #342e22 */
     --color-input: hsl(36 22% 17%);
     --color-ring: hsl(22 67% 60%);
+
+    --color-communities: hsl(192 30% 16%);
+    --color-communities-foreground: hsl(190 55% 68%);
+    --color-themes: hsl(265 25% 19%);
+    --color-themes-foreground: hsl(265 60% 76%);
   }
 }
 

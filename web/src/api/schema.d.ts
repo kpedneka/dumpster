@@ -609,6 +609,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{id}/themes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a knowledge base's most recently generated theme labels
+         * @description Returns a zero-value result (null computed_at, empty themes) rather than a 404 when themes have never been generated for this knowledge base yet — that's a normal first-run state, not an error.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The knowledge base's theme labels. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ThemeResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Generate short LLM labels for a knowledge base's largest entity communities
+         * @description Manually triggered: selects the largest communities found by the most recent community-detection run and generates a short label and one-sentence summary for each, fully replacing whatever themes were there before. Requires community detection to have already been run at least once for this knowledge base.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The newly generated theme labels. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ThemeResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Community detection has never been run for this knowledge base, so there are no communities to generate themes from. */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{id}/inquiry": {
         parameters: {
             query?: never;
@@ -1232,6 +1343,19 @@ export interface components {
             community_count: number;
             node_count: number;
             edge_count: number;
+        };
+        /** @description One LLM-generated label/summary for a notable community. community_id is only meaningful relative to the community-detection run active when this theme was generated. */
+        Theme: {
+            community_id: number;
+            label: string;
+            summary: string;
+            entity_count: number;
+        };
+        /** @description A knowledge base's most recently generated theme labels. computed_at is null when themes have never been generated for this knowledge base — a normal first-run state, not an error. */
+        ThemeResult: {
+            /** Format: date-time */
+            computed_at: string | null;
+            themes: components["schemas"]["Theme"][];
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];
