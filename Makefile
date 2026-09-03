@@ -1,4 +1,4 @@
-.PHONY: build test lint run migrate
+.PHONY: build test lint run migrate hooks
 
 COVERAGE_THRESHOLD := 80
 
@@ -45,3 +45,11 @@ run:
 
 migrate:
 	goose -dir migrations postgres "host=$(DB_HOST) port=$(DB_PORT) dbname=$(DB_NAME) user=$(DB_USER) password=$(DB_PASSWORD) sslmode=$(DB_SSLMODE)" up
+
+# Installs the pre-commit hooks defined in lefthook.yml (gitleaks, gofmt,
+# go vet) into this clone's .git/hooks. One-time, per clone — lefthook.yml
+# itself is checked in, but git hooks live outside version control, so
+# every clone needs this run once. Requires lefthook (`brew install
+# lefthook`).
+hooks:
+	lefthook install

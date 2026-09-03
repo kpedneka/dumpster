@@ -42,7 +42,12 @@ make run      # full stack via docker compose
 make test     # unit tests + coverage gate
 make lint     # go vet/lint + frontend typecheck/lint
 make migrate  # apply database migrations
+make hooks    # one-time: install pre-commit hooks (gitleaks, gofmt, go vet)
 ```
+
+Run `make hooks` once after cloning (requires `brew install lefthook`) to
+get secret-scanning and Go formatting/vet checks on every commit — see
+`lefthook.yml` for what runs.
 
 See `CLAUDE.md` for the fuller set of engineering conventions this
 project follows (testing approach, architecture invariants, commit style).
