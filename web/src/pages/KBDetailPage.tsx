@@ -978,12 +978,14 @@ function ExplorePanel({
   icon: Icon,
   title,
   colorClass,
+  action,
   onDismiss,
   children,
 }: {
   icon: ExploreIcon
   title: string
   colorClass: string
+  action: React.ReactNode
   onDismiss: () => void
   children: React.ReactNode
 }) {
@@ -999,14 +1001,17 @@ function ExplorePanel({
           <Icon className="h-4 w-4" />
           {title}
         </h3>
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label={`Dismiss ${title}`}
-          className="rounded p-1 text-current/70 transition-colors hover:bg-black/5 hover:text-current dark:hover:bg-white/10"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          {action}
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label={`Dismiss ${title}`}
+            className="rounded p-1 text-current/70 transition-colors hover:bg-black/5 hover:text-current dark:hover:bg-white/10"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
       {children}
     </div>
@@ -1132,18 +1137,20 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
           title="Communities"
           colorClass={communitiesColor}
           onDismiss={() => dismissPanel('communities', communitiesPillRef)}
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+              onClick={() => recomputeMutation.mutate()}
+              disabled={recomputeMutation.isPending}
+            >
+              <RotateCw className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
+              {hasResult ? 'Refresh' : 'Compute'}
+            </Button>
+          }
         >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="self-start bg-transparent"
-            onClick={() => recomputeMutation.mutate()}
-            disabled={recomputeMutation.isPending}
-          >
-            <Network className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
-            {hasResult ? 'Refresh' : 'Compute'}
-          </Button>
           {recomputeMutation.isPending ? (
             <p className="text-xs">Finding topic areas…</p>
           ) : hasResult && communities ? (
@@ -1164,18 +1171,20 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
           title="Themes"
           colorClass={themesColor}
           onDismiss={() => dismissPanel('themes', themesPillRef)}
+          action={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="bg-transparent"
+              onClick={() => themesMutation.mutate()}
+              disabled={themesMutation.isPending}
+            >
+              <RotateCw className={cn('h-3.5 w-3.5', themesMutation.isPending && 'animate-spin')} />
+              {hasThemes ? 'Refresh' : 'Compute'}
+            </Button>
+          }
         >
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="self-start bg-transparent"
-            onClick={() => themesMutation.mutate()}
-            disabled={themesMutation.isPending}
-          >
-            <Sparkles className={cn('h-3.5 w-3.5', themesMutation.isPending && 'animate-spin')} />
-            {hasThemes ? 'Refresh' : 'Compute'}
-          </Button>
           {themesMutation.isPending ? (
             <p className="text-xs">Labeling your knowledge base's biggest topics…</p>
           ) : hasThemes ? (
