@@ -5,6 +5,7 @@ heavy dependencies installed, same pattern as test_inference_service.py
 and test_gpu_entity_service.py. Run with:
     python3 -m unittest scripts/test_extract_regions.py
 """
+import multiprocessing
 import unittest
 from unittest import mock
 
@@ -119,6 +120,98 @@ class PeakRSSKBTests(unittest.TestCase):
         ) as getrusage:
             getrusage.return_value = mock.Mock(ru_maxrss=400_000_000)
             self.assertEqual(extract_regions._peak_rss_kb(), 400_000_000 // 1024)
+
+
+class IsolatedWorkerTests(ExtractRegionsTestCase):
+    """_isolated_worker is the function extract_regions_isolated() runs in
+    a spawned child process. Tested here by calling it directly, in-process
+    — real multiprocessing plumbing is covered separately below, by
+    ExtractRegionsIsolatedTests, since a spawned child re-imports this
+    module fresh and would not see mocks set in this test process anyway."""
+
+    def test_success_sends_regions_and_peak_rss(self):
+        fake_regions = [{"region_type": "native_text", "page_number": 1}]
+        parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+        with mock.patch.object(
+            extract_regions, "extract_regions", return_value=fake_regions
+        ), mock.patch.object(extract_regions, "_peak_rss_kb", return_value=999), mock.patch.object(
+            extract_regions.resource, "setrlimit"
+        ) as setrlimit:
+            extract_regions._isolated_worker(b"irrelevant", child_conn)
+
+        status, payload = parent_conn.recv()
+        self.assertEqual(status, "ok")
+        self.assertEqual(payload, {"regions": fake_regions, "peak_rss_kb": 999})
+        setrlimit.assert_called_once_with(
+            extract_regions.resource.RLIMIT_AS,
+            (extract_regions._REGIONS_MEMORY_LIMIT_BYTES, extract_regions._REGIONS_MEMORY_LIMIT_BYTES),
+        )
+
+    def test_memory_error_sends_a_clean_error_message(self):
+        parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+        with mock.patch.object(
+            extract_regions, "extract_regions", side_effect=MemoryError
+        ), mock.patch.object(extract_regions.resource, "setrlimit"):
+            extract_regions._isolated_worker(b"irrelevant", child_conn)
+
+        status, payload = parent_conn.recv()
+        self.assertEqual(status, "error")
+        self.assertIn("memory limit", payload)
+
+    def test_other_exception_sends_a_clean_error_message(self):
+        parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+        with mock.patch.object(
+            extract_regions, "extract_regions", side_effect=ValueError("malformed pdf structure")
+        ), mock.patch.object(extract_regions.resource, "setrlimit"):
+            extract_regions._isolated_worker(b"irrelevant", child_conn)
+
+        status, payload = parent_conn.recv()
+        self.assertEqual(status, "error")
+        self.assertEqual(payload, "malformed pdf structure")
+
+    def test_setrlimit_failure_does_not_block_extraction(self):
+        # RLIMIT_AS isn't reliably enforced on macOS and can raise there;
+        # that must not prevent extraction from proceeding (see
+        # _isolated_worker's comment).
+        parent_conn, child_conn = multiprocessing.Pipe(duplex=False)
+        with mock.patch.object(
+            extract_regions, "extract_regions", return_value=[]
+        ), mock.patch.object(extract_regions, "_peak_rss_kb", return_value=1), mock.patch.object(
+            extract_regions.resource, "setrlimit", side_effect=OSError
+        ):
+            extract_regions._isolated_worker(b"irrelevant", child_conn)
+
+        status, _payload = parent_conn.recv()
+        self.assertEqual(status, "ok")
+
+
+class ExtractRegionsIsolatedTests(unittest.TestCase):
+    """Integration-level: these exercise the real multiprocessing plumbing
+    (spawn + pipe + timeout/EOF handling), so — unlike every other test in
+    this file — they do NOT mock _load_libs. A freshly spawned child
+    process re-imports this module fresh and would not see an in-process
+    mock anyway (spawn does not inherit parent-process monkeypatches), so
+    real pymupdf/pdfplumber must be installed to run these (they are, in
+    scripts/.venv — see requirements.txt)."""
+
+    def test_success_returns_regions_and_the_childs_own_peak_rss(self):
+        import pymupdf
+
+        doc = pymupdf.open()
+        doc.new_page().insert_text((72, 72), "hello from a real pdf")
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        result = extract_regions.extract_regions_isolated(pdf_bytes)
+
+        text_regions = [r for r in result["regions"] if r["region_type"] == "native_text"]
+        self.assertEqual(len(text_regions), 1)
+        self.assertIn("hello from a real pdf", text_regions[0]["text"])
+        self.assertGreater(result["peak_rss_kb"], 0)
+
+    def test_invalid_pdf_bytes_raise_a_clean_runtime_error_not_a_hang(self):
+        with self.assertRaises(RuntimeError):
+            extract_regions.extract_regions_isolated(b"this is not a pdf at all")
 
 
 if __name__ == "__main__":
