@@ -65,6 +65,32 @@ type Config struct {
 	// or to point at a different deployment.
 	InferenceServiceURL string
 
+	// EntityExtractorBackend selects which entity.Extractor implementation
+	// cmd/worker wires up: "inference" (default) calls the always-on
+	// InferenceServiceURL over HTTP; "awsbatch" submits a GPU job to AWS
+	// Batch per internal/entity/awsbatch instead. Config, not code, so an
+	// environment can switch without a rebuild.
+	EntityExtractorBackend string
+	// AWSRegion is the region AWS Batch/CloudWatch Logs calls target when
+	// EntityExtractorBackend is "awsbatch". Credentials themselves come
+	// from the standard AWS SDK chain (AWS_ACCESS_KEY_ID/
+	// AWS_SECRET_ACCESS_KEY env vars in this app's deployments), not a
+	// dedicated config field.
+	AWSRegion string
+	// BatchJobQueue and BatchJobDefinition identify the AWS Batch resources
+	// the "awsbatch" extractor submits jobs against. Required when that
+	// backend is selected.
+	BatchJobQueue      string
+	BatchJobDefinition string
+	// BatchPollInterval is how often the awsbatch extractor checks a
+	// submitted job's status. Defaults to 5s (internal/entity/awsbatch's
+	// own default) when unset.
+	BatchPollInterval time.Duration
+	// BatchPresignTTL is how long the input URL handed to a Batch job stays
+	// valid. Defaults to 15m (internal/entity/awsbatch's own default) when
+	// unset.
+	BatchPresignTTL time.Duration
+
 	// CookieSecure controls the Secure attribute on the session cookie.
 	// Must stay true wherever the API is reached over TLS (e.g. behind
 	// Fly.io's TLS termination in production/staging). Set COOKIE_SECURE=false
@@ -158,6 +184,13 @@ func Load() *Config {
 
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
+
+		EntityExtractorBackend: getEnv("ENTITY_EXTRACTOR_BACKEND", "inference"),
+		AWSRegion:              getEnv("AWS_REGION", "us-east-1"),
+		BatchJobQueue:          getEnv("BATCH_JOB_QUEUE", ""),
+		BatchJobDefinition:     getEnv("BATCH_JOB_DEFINITION", ""),
+		BatchPollInterval:      getEnvDuration("BATCH_POLL_INTERVAL", 0),
+		BatchPresignTTL:        getEnvDuration("BATCH_PRESIGN_TTL", 0),
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 
