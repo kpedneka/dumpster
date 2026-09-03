@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ChevronRight,
   FileText,
+  Network,
   RotateCw,
   Search as SearchIcon,
   Trash2,
@@ -31,7 +32,7 @@ import { CitationMarker } from '@/components/CitationMarker'
 import { StatusRing } from '@/components/StatusRing'
 import { getDraftQuery, setDraftQuery } from '@/lib/search-state'
 import { fileIconSrc } from '@/lib/file-icons'
-import { cn } from '@/lib/utils'
+import { cn, describeError } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
 
 type Document = components['schemas']['Document']
@@ -39,6 +40,7 @@ type DocStatus = Document['status']
 type Citation = components['schemas']['Citation']
 type RetrievedFile = components['schemas']['RetrievedFile']
 type InquiryMessage = components['schemas']['InquiryMessage']
+type CommunityResult = components['schemas']['CommunityResult']
 
 // PendingTurnKind identifies a pending turn without the streaming-state
 // fields — passed into runStream and spread into PendingTurn once
@@ -309,13 +311,6 @@ function AnswerBlock({
   )
 }
 
-function describeError(error: unknown, fallback = 'Something went wrong. Try again.'): string {
-  if (error && typeof error === 'object' && typeof (error as { error?: unknown }).error === 'string') {
-    return (error as { error: string }).error
-  }
-  return fallback
-}
-
 // PendingAnswerBlock renders the turn currently streaming in — an
 // AnswerBlock while it's in progress, or the error state if the stream
 // failed. Once it completes, the caller refetches the Inquiry and this
@@ -408,12 +403,39 @@ function formatSize(bytes: number): string {
   return `${unit === 0 ? value : value.toFixed(1)} ${SIZE_UNITS[unit]}`
 }
 
+function plural(n: number, noun: string, pluralNoun = `${noun}s`): string {
+  return `${n} ${n === 1 ? noun : pluralNoun}`
+}
+
+// Translates the raw Louvain output into something a non-technical
+// researcher can actually use, rather than showing modularity as a bare
+// decimal or community_count with no context. modularity's thresholds below
+// aren't a precise scientific cutoff — they're a coarse, defensible mapping
+// from "the standard range clustering literature treats as meaningful
+// structure" to plain language; community_count <= 1 skips the descriptor
+// entirely, since "how separated are N groups" doesn't mean anything for
+// zero or one. node_count === 0 is its own case — a real response shape
+// (confirmed against the live endpoint: computed_at is set even for a KB
+// with no entities yet), not an error, but "0 topic areas across 0
+// entities" reads like something broke rather than "nothing to find yet".
+function describeCommunityStructure(result: CommunityResult): string {
+  if (result.node_count === 0) {
+    return 'No entities found yet. Documents may still be processing, or none have been uploaded.'
+  }
+  const base = `${plural(result.community_count, 'topic area')} across ${plural(result.node_count, 'entity', 'entities')}`
+  if (result.community_count <= 1) return base
+  if (result.modularity >= 0.4) return `${base}, well-separated`
+  if (result.modularity >= 0.15) return `${base}, loosely related`
+  return `${base}, closely overlapping`
+}
+
 export function KBDetailPage() {
   const { kbId } = useParams<{ kbId: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [duplicateQueue, setDuplicateQueue] = useState<File[]>([])
+  const [documentsExpanded, setDocumentsExpanded] = useState(true)
   const [query, setQuery] = useState(() => getDraftQuery(kbId!))
   const taRef = useRef<HTMLTextAreaElement>(null)
 
@@ -745,27 +767,36 @@ export function KBDetailPage() {
               {uploadPanel}
             </div>
 
+            <ExploreSection kbId={kbId!} />
+
             <section>
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <button
+                type="button"
+                onClick={() => setDocumentsExpanded((e) => !e)}
+                aria-expanded={documentsExpanded}
+                className="mb-3 flex w-full items-center justify-between hover:[&_span:first-child]:text-foreground"
+              >
+                <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform', documentsExpanded && 'rotate-90')} />
                   Documents
                 </span>
                 <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
                   {docs.length}
                 </span>
-              </div>
-              {docs.length === 0 ? (
-                <div className="flex flex-col items-center gap-3 py-10 text-center text-muted-foreground">
-                  <FileText className="h-8 w-8 opacity-30" />
-                  <p className="text-sm">No documents yet. Upload one to get started.</p>
-                </div>
-              ) : (
-                <div className="rise-stagger grid gap-2 lg:max-h-[calc(100vh-28rem)] lg:overflow-y-auto lg:pr-1">
-                  {docs.map((doc) => (
-                    <DocRow key={doc.id} doc={doc} kbId={kbId!} />
-                  ))}
-                </div>
-              )}
+              </button>
+              {documentsExpanded &&
+                (docs.length === 0 ? (
+                  <div className="flex flex-col items-center gap-3 py-10 text-center text-muted-foreground">
+                    <FileText className="h-8 w-8 opacity-30" />
+                    <p className="text-sm">No documents yet. Upload one to get started.</p>
+                  </div>
+                ) : (
+                  <div className="rise-stagger grid gap-2 lg:max-h-[calc(100vh-28rem)] lg:overflow-y-auto lg:pr-1">
+                    {docs.map((doc) => (
+                      <DocRow key={doc.id} doc={doc} kbId={kbId!} />
+                    ))}
+                  </div>
+                ))}
             </section>
           </div>
         </aside>
@@ -878,6 +909,79 @@ export function KBDetailPage() {
         </section>
       </div>
     </div>
+  )
+}
+
+// ExploreSection surfaces KB-wide structure derived from the entity graph —
+// today just community detection (A2); A3 (theme labels) and A4 (graph
+// visualization) add their own buttons here later, both building on the
+// same Louvain computation this triggers rather than duplicating it.
+function ExploreSection({ kbId }: { kbId: string }) {
+  const queryClient = useQueryClient()
+
+  const { data: communities } = useQuery({
+    queryKey: ['communities', kbId],
+    queryFn: async () => {
+      const { data, error } = await api.GET('/kbs/{id}/communities', { params: { path: { id: kbId } } })
+      if (error) throw error
+      return data
+    },
+  })
+
+  // Manual trigger only (no auto-recompute on upload/delete) — this also
+  // doubles as the "refresh" action once new documents change the graph,
+  // not just the first-run compute.
+  const recomputeMutation = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await api.POST('/kbs/{id}/communities', { params: { path: { id: kbId } } })
+      if (error) throw error
+      return data
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData<CommunityResult>(['communities', kbId], result)
+    },
+    onError: (error) =>
+      toast({
+        variant: 'destructive',
+        title: 'Failed to compute communities',
+        description: describeError(error),
+      }),
+  })
+
+  const hasResult = !!communities?.computed_at
+
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Explore
+        </span>
+      </div>
+      <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="self-start"
+          onClick={() => recomputeMutation.mutate()}
+          disabled={recomputeMutation.isPending}
+        >
+          <Network className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
+          {hasResult ? 'Refresh communities' : 'Communities'}
+        </Button>
+        {recomputeMutation.isPending ? (
+          <p className="text-xs text-muted-foreground">Finding topic areas…</p>
+        ) : hasResult && communities ? (
+          <p className="text-xs text-muted-foreground">
+            {describeCommunityStructure(communities)} · updated {formatTimestamp(communities.computed_at!)}
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Not yet computed. Run this after uploading documents to find clusters of related entities.
+          </p>
+        )}
+      </div>
+    </section>
   )
 }
 
