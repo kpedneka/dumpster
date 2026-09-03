@@ -1,7 +1,7 @@
 """Unit tests for inference_service.py.
 
 Mocks all three model-loading functions so this runs fast without the real
-GLiNER/unstructured/sentence-transformers dependencies installed. Run with:
+GLiNER/pymupdf/sentence-transformers dependencies installed. Run with:
     python3 -m unittest scripts/test_inference_service.py
 """
 import base64

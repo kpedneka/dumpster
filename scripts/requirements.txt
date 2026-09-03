@@ -17,10 +17,15 @@ spacy>=3.7,<4
 gliner>=0.2,<1
 
 # Dependencies for scripts/extract_regions.py, the PDF region classifier
-# invoked by internal/manifest/layout via subprocess (layers 1+2 only; no
-# VLM layer — see RegionClassificationHandler's type doc for why).
+# invoked by internal/manifest/layout via subprocess (no VLM layer here —
+# see RegionClassificationHandler's type doc for why). pymupdf is
+# AGPL-3.0/commercial dual-licensed (see LICENSE at the repo root).
+# unstructured[pdf] dropped: it used to cover figure detection and a
+# table-extraction fallback, but shared the same silent-failure mode on
+# malformed PDFs that motivated dropping it for text too — see
+# extract_regions()'s docstring for the full reasoning.
+pymupdf>=1.24,<2
 pdfplumber>=0.11,<1
-unstructured[pdf]>=0.16,<1
 Pillow>=10,<12
 
 # Dependencies for scripts/inference_service.py (v4.8): the consolidated,
