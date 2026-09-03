@@ -15,6 +15,7 @@ import (
 	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	kbmem "github.com/kunalpednekar/dumpster/internal/kb/memory"
+	llmmock "github.com/kunalpednekar/dumpster/internal/llm/mock"
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
 	"github.com/kunalpednekar/dumpster/internal/search"
@@ -22,21 +23,25 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/session"
 	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
 	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
+	"github.com/kunalpednekar/dumpster/internal/theme"
+	thememem "github.com/kunalpednekar/dumpster/internal/theme/memory"
 )
 
 // testDeps assembles a Deps with all in-memory/mock implementations.
 func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.Store, pub *qmem.Publisher) Deps {
 	return Deps{
-		KBs:         kbRepo,
-		Docs:        docRepo,
-		Objects:     obj,
-		Publisher:   pub,
-		Canonical:   canonicalmem.New(),
-		Communities: communitymem.New(),
-		Searcher:    searchmock.NewSearcher(search.Result{}),
-		Inquiries:   inquirymem.New(),
-		Sessions:    sessionmock.New(),
-		Stats:       statsmem.New(),
+		KBs:             kbRepo,
+		Docs:            docRepo,
+		Objects:         obj,
+		Publisher:       pub,
+		Canonical:       canonicalmem.New(),
+		Communities:     communitymem.New(),
+		Themes:          thememem.New(),
+		ThemeSummarizer: theme.NewSummarizer(llmmock.NewGenerator("LABEL: Test Theme\nSUMMARY: A test summary.")),
+		Searcher:        searchmock.NewSearcher(search.Result{}),
+		Inquiries:       inquirymem.New(),
+		Sessions:        sessionmock.New(),
+		Stats:           statsmem.New(),
 	}
 }
 

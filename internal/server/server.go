@@ -22,6 +22,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/session"
 	"github.com/kunalpednekar/dumpster/internal/stats"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
+	"github.com/kunalpednekar/dumpster/internal/theme"
 )
 
 // Deps holds all dependencies required by the HTTP handlers.
@@ -43,7 +44,11 @@ type Deps struct {
 	// (5000 entities, 30s) — see communityhandler.go.
 	MaxCommunityGraphEntities int
 	CommunityDetectionTimeout time.Duration
-	Searcher                  search.Searcher
+	// Themes and ThemeSummarizer are optional together; when either is nil,
+	// POST/GET /kbs/{id}/themes are not registered.
+	Themes          theme.Repository
+	ThemeSummarizer *theme.Summarizer
+	Searcher        search.Searcher
 	// Inquiries is optional; when nil, search results are not persisted as
 	// Inquiry history (search itself still works — persistence is a
 	// convenience layered on top, not a dependency search needs).
@@ -96,6 +101,9 @@ func NewRouter(deps Deps) http.Handler {
 	}
 	if deps.Communities != nil {
 		registerCommunityRoutes(authed, deps.KBs, deps.Communities, deps.MaxCommunityGraphEntities, deps.CommunityDetectionTimeout)
+	}
+	if deps.Themes != nil && deps.ThemeSummarizer != nil {
+		registerThemeRoutes(authed, deps.KBs, deps.Themes, deps.ThemeSummarizer)
 	}
 
 	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, deps.Stats, authed)

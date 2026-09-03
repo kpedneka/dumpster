@@ -9,6 +9,7 @@ import {
   Network,
   RotateCw,
   Search as SearchIcon,
+  Sparkles,
   Trash2,
   Upload,
 } from 'lucide-react'
@@ -41,6 +42,7 @@ type Citation = components['schemas']['Citation']
 type RetrievedFile = components['schemas']['RetrievedFile']
 type InquiryMessage = components['schemas']['InquiryMessage']
 type CommunityResult = components['schemas']['CommunityResult']
+type ThemeResult = components['schemas']['ThemeResult']
 
 // PendingTurnKind identifies a pending turn without the streaming-state
 // fields — passed into runStream and spread into PendingTurn once
@@ -950,6 +952,40 @@ function ExploreSection({ kbId }: { kbId: string }) {
 
   const hasResult = !!communities?.computed_at
 
+  const { data: themeResult } = useQuery({
+    queryKey: ['themes', kbId],
+    queryFn: async () => {
+      const { data, error } = await api.GET('/kbs/{id}/themes', { params: { path: { id: kbId } } })
+      if (error) throw error
+      return data
+    },
+  })
+
+  // Separate trigger from Communities' recompute, deliberately not bundled
+  // into it: Louvain (Communities) is cheap in-process graph math safe to
+  // rerun freely, but this makes one LLM call per selected community — a
+  // real cost/latency hit a user shouldn't pay just to see the raw
+  // community count.
+  const themesMutation = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await api.POST('/kbs/{id}/themes', { params: { path: { id: kbId } } })
+      if (error) throw error
+      return data
+    },
+    onSuccess: (result) => {
+      queryClient.setQueryData<ThemeResult>(['themes', kbId], result)
+    },
+    onError: (error) =>
+      toast({
+        variant: 'destructive',
+        title: 'Failed to generate themes',
+        description: describeError(error),
+      }),
+  })
+
+  const themes = themeResult?.themes ?? []
+  const hasThemes = themes.length > 0
+
   return (
     <section>
       <div className="mb-3 flex items-center justify-between">
@@ -957,29 +993,62 @@ function ExploreSection({ kbId }: { kbId: string }) {
           Explore
         </span>
       </div>
-      <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() => recomputeMutation.mutate()}
-          disabled={recomputeMutation.isPending}
-        >
-          <Network className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
-          {hasResult ? 'Refresh communities' : 'Communities'}
-        </Button>
-        {recomputeMutation.isPending ? (
-          <p className="text-xs text-muted-foreground">Finding topic areas…</p>
-        ) : hasResult && communities ? (
-          <p className="text-xs text-muted-foreground">
-            {describeCommunityStructure(communities)} · updated {formatTimestamp(communities.computed_at!)}
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Not yet computed. Run this after uploading documents to find clusters of related entities.
-          </p>
-        )}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => recomputeMutation.mutate()}
+            disabled={recomputeMutation.isPending}
+          >
+            <Network className={cn('h-3.5 w-3.5', recomputeMutation.isPending && 'animate-spin')} />
+            {hasResult ? 'Refresh communities' : 'Communities'}
+          </Button>
+          {recomputeMutation.isPending ? (
+            <p className="text-xs text-muted-foreground">Finding topic areas…</p>
+          ) : hasResult && communities ? (
+            <p className="text-xs text-muted-foreground">
+              {describeCommunityStructure(communities)} · updated {formatTimestamp(communities.computed_at!)}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Not yet computed. Run this after uploading documents to find clusters of related entities.
+            </p>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => themesMutation.mutate()}
+            disabled={themesMutation.isPending}
+          >
+            <Sparkles className={cn('h-3.5 w-3.5', themesMutation.isPending && 'animate-spin')} />
+            {hasThemes ? 'Refresh themes' : 'Themes'}
+          </Button>
+          {themesMutation.isPending ? (
+            <p className="text-xs text-muted-foreground">Labeling your knowledge base's biggest topics…</p>
+          ) : hasThemes ? (
+            <ul className="flex flex-col gap-2">
+              {themes.map((t) => (
+                <li key={t.community_id}>
+                  <p className="text-xs font-medium">{t.label}</p>
+                  <p className="text-xs text-muted-foreground">{t.summary}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              No themes yet. Compute communities first, then run this for a plain-language label on
+              your knowledge base's biggest topics.
+            </p>
+          )}
+        </div>
       </div>
     </section>
   )

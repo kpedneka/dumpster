@@ -76,6 +76,9 @@ beforeEach(() => {
         error: undefined,
       })
     }
+    if (path === '/kbs/{id}/themes') {
+      return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
+    }
     throw new Error(`unexpected api.GET call: ${path}`)
   }) as never)
 })
@@ -110,6 +113,9 @@ describe('KBDetailPage', () => {
           data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
           error: undefined,
         })
+      }
+      if (path === '/kbs/{id}/themes') {
+        return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
       }
       throw new Error(`unexpected api.GET call: ${path}`)
     }) as never)
@@ -219,6 +225,9 @@ describe('KBDetailPage', () => {
             error: undefined,
           })
         }
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
+        }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
     }
@@ -311,6 +320,9 @@ describe('KBDetailPage', () => {
             data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
             error: undefined,
           })
+        }
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
@@ -436,6 +448,9 @@ describe('KBDetailPage', () => {
         if (path === '/kbs/{id}/communities') {
           return Promise.resolve({ data: result, error: undefined })
         }
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
+        }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
     }
@@ -531,6 +546,106 @@ describe('KBDetailPage', () => {
             variant: 'destructive',
             title: 'Failed to compute communities',
             description: 'knowledge base has too many entities to compute communities',
+          }),
+        )
+      })
+    })
+
+    function mockThemes(result: unknown) {
+      vi.mocked(api.GET).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}') {
+          return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
+        }
+        if (path === '/kbs/{kbId}/documents') {
+          return Promise.resolve({ data: { items: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/inquiry') {
+          return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/communities') {
+          return Promise.resolve({
+            data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+            error: undefined,
+          })
+        }
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({ data: result, error: undefined })
+        }
+        throw new Error(`unexpected api.GET call: ${path}`)
+      }) as never)
+    }
+
+    it('shows a first-run-empty state before themes have ever been generated', async () => {
+      mockThemes({ computed_at: null, themes: [] })
+      renderKBDetailPage()
+
+      await screen.findByRole('button', { name: /^themes$/i })
+      expect(screen.getByText(/no themes yet/i)).toBeInTheDocument()
+    })
+
+    it('shows the generated theme labels and summaries once computed', async () => {
+      mockThemes({
+        computed_at: '2026-01-01T00:00:00Z',
+        themes: [
+          { community_id: 3, label: 'Distributed Systems', summary: 'Entities related to resilient software.', entity_count: 12 },
+        ],
+      })
+      renderKBDetailPage()
+
+      expect(await screen.findByText('Distributed Systems')).toBeInTheDocument()
+      expect(screen.getByText('Entities related to resilient software.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /refresh themes/i })).toBeInTheDocument()
+    })
+
+    it('recomputes themes on click and shows the new result', async () => {
+      mockThemes({ computed_at: null, themes: [] })
+      vi.mocked(api.POST).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({
+            data: {
+              computed_at: '2026-01-02T00:00:00Z',
+              themes: [{ community_id: 0, label: 'New Theme', summary: 'A fresh summary.', entity_count: 5 }],
+            },
+            error: undefined,
+          })
+        }
+        throw new Error(`unexpected api.POST call: ${path}`)
+      }) as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      const button = await screen.findByRole('button', { name: /^themes$/i })
+      await user.click(button)
+
+      expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/themes', { params: { path: { id: 'kb-1' } } })
+      expect(await screen.findByText('New Theme')).toBeInTheDocument()
+    })
+
+    it('shows an error toast when theme generation fails, e.g. communities not computed yet', async () => {
+      mockThemes({ computed_at: null, themes: [] })
+      vi.mocked(api.POST).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({
+            data: undefined,
+            error: { error: 'compute communities before generating themes' },
+          })
+        }
+        throw new Error(`unexpected api.POST call: ${path}`)
+      }) as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      const button = await screen.findByRole('button', { name: /^themes$/i })
+      await user.click(button)
+
+      await waitFor(() => {
+        expect(toast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: 'destructive',
+            title: 'Failed to generate themes',
+            description: 'compute communities before generating themes',
           }),
         )
       })
@@ -1021,6 +1136,9 @@ describe('KBDetailPage', () => {
             error: undefined,
           })
         }
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
+        }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
       mockSearchStream([sseFrame('done', { summary: 'the answer', citations: [] })])
@@ -1222,6 +1340,9 @@ describe('KBDetailPage', () => {
             data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
             error: undefined,
           })
+        }
+        if (path === '/kbs/{id}/themes') {
+          return Promise.resolve({ data: { computed_at: null, themes: [] }, error: undefined })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
