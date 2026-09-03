@@ -1113,19 +1113,27 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
   // community count.
   const themesMutation = useMutation({
     mutationFn: async () => {
-      const { data, error } = await api.POST('/kbs/{id}/themes', { params: { path: { id: kbId } } })
-      if (error) throw error
+      const { data, error, response } = await api.POST('/kbs/{id}/themes', { params: { path: { id: kbId } } })
+      if (error) throw new Error(describeError(error), { cause: response.status })
       return data
     },
     onSuccess: (result) => {
       queryClient.setQueryData<ThemeResult>(['themes', kbId], result)
     },
-    onError: (error) =>
+    onError: (error) => {
+      // 422 means communities haven't been computed yet — the panel's own
+      // empty-state text ("Compute communities first...") already says
+      // this, calmly. A second, destructive-styled toast repeating it
+      // reads as "something broke" for a fully expected, predictable
+      // outcome, not an actual error — only surface the toast for
+      // anything else (e.g. a real failure generating themes).
+      if (error instanceof Error && error.cause === 422) return
       toast({
         variant: 'destructive',
         title: 'Failed to generate themes',
-        description: describeError(error),
-      }),
+        description: error instanceof Error ? error.message : describeError(error),
+      })
+    },
   })
 
   const themes = themeResult?.themes ?? []

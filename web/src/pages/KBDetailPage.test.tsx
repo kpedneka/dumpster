@@ -772,13 +772,46 @@ describe('KBDetailPage', () => {
         expect(await screen.findByText('New Theme')).toBeInTheDocument()
       })
 
-      it('shows an error toast when theme generation fails, e.g. communities not computed yet', async () => {
+      // Regression test: a 422 here means "communities haven't been
+      // computed yet" -- exactly what the panel's own empty-state text
+      // ("Compute communities first...") already says. A destructive
+      // toast repeating that read as "something broke" for a fully
+      // expected, predictable outcome, not an actual error -- confirmed
+      // by a user seeing this in practice with nothing in the logs.
+      it('does not show a toast for the expected "compute communities first" 422 — the panel already explains it', async () => {
         mockExplore()
         vi.mocked(api.POST).mockImplementation(((path: string) => {
           if (path === '/kbs/{id}/themes') {
             return Promise.resolve({
               data: undefined,
               error: { error: 'compute communities before generating themes' },
+              response: { status: 422 },
+            })
+          }
+          throw new Error(`unexpected api.POST call: ${path}`)
+        }) as never)
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+
+        // The panel's own text is the only signal -- give the mutation a
+        // moment to settle, then assert no toast ever fired.
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Compute' })).not.toBeDisabled())
+        expect(toast).not.toHaveBeenCalled()
+        expect(screen.getByText(/compute communities first/i)).toBeInTheDocument()
+      })
+
+      it('still shows a toast for a genuine, unexpected failure (not a 422)', async () => {
+        mockExplore()
+        vi.mocked(api.POST).mockImplementation(((path: string) => {
+          if (path === '/kbs/{id}/themes') {
+            return Promise.resolve({
+              data: undefined,
+              error: { error: 'internal error' },
+              response: { status: 500 },
             })
           }
           throw new Error(`unexpected api.POST call: ${path}`)
@@ -795,7 +828,7 @@ describe('KBDetailPage', () => {
             expect.objectContaining({
               variant: 'destructive',
               title: 'Failed to generate themes',
-              description: 'compute communities before generating themes',
+              description: 'internal error',
             }),
           )
         })
