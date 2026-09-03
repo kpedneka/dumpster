@@ -39,6 +39,27 @@ func TestSelectTopCommunities_ScalesWithCommunityCount(t *testing.T) {
 	}
 }
 
+// Regression test: a real KB with 563 communities (mostly barely-connected
+// singletons) hit ceil(5% of 563) = 29 themes in one recompute before this
+// cap existed -- overwhelming to read even though each individual
+// label/summary stayed short.
+func TestSelectTopCommunities_CapsAtFiveRegardlessOfPercentile(t *testing.T) {
+	members := make([]CommunityMembers, 563)
+	for i := range members {
+		members[i] = CommunityMembers{CommunityID: i, Entities: make([]EntityRef, i+1)}
+	}
+	got := SelectTopCommunities(members)
+	if len(got) != 5 {
+		t.Fatalf("got %d communities, want 5 (capped, not ceil(5%% of 563) = 29)", len(got))
+	}
+	// Largest five: communities 562 down to 558.
+	for i, want := range []int{562, 561, 560, 559, 558} {
+		if got[i].CommunityID != want {
+			t.Errorf("got[%d].CommunityID = %d, want %d", i, got[i].CommunityID, want)
+		}
+	}
+}
+
 func TestSelectTopCommunities_DoesNotMutateInput(t *testing.T) {
 	members := []CommunityMembers{
 		{CommunityID: 0, Entities: make([]EntityRef, 1)},
