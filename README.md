@@ -58,3 +58,7 @@ project follows (testing approach, architecture invariants, commit style).
 version of this project as a service others interact with over a network,
 the AGPL requires making the complete corresponding source available to
 those users.
+
+Third-party Go dependency licenses are listed in
+[THIRD_PARTY_LICENSES.csv](THIRD_PARTY_LICENSES.csv) (regenerate with
+`make licenses` after adding a dependency).

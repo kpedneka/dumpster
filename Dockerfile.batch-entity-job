@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+#
+# AWS Batch job image for GPU entity extraction (see scripts/batch_entity_job.py
+# for the actual job logic and why this exists as a Batch job rather than a
+# long-running service — the earlier hand-rolled EC2 wake/sleep design was
+# dropped once it turned out fast wake latency didn't actually matter for
+# the UX this pipeline stage is on).
+#
+# Separate from the root Dockerfile: this needs the GPU-enabled PyTorch
+# build (bundled CUDA runtime), the opposite of the root Dockerfile's
+# `inference` stage, which deliberately pins the CPU-only wheel since Fly's
+# shared-cpu machines have no GPU at all. Pushed to ECR, not deployed to
+# Fly — a genuinely different artifact for a genuinely different runtime.
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# GPU-enabled torch: the default PyPI index (not python.org/whl/cpu, as the
+# root Dockerfile's inference stage uses) bundles the CUDA runtime this job
+# actually needs to run on a GPU Batch compute environment.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir spacy gliner torch
+RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
+
+# Baking the GLiNER weights in and forcing offline mode avoids a live
+# HuggingFace Hub round trip on every single job invocation -- unlike the
+# always-on inference service (which pays this cost once, at process
+# startup, and stays warm), every Batch job is a fresh container, so this
+# cost would otherwise be paid on every document instead of once per image
+# build.
+RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_mediumv2.1')"
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+COPY scripts/extract_entities.py scripts/batch_entity_job.py /app/
+
+CMD ["python", "batch_entity_job.py"]
