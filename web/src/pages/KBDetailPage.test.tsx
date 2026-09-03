@@ -628,6 +628,48 @@ describe('KBDetailPage', () => {
         expect(await screen.findByText(/closely overlapping/i)).toBeInTheDocument()
       })
 
+      // Regression test: community_count close to node_count (mostly
+      // singleton communities) used to fall through to the same
+      // "closely overlapping" wording as genuinely blurry-but-real topic
+      // clusters, even though the two mean very different things to a
+      // user -- "not enough signal yet" vs. "there's a real, if blurry,
+      // structure". A real example that surfaced this: 58 communities
+      // across 58 entities.
+      it('describes near-all-singleton communities as barely connected, not closely overlapping', async () => {
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0.02, community_count: 58, node_count: 58, edge_count: 12 },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(await screen.findByText(/barely connected/i)).toBeInTheDocument()
+        expect(screen.queryByText(/closely overlapping/i)).not.toBeInTheDocument()
+      })
+
+      it('adds a plain-language gloss of what the structure implies, not just a label', async () => {
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0.62, community_count: 8, node_count: 45, edge_count: 120 },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        expect(await screen.findByText(/clearly distinct subject areas/i)).toBeInTheDocument()
+      })
+
+      it('does not show an "updated at" timestamp — no per-document timestamp exists to make it meaningful', async () => {
+        mockExplore({
+          communities: { computed_at: '2026-01-01T00:00:00Z', modularity: 0.62, community_count: 8, node_count: 45, edge_count: 120 },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Communities' }))
+        await screen.findByText(/8 topic areas across 45 entities/i)
+        expect(screen.queryByText(/updated/i)).not.toBeInTheDocument()
+      })
+
       it('recomputes on click and shows the new result', async () => {
         mockExplore()
         vi.mocked(api.POST).mockResolvedValue({

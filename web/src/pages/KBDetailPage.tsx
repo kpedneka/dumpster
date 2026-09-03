@@ -412,15 +412,30 @@ function plural(n: number, noun: string, pluralNoun = `${noun}s`): string {
 
 // Translates the raw Louvain output into something a non-technical
 // researcher can actually use, rather than showing modularity as a bare
-// decimal or community_count with no context. modularity's thresholds below
-// aren't a precise scientific cutoff — they're a coarse, defensible mapping
-// from "the standard range clustering literature treats as meaningful
-// structure" to plain language; community_count <= 1 skips the descriptor
-// entirely, since "how separated are N groups" doesn't mean anything for
-// zero or one. node_count === 0 is its own case — a real response shape
-// (confirmed against the live endpoint: computed_at is set even for a KB
-// with no entities yet), not an error, but "0 topic areas across 0
-// entities" reads like something broke rather than "nothing to find yet".
+// decimal or community_count with no context. Each branch adds a short
+// plain-language gloss of what that structure generally implies for a
+// knowledge base, not just a label for it — a bare "closely overlapping"
+// or "well-separated" tells a non-technical reader nothing on its own.
+// modularity's thresholds aren't a precise scientific cutoff — they're a
+// coarse, defensible mapping from "the standard range clustering
+// literature treats as meaningful structure" to plain language.
+//
+// avgCommunitySize < 1.5 is checked before modularity and is a distinct
+// case from "closely overlapping", not a variant of it: when most
+// communities are singletons (e.g. 58 communities across 58 entities —
+// modularity near zero, same as genuinely overlapping topics would
+// produce), entities simply aren't connecting to each other yet, which
+// reads completely differently to a user than "your topics blur
+// together" — the former means "not enough signal yet", the latter means
+// "there's a real, if blurry, structure". Conflating them was a real bug
+// this replaces, not just a wording change.
+//
+// community_count <= 1 skips the descriptor entirely, since "how
+// separated are N groups" doesn't mean anything for zero or one.
+// node_count === 0 is its own case — a real response shape (confirmed
+// against the live endpoint: computed_at is set even for a KB with no
+// entities yet), not an error, but "0 topic areas across 0 entities"
+// reads like something broke rather than "nothing to find yet".
 // hasDocuments disambiguates *why* there are zero entities: entity
 // extraction runs as an invisible background stage after a document's
 // upload already shows "indexed" (see StatusRing/status-ring.ts — there's
@@ -435,9 +450,18 @@ function describeCommunityStructure(result: CommunityResult, hasDocuments: boole
   }
   const base = `${plural(result.community_count, 'topic area')} across ${plural(result.node_count, 'entity', 'entities')}`
   if (result.community_count <= 1) return base
-  if (result.modularity >= 0.4) return `${base}, well-separated`
-  if (result.modularity >= 0.15) return `${base}, loosely related`
-  return `${base}, closely overlapping`
+
+  const avgCommunitySize = result.node_count / result.community_count
+  if (avgCommunitySize < 1.5) {
+    return `${base}, but barely connected to each other yet — common with few documents, or content that doesn't overlap topically.`
+  }
+  if (result.modularity >= 0.4) {
+    return `${base}, well-separated — your documents cover clearly distinct subject areas.`
+  }
+  if (result.modularity >= 0.15) {
+    return `${base}, loosely related — expect some topics to share common ground.`
+  }
+  return `${base}, closely overlapping — these topics are hard to tell apart, so a search may span several at once.`
 }
 
 export function KBDetailPage() {
@@ -1154,9 +1178,7 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
           {recomputeMutation.isPending ? (
             <p className="text-xs">Finding topic areas…</p>
           ) : hasResult && communities ? (
-            <p className="text-xs">
-              {describeCommunityStructure(communities, hasDocuments)} · updated {formatTimestamp(communities.computed_at!)}
-            </p>
+            <p className="text-xs">{describeCommunityStructure(communities, hasDocuments)}</p>
           ) : (
             <p className="text-xs">
               Not yet computed. Run this after uploading documents to find clusters of related entities.
