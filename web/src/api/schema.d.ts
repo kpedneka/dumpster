@@ -78,6 +78,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Site-wide usage stats
+         * @description Aggregate totals across every tenant — not scoped to the caller's session. Public and unauthenticated.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Current usage totals */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            documents_indexed?: number;
+                            avg_document_size_bytes?: number;
+                            queries_executed?: number;
+                            avg_query_duration_ms?: number;
+                            sessions_created?: number;
+                            sessions_swept?: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/account/status": {
         parameters: {
             query?: never;
@@ -428,6 +474,126 @@ export interface paths {
                 };
                 /** @description Search failed before any event was streamed (e.g. retrieval itself failed) — a normal JSON error, since nothing has been written yet at this point. */
                 500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/kbs/{id}/communities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a knowledge base's most recent community-detection result
+         * @description Returns a zero-value result (null computed_at) rather than a 404 when community detection has never been run for this knowledge base yet — that's a normal first-run state, not an error.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The knowledge base's community-detection summary. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CommunityResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Recompute community detection over a knowledge base's entity graph
+         * @description Manually triggered, synchronous: runs Louvain community detection over the canonical-entity graph and fully replaces the previous result. Not run automatically on document upload/delete.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The new community-detection summary. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CommunityResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description The knowledge base has too many canonical entities to compute communities synchronously. */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Community detection did not finish within the configured deadline. */
+                504: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -1057,6 +1223,15 @@ export interface components {
             /** Format: uuid */
             id: string | null;
             messages: components["schemas"]["InquiryMessage"][];
+        };
+        /** @description A knowledge base's most recent Louvain community-detection run. computed_at is null when detection has never been run for this knowledge base — a normal first-run state, not an error. */
+        CommunityResult: {
+            /** Format: date-time */
+            computed_at: string | null;
+            modularity: number;
+            community_count: number;
+            node_count: number;
+            edge_count: number;
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];

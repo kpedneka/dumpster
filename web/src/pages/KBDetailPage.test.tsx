@@ -70,6 +70,12 @@ beforeEach(() => {
         error: undefined,
       })
     }
+    if (path === '/kbs/{id}/communities') {
+      return Promise.resolve({
+        data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+        error: undefined,
+      })
+    }
     throw new Error(`unexpected api.GET call: ${path}`)
   }) as never)
 })
@@ -98,6 +104,12 @@ describe('KBDetailPage', () => {
       }
       if (path === '/kbs/{id}/inquiry') {
         return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+      }
+      if (path === '/kbs/{id}/communities') {
+        return Promise.resolve({
+          data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+          error: undefined,
+        })
       }
       throw new Error(`unexpected api.GET call: ${path}`)
     }) as never)
@@ -201,6 +213,12 @@ describe('KBDetailPage', () => {
         if (path === '/kbs/{id}/inquiry') {
           return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
         }
+        if (path === '/kbs/{id}/communities') {
+          return Promise.resolve({
+            data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+            error: undefined,
+          })
+        }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
     }
@@ -287,6 +305,12 @@ describe('KBDetailPage', () => {
         }
         if (path === '/kbs/{id}/inquiry') {
           return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/communities') {
+          return Promise.resolve({
+            data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+            error: undefined,
+          })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
@@ -376,6 +400,140 @@ describe('KBDetailPage', () => {
       })
       // The row is untouched — no optimistic removal on a rejected delete.
       expect(screen.getByText('busy.txt')).toBeInTheDocument()
+    })
+
+    it('is expanded by default, and collapses/expands on toggle', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 10 }])
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      await screen.findByText('notes.txt')
+      const toggle = screen.getByRole('button', { name: /documents/i })
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(toggle)
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      expect(screen.queryByText('notes.txt')).not.toBeInTheDocument()
+
+      await user.click(toggle)
+      expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      expect(screen.getByText('notes.txt')).toBeInTheDocument()
+    })
+  })
+
+  describe('explore section', () => {
+    function mockCommunities(result: unknown) {
+      vi.mocked(api.GET).mockImplementation(((path: string) => {
+        if (path === '/kbs/{id}') {
+          return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
+        }
+        if (path === '/kbs/{kbId}/documents') {
+          return Promise.resolve({ data: { items: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/inquiry') {
+          return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/communities') {
+          return Promise.resolve({ data: result, error: undefined })
+        }
+        throw new Error(`unexpected api.GET call: ${path}`)
+      }) as never)
+    }
+
+    it('shows a first-run-empty state before communities have ever been computed', async () => {
+      mockCommunities({ computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
+      renderKBDetailPage()
+
+      await screen.findByRole('button', { name: /^communities$/i })
+      expect(screen.getByText(/not yet computed/i)).toBeInTheDocument()
+    })
+
+    it('shows the plain-language result, not raw stats, once communities have been computed', async () => {
+      mockCommunities({
+        computed_at: '2026-01-01T00:00:00Z',
+        modularity: 0.62,
+        community_count: 8,
+        node_count: 45,
+        edge_count: 120,
+      })
+      renderKBDetailPage()
+
+      const summary = await screen.findByText(/8 topic areas across 45 entities/i)
+      // The raw modularity decimal never appears — it's translated into a
+      // qualitative descriptor instead.
+      expect(summary).toHaveTextContent(/well-separated/i)
+      expect(summary.textContent).not.toContain('0.62')
+      expect(screen.getByRole('button', { name: /refresh communities/i })).toBeInTheDocument()
+    })
+
+    it('shows a distinct message for a real-but-empty result, not "0 topic areas across 0 entities"', async () => {
+      // A real response shape confirmed against the live endpoint: a KB
+      // with no entities yet still gets a non-null computed_at.
+      mockCommunities({ computed_at: '2026-01-01T00:00:00Z', modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
+      renderKBDetailPage()
+
+      expect(await screen.findByText(/no entities found yet/i)).toBeInTheDocument()
+      expect(screen.queryByText(/0 topic areas/i)).not.toBeInTheDocument()
+    })
+
+    it('describes low-modularity communities as closely overlapping, not well-separated', async () => {
+      mockCommunities({
+        computed_at: '2026-01-01T00:00:00Z',
+        modularity: 0.05,
+        community_count: 3,
+        node_count: 20,
+        edge_count: 40,
+      })
+      renderKBDetailPage()
+
+      expect(await screen.findByText(/closely overlapping/i)).toBeInTheDocument()
+    })
+
+    it('recomputes on click and shows the new result', async () => {
+      mockCommunities({ computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
+      vi.mocked(api.POST).mockResolvedValue({
+        data: {
+          computed_at: '2026-01-02T00:00:00Z',
+          modularity: 0.5,
+          community_count: 4,
+          node_count: 30,
+          edge_count: 60,
+        },
+        error: undefined,
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      const button = await screen.findByRole('button', { name: /^communities$/i })
+      await user.click(button)
+
+      expect(api.POST).toHaveBeenCalledWith('/kbs/{id}/communities', { params: { path: { id: 'kb-1' } } })
+      expect(await screen.findByText(/4 topic areas across 30 entities/i)).toBeInTheDocument()
+    })
+
+    it('shows an error toast when recompute fails, e.g. too many entities', async () => {
+      mockCommunities({ computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 })
+      vi.mocked(api.POST).mockResolvedValue({
+        data: undefined,
+        error: { error: 'knowledge base has too many entities to compute communities' },
+      } as never)
+
+      const user = userEvent.setup()
+      renderKBDetailPage()
+
+      const button = await screen.findByRole('button', { name: /^communities$/i })
+      await user.click(button)
+
+      await waitFor(() => {
+        expect(toast).toHaveBeenCalledWith(
+          expect.objectContaining({
+            variant: 'destructive',
+            title: 'Failed to compute communities',
+            description: 'knowledge base has too many entities to compute communities',
+          }),
+        )
+      })
     })
   })
 
@@ -857,6 +1015,12 @@ describe('KBDetailPage', () => {
           }
           return Promise.resolve({ data: undefined, error: { error: 'internal error' }, response: { status: 500 } })
         }
+        if (path === '/kbs/{id}/communities') {
+          return Promise.resolve({
+            data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+            error: undefined,
+          })
+        }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
       mockSearchStream([sseFrame('done', { summary: 'the answer', citations: [] })])
@@ -1052,6 +1216,12 @@ describe('KBDetailPage', () => {
         }
         if (path === '/kbs/{id}/inquiry') {
           return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+        }
+        if (path === '/kbs/{id}/communities') {
+          return Promise.resolve({
+            data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+            error: undefined,
+          })
         }
         throw new Error(`unexpected api.GET call: ${path}`)
       }) as never)
