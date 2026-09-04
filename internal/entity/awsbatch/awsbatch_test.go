@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -257,6 +258,140 @@ func TestNew_AppliesDefaultsForZeroValues(t *testing.T) {
 	}
 	if ex.cfg.PresignTTL <= 0 {
 		t.Error("expected a non-zero default PresignTTL")
+	}
+}
+
+// TestExtractBatches_SubmitsAllBatchesBeforeAwaitingAny is the core
+// behavioral test for why ExtractBatches exists: every batch's AWS Batch
+// job must be submitted before this call starts waiting on any of them,
+// so a real compute environment scaling from zero sees the whole backlog
+// at once instead of one job at a time. None of the 3 jobs here are ever
+// given a terminal state, so awaiting blocks (and the context expires)
+// without any of them completing -- if submission were still done lazily,
+// one at a time as each prior job's await returned, this would submit
+// exactly 1 job, not 3.
+func TestExtractBatches_SubmitsAllBatchesBeforeAwaitingAny(t *testing.T) {
+	batchClient := batchmock.New()
+	store := objectstoremock.New()
+	ex := New(batchClient, store, testConfig())
+
+	docID := uuid.New()
+	batches := make([][]*chunk.Chunk, 3)
+	for i := range batches {
+		batches[i] = []*chunk.Chunk{{ID: uuid.New(), DocumentID: docID, Text: "hi"}}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	ex.ExtractBatches(ctx, batches, []entity.Type{"person"})
+
+	if len(batchClient.SubmittedJobs) != 3 {
+		t.Fatalf("expected all 3 batches submitted regardless of any batch completing, got %d", len(batchClient.SubmittedJobs))
+	}
+}
+
+// TestExtractBatches_OneBatchFailingDoesNotBlockOthers verifies batches
+// are awaited independently: one batch's job failing must not prevent a
+// sibling batch's result from being reported, in either direction.
+func TestExtractBatches_OneBatchFailingDoesNotBlockOthers(t *testing.T) {
+	batchClient := batchmock.New()
+	store := objectstoremock.New()
+	ex := New(batchClient, store, testConfig())
+
+	docID := uuid.New()
+	failing := &chunk.Chunk{ID: uuid.New(), DocumentID: docID, Text: "a"}
+	succeeding := &chunk.Chunk{ID: uuid.New(), DocumentID: docID, Text: "b"}
+	batches := [][]*chunk.Chunk{{failing}, {succeeding}}
+
+	// submit() is called in batch order (0, then 1), so the mock's
+	// sequential job IDs are deterministic: "mock-job-1" for batch 0,
+	// "mock-job-2" for batch 1.
+	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusFailed, Reason: "boom"})
+	batchClient.SetState("mock-job-2", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+	resultJSON, _ := json.Marshal(entitiesResponse{
+		Entities: []entityResponse{{ChunkID: succeeding.ID.String(), Type: "person", Text: "B", Start: 0, End: 1, Score: 0.5}},
+	})
+	batchClient.SetLogs("mock-job-2", resultMarker+string(resultJSON))
+
+	results := ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("expected batch 0 to report its own failure")
+	}
+	if results[1].Err != nil {
+		t.Fatalf("batch 1 should have succeeded independently of batch 0's failure: %v", results[1].Err)
+	}
+	if len(results[1].Entities) != 1 || results[1].Entities[0].Text != "B" {
+		t.Errorf("batch 1 entities: %+v", results[1].Entities)
+	}
+}
+
+// TestExtractBatches_JobNamingIsTraceableToDocumentAndBatch is a
+// regression test for a real debugging gap found live: a bare random UUID
+// in the job name made a second, legitimate batch of the same document's
+// extraction indistinguishable from an unrelated job when read from `aws
+// batch list-jobs` output alone.
+func TestExtractBatches_JobNamingIsTraceableToDocumentAndBatch(t *testing.T) {
+	batchClient := batchmock.New()
+	store := objectstoremock.New()
+	ex := New(batchClient, store, testConfig())
+
+	docID := uuid.New()
+	batches := [][]*chunk.Chunk{
+		{{ID: uuid.New(), DocumentID: docID, Text: "a"}},
+		{{ID: uuid.New(), DocumentID: docID, Text: "b"}},
+	}
+	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+	batchClient.SetLogs("mock-job-1", resultMarker+`{"entities":[]}`)
+	batchClient.SetState("mock-job-2", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+	batchClient.SetLogs("mock-job-2", resultMarker+`{"entities":[]}`)
+
+	ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+
+	if len(batchClient.SubmittedJobs) != 2 {
+		t.Fatalf("expected 2 jobs submitted, got %d", len(batchClient.SubmittedJobs))
+	}
+	wantNames := []string{
+		fmt.Sprintf("entity-extraction-%s-batch-0", docID),
+		fmt.Sprintf("entity-extraction-%s-batch-1", docID),
+	}
+	for i, want := range wantNames {
+		if got := batchClient.SubmittedJobs[i].JobName; got != want {
+			t.Errorf("batch %d job name: got %q, want %q", i, got, want)
+		}
+	}
+}
+
+// TestExtractBatches_EmptyBatchesSkipped verifies an empty batch (no
+// chunks) is reported as a zero-value result without submitting a job for
+// it or blocking the others.
+func TestExtractBatches_EmptyBatchesSkipped(t *testing.T) {
+	batchClient := batchmock.New()
+	store := objectstoremock.New()
+	ex := New(batchClient, store, testConfig())
+
+	docID := uuid.New()
+	batches := [][]*chunk.Chunk{
+		{},
+		{{ID: uuid.New(), DocumentID: docID, Text: "a"}},
+	}
+	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+	batchClient.SetLogs("mock-job-1", resultMarker+`{"entities":[]}`)
+
+	results := ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].Err != nil || len(results[0].Entities) != 0 {
+		t.Errorf("empty batch result: got %+v, want zero-value", results[0])
+	}
+	if len(batchClient.SubmittedJobs) != 1 {
+		t.Fatalf("expected exactly 1 job submitted (for the non-empty batch), got %d", len(batchClient.SubmittedJobs))
 	}
 }
 

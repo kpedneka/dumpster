@@ -2,8 +2,10 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -52,18 +54,32 @@ type EntityHandler struct {
 	// batchSize caps how many chunks are sent to the Extractor in one call.
 	// 0 defaults to defaultEntityExtractionBatchSize.
 	batchSize int
-	// heartbeat, when non-nil, is called after each successful batch so
-	// ReclaimStale doesn't mistake a long, actively-progressing document
-	// for a stuck one — a real job was observed getting reclaimed and its
-	// attempt count burned mid-extraction despite steadily persisting
-	// progress, purely because nothing touched updated_at between batches.
-	// Optional so existing callers/tests keep working unmodified.
+	// heartbeat, when non-nil, is called after each successful batch (or,
+	// for a BatchExtractor, on heartbeatInterval while ExtractBatches's
+	// concurrent batches are in flight) so ReclaimStale doesn't mistake a
+	// long, actively-progressing document for a stuck one — a real job was
+	// observed getting reclaimed and its attempt count burned mid-extraction
+	// despite steadily persisting progress, purely because nothing touched
+	// updated_at between batches. Optional so existing callers/tests keep
+	// working unmodified.
 	heartbeat Heartbeater
+	// heartbeatInterval is how often startHeartbeatTicker fires. 0 defaults
+	// to defaultEntityHeartbeatInterval; overridable via
+	// WithHeartbeatInterval, mainly so tests can exercise the ticker
+	// without waiting real minutes.
+	heartbeatInterval time.Duration
 }
 
 // defaultEntityExtractionBatchSize applies when batchSize is unset — see
 // WithBatchSize.
 const defaultEntityExtractionBatchSize = 50
+
+// defaultEntityHeartbeatInterval applies when heartbeatInterval is unset —
+// see WithHeartbeatInterval. Comfortably inside JobStaleTimeout's default
+// (15m) with real margin — this only needs to touch the job row often
+// enough that ReclaimStale never mistakes actively-running work for a
+// stuck job.
+const defaultEntityHeartbeatInterval = 2 * time.Minute
 
 // NewEntityHandler creates an EntityHandler wired to the given dependencies.
 // allowedTypes is the entity type set read from config.
@@ -114,6 +130,20 @@ func (h *EntityHandler) WithHeartbeat(heartbeater Heartbeater) *EntityHandler {
 	return h
 }
 
+// WithHeartbeatInterval overrides how often startHeartbeatTicker fires.
+// See the heartbeatInterval field's doc.
+func (h *EntityHandler) WithHeartbeatInterval(d time.Duration) *EntityHandler {
+	h.heartbeatInterval = d
+	return h
+}
+
+func (h *EntityHandler) heartbeatIntervalOrDefault() time.Duration {
+	if h.heartbeatInterval <= 0 {
+		return defaultEntityHeartbeatInterval
+	}
+	return h.heartbeatInterval
+}
+
 func (h *EntityHandler) batchSizeOrDefault() int {
 	if h.batchSize <= 0 {
 		return defaultEntityExtractionBatchSize
@@ -149,9 +179,17 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 
 	// Confirm the document exists and belongs to this tenant before doing
 	// any work; mirrors DocumentHandler's tenant-scoped lookup.
+	//
+	// Timed as a baseline for a possible cold-DB-connection hypothesis
+	// (see the persistBatch timing below): this is the very first DB call
+	// in Handle, before any AWS Batch waiting, so if it's already slow the
+	// connection wasn't idle-suspended by ExtractBatches specifically --
+	// something else would be going on.
+	docLookupStart := time.Now()
 	if _, err := h.docs.Get(ctx, job.UserID, job.DocumentID); err != nil {
 		return fmt.Errorf("entityhandler: get document %s: %w", job.DocumentID, err)
 	}
+	log.Printf("entityhandler: job %s: initial docs.Get (baseline DB latency) took %s", job.ID, time.Since(docLookupStart))
 
 	chunks, err := h.chunks.ListByDocument(ctx, job.UserID, job.DocumentID)
 	if err != nil {
@@ -198,37 +236,70 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 	}
 
 	batchSize := h.batchSizeOrDefault()
+	var batches [][]*chunk.Chunk
 	for start := 0; start < len(remaining); start += batchSize {
 		end := start + batchSize
 		if end > len(remaining) {
 			end = len(remaining)
 		}
-		batch := remaining[start:end]
+		batches = append(batches, remaining[start:end])
+	}
 
-		entities, err := h.extractor.Extract(ctx, batch, h.allowedTypes)
-		if err != nil {
-			return fmt.Errorf("entityhandler: extract: %w", err)
-		}
-		if len(entities) > 0 {
-			// The extractor is not required to populate UserID; backfill
-			// from the job so persisted rows are always correctly
-			// tenant-scoped regardless of the Extractor implementation.
-			for _, e := range entities {
-				e.UserID = job.UserID
-			}
-			if err := h.entities.BulkCreate(ctx, entities); err != nil {
-				return fmt.Errorf("entityhandler: persist entities: %w", err)
-			}
-		}
+	// entity.BatchExtractor is an optional capability -- feature-detected
+	// here, not required by the Extractor interface -- so extractors that
+	// don't support it (e.g. the in-memory test double) keep working via
+	// the sequential, one-batch-at-a-time path exactly as before. See
+	// entity.BatchExtractor's doc for why submitting every batch's job up
+	// front matters specifically for the real AWS Batch extractor.
+	if batchExtractor, ok := h.extractor.(entity.BatchExtractor); ok {
+		// There's no natural "between batches" point to heartbeat at when
+		// every batch is awaited concurrently in one call below, unlike
+		// the sequential fallback -- run it on its own ticker instead,
+		// for the same reason the sequential path heartbeats per batch:
+		// protecting a long-running job from a false staleness reclaim.
+		stopHeartbeat := h.startHeartbeatTicker(ctx, job)
+		extractStart := time.Now()
+		results := batchExtractor.ExtractBatches(ctx, batches, h.allowedTypes)
+		log.Printf("entityhandler: job %s: ExtractBatches (all %d batches) returned after %s", job.ID, len(batches), time.Since(extractStart))
+		stopHeartbeat()
 
-		if h.heartbeat != nil {
-			if err := h.heartbeat.Heartbeat(ctx, job.ID); err != nil {
-				// A missed heartbeat risks a false staleness reclaim later,
-				// not data loss now — this batch's entities are already
-				// persisted above. Log and keep going rather than fail the
-				// whole job over an accounting write.
-				log.Printf("entityhandler: heartbeat for job %s failed: %v", job.ID, err)
+		// Per-batch timing, with the first call broken out separately --
+		// added to test a specific hypothesis for a measured ~2.6m gap
+		// between AWS Batch's own work finishing and this job completing:
+		// Neon's serverless Postgres compute suspending during the several
+		// idle-on-the-DB-side minutes ExtractBatches just spent polling AWS
+		// APIs, and needing to cold-wake for the first query back. If
+		// that's real, the first persistBatch call here should show a
+		// clear, isolated outlier against the rest.
+		var errs []error
+		for i, result := range results {
+			persistStart := time.Now()
+			var perr error
+			if result.Err != nil {
+				errs = append(errs, fmt.Errorf("entityhandler: extract: %w", result.Err))
+			} else if err := h.persistBatch(ctx, job, result.Entities); err != nil {
+				errs = append(errs, err)
+				perr = err
 			}
+			label := "persistBatch"
+			if i == 0 {
+				label = "persistBatch (FIRST -- possible cold-DB-connection outlier)"
+			}
+			log.Printf("entityhandler: job %s: batch %d %s took %s (entities=%d, err=%v)", job.ID, i, label, time.Since(persistStart), len(result.Entities), perr)
+		}
+		if len(errs) > 0 {
+			return errors.Join(errs...)
+		}
+	} else {
+		for _, batch := range batches {
+			entities, err := h.extractor.Extract(ctx, batch, h.allowedTypes)
+			if err != nil {
+				return fmt.Errorf("entityhandler: extract: %w", err)
+			}
+			if err := h.persistBatch(ctx, job, entities); err != nil {
+				return err
+			}
+			h.heartbeatOnce(ctx, job)
 		}
 	}
 
@@ -239,21 +310,84 @@ func (h *EntityHandler) Handle(ctx context.Context, job *queue.Job) error {
 	// fatal — entity extraction has already succeeded and must not be
 	// rolled back.
 	if h.publisher != nil {
+		publishStart := time.Now()
 		if err := h.publisher.PublishEdgeExtraction(ctx, queue.EdgeExtractionRequested{
 			DocumentID: job.DocumentID,
 			UserID:     job.UserID,
 		}); err != nil {
 			log.Printf("entityhandler: failed to queue edge extraction for document %s: %v", job.DocumentID, err)
 		}
+		log.Printf("entityhandler: job %s: PublishEdgeExtraction took %s", job.ID, time.Since(publishStart))
+
+		publishStart = time.Now()
 		if err := h.publisher.PublishCanonicalization(ctx, queue.CanonicalizationRequested{
 			DocumentID: job.DocumentID,
 			UserID:     job.UserID,
 		}); err != nil {
 			log.Printf("entityhandler: failed to queue canonicalization for document %s: %v", job.DocumentID, err)
 		}
+		log.Printf("entityhandler: job %s: PublishCanonicalization took %s", job.ID, time.Since(publishStart))
 	}
 
 	return nil
+}
+
+// persistBatch backfills UserID (the Extractor is not required to
+// populate it, so persisted rows are always correctly tenant-scoped
+// regardless of which Extractor implementation ran) and persists
+// entities. A no-op for an empty slice, so callers don't need to guard
+// the common case of a batch that legitimately extracted nothing.
+func (h *EntityHandler) persistBatch(ctx context.Context, job *queue.Job, entities []*entity.Entity) error {
+	if len(entities) == 0 {
+		return nil
+	}
+	for _, e := range entities {
+		e.UserID = job.UserID
+	}
+	if err := h.entities.BulkCreate(ctx, entities); err != nil {
+		return fmt.Errorf("entityhandler: persist entities: %w", err)
+	}
+	return nil
+}
+
+// heartbeatOnce sends a single heartbeat. A missed heartbeat risks a
+// false staleness reclaim later, not data loss now — whatever's already
+// persisted stays persisted — so this logs and keeps going rather than
+// failing the whole job over an accounting write.
+func (h *EntityHandler) heartbeatOnce(ctx context.Context, job *queue.Job) {
+	if h.heartbeat == nil {
+		return
+	}
+	if err := h.heartbeat.Heartbeat(ctx, job.ID); err != nil {
+		log.Printf("entityhandler: heartbeat for job %s failed: %v", job.ID, err)
+	}
+}
+
+// startHeartbeatTicker runs heartbeatOnce every heartbeatIntervalOrDefault
+// until the returned stop function is called. Used around a single,
+// possibly long BatchExtractor.ExtractBatches call, which — unlike the
+// sequential fallback path — has no natural "between batches" point to
+// heartbeat at, since every batch is awaited concurrently in one call.
+// Callers must call the returned function exactly once, after
+// ExtractBatches returns.
+func (h *EntityHandler) startHeartbeatTicker(ctx context.Context, job *queue.Job) func() {
+	if h.heartbeat == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(h.heartbeatIntervalOrDefault())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				h.heartbeatOnce(ctx, job)
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 // OnFailed logs that extraction was permanently dead-lettered for the
