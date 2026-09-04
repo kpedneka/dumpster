@@ -1,5 +1,5 @@
 // Package mock provides a test double for entity.Extractor, used everywhere
-// except the real inference-service adapter (internal/entity/inference).
+// except the real AWS Batch adapter (internal/entity/awsbatch).
 package mock
 
 import (

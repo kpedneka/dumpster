@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Local entity extraction sidecar for the dumpster ingestion pipeline.
+"""Entity extraction logic for the AWS Batch GPU job (see
+scripts/batch_entity_job.py, the actual entrypoint, and
+internal/entity/awsbatch — the only entity.Extractor implementation).
+load_pipeline() and _handle_request() below are what batch_entity_job.py
+calls directly, once per job; this file's own main()/stdin loop further
+down predates that and is not currently invoked by anything.
 
-Started once by the Go gliner adapter (internal/entity/gliner) and kept
-alive across many documents (v4.7): each line of stdin is one JSON request,
-each line written to stdout is that request's JSON response. This keeps the
-extraction model (spaCy for sentence/token structure, GLiNER for zero-shot
-entity typing against a config-driven label set) local, turning a variable
-per-document LLM cost into a fixed, sunk hardware cost.
-
-Request (one line of stdin), one JSON object:
+Request (one JSON object, batch_entity_job.py's CHUNKS_URL payload):
 {
   "allowed_types": ["person", "organization", ...],
   "chunks": [
@@ -17,7 +15,7 @@ Request (one line of stdin), one JSON object:
   ]
 }
 
-Response (one line of stdout), one JSON object:
+Response (one JSON object, returned by _handle_request):
 {
   "entities": [
     {
@@ -39,14 +37,11 @@ config (ENTITY_TYPES) instead of requiring a retrained/fine-tuned model per
 type-set change. spaCy is used for fast sentence segmentation so each GLiNER
 call stays within the model's effective context window.
 
-Previously this script processed exactly one request and exited, so every
-document paid spaCy+GLiNER's model-load cost from scratch — measured at
-~17.5s regardless of document size, unrelated to and on top of whatever the
-extraction itself cost. The model is now loaded once, before the request
-loop starts, and reused for the life of the process. An unhandled error
-(e.g. malformed input) still ends the process — the Go adapter detects this
-via the closed pipe and starts a fresh one on its next call — this script
-does not try to recover mid-loop and keep serving.
+Model load is the dominant fixed cost here — measured at ~17.5s regardless
+of document size, on top of whatever the extraction itself costs — which is
+why batch_entity_job.py loads the pipeline once per job invocation and
+reuses it for every chunk in that job's request, rather than reloading it
+per chunk.
 """
 import json
 import sys

@@ -1,9 +1,12 @@
 // Package awsbatch implements entity.Extractor by submitting an AWS Batch
-// job for GPU entity extraction, rather than calling a warm HTTP service
-// (see internal/entity/inference) or a stop/start-able EC2 box (the
-// earlier design this replaced — dropped once it turned out fast wake
-// latency didn't actually matter, since entity extraction isn't on the
-// path to a document's visible "indexed" status).
+// job for GPU entity extraction — the only entity.Extractor implementation
+// in this codebase; there is no warm-HTTP-service fallback (that path,
+// internal/entity/inference, was removed once GPU throughput became the
+// accepted baseline for both local dev and production, not just an
+// optional speedup). Also replaces an earlier stop/start-able EC2 box
+// design, dropped once it turned out fast wake latency didn't actually
+// matter, since entity extraction isn't on the path to a document's
+// visible "indexed" status.
 //
 // This package never touches Postgres or grants the Batch container real
 // object-storage credentials — see scripts/batch_entity_job.py's own
@@ -69,10 +72,7 @@ func New(client awsbatch.Client, store objectstore.ObjectStore, cfg Config) *Ext
 }
 
 // Request/response shapes matching extract_entities.py's stdin protocol
-// exactly (same as internal/entity/inference's, deliberately not shared
-// between the two packages — they're small, and coupling two adapters to
-// one shared type for a stable, all-but-frozen wire contract isn't worth
-// the indirection).
+// exactly.
 type entitiesRequest struct {
 	AllowedTypes []string       `json:"allowed_types"`
 	Chunks       []chunkRequest `json:"chunks"`

@@ -22,7 +22,24 @@ WORKDIR /app
 # GPU-enabled torch: the default PyPI index (not python.org/whl/cpu, as the
 # root Dockerfile's inference stage uses) bundles the CUDA runtime this job
 # actually needs to run on a GPU Batch compute environment.
-RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir spacy gliner torch
+#
+# The uninstall in this same RUN (not a separate one -- a later layer
+# deleting files never shrinks the image; overlayfs still ships the deleted
+# bytes in the lower layer) drops CUDA dependencies torch declares but this
+# job never exercises, measured directly against the image this replaces
+# (5.9GB site-packages/):
+#   nvidia-nvshmem (78MB)     -- multi-node shared memory; single-node only here
+#   nvidia-cusparselt (224MB) -- structured-sparsity kernels; extract_entities.py
+#                                never constructs a sparse tensor
+#   triton (897MB)            -- torch.compile's JIT kernel compiler; grepped
+#                                the codebase, nothing here calls torch.compile
+#                                or touches torch._dynamo
+# nvidia-nccl (242MB) looks like the same kind of dead weight -- this job
+# never touches torch.distributed -- but plain `import torch` unconditionally
+# dlopen()s libnccl.so.2 even with no distributed call in sight, confirmed by
+# actually trying to remove it: it breaks the import outright. Keep it.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir spacy gliner torch && \
+    pip uninstall -y triton
 RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
 
 # Baking the GLiNER weights in and forcing offline mode avoids a live
