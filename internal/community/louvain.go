@@ -150,9 +150,13 @@ func localMoving(ctx context.Context, lv *level, m2 float64) ([]int, bool, error
 // community fold into that super-node's self-loop, and edges crossing
 // communities are summed into one new inter-community edge per pair.
 // Community ids are compacted to dense 0..k-1 in first-seen order over
-// node index 0..n-1 (deterministic). Returns the new level and its node
-// count.
-func aggregate(lv *level, comm []int) (*level, int) {
+// node index 0..n-1 (deterministic). Returns the new level, its node
+// count, and the raw-community-id -> compacted-id map used to build it --
+// callers tracking node membership across levels (e.g. Louvain's
+// finalComm) must apply this same remap to stay in the new level's node
+// space, since comm's ids are uncompacted representative node indices,
+// not dense 0..newN-1 values.
+func aggregate(lv *level, comm []int) (*level, int, map[int]int) {
 	remap := make(map[int]int)
 	compact := make([]int, lv.n)
 	next := 0
@@ -196,7 +200,7 @@ func aggregate(lv *level, comm []int) (*level, int) {
 		newEdges[i] = edge{p.a, p.b, sums[p]}
 	}
 
-	return buildLevel(newN, newEdges, newSelfLoop), newN
+	return buildLevel(newN, newEdges, newSelfLoop), newN, remap
 }
 
 // modularity computes Newman's Q for comm (a dense community assignment
@@ -303,11 +307,16 @@ func Louvain(ctx context.Context, g *Graph) (map[uuid.UUID]int, float64, error) 
 			break
 		}
 
+		next, newN, remap := aggregate(cur, comm)
+		// comm[finalComm[i]] composes finalComm through this pass's raw
+		// (uncompacted) community assignment; remap then compacts that into
+		// next's dense 0..newN-1 node space -- both steps are required to
+		// keep finalComm valid on the next iteration's (smaller) level, not
+		// just the first one.
 		for i := range finalComm {
-			finalComm[i] = comm[finalComm[i]]
+			finalComm[i] = remap[comm[finalComm[i]]]
 		}
 
-		next, newN := aggregate(cur, comm)
 		cur = next
 		if newN == 1 {
 			// Fully collapsed to one community; nothing more to improve.

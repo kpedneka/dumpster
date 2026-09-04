@@ -3,6 +3,7 @@ package community_test
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"testing"
 	"time"
 
@@ -174,4 +175,52 @@ func largeClusteredGraph(numClusters, clusterSize int) *community.Graph {
 		})
 	}
 	return g
+}
+
+// TestLouvain_MultiLevelAggregationDoesNotPanic is a regression test for a
+// production panic: "index out of range [409] with length 191" inside
+// Louvain's main loop, surfaced once real entity/edge data produced a graph
+// needing 2+ rounds of aggregation. finalComm was composed through
+// localMoving's raw (uncompacted) community ids -- literal representative
+// node indices, not dense 0..newN-1 values -- without ever applying
+// aggregate's own compaction back onto finalComm, so on the second
+// aggregation level finalComm could hold an index past the new, smaller
+// level's node count. A small hand-built graph doesn't reliably reach 2+
+// aggregation levels (Louvain tends to converge too cleanly), so this uses
+// a fixed-seed sparse random graph -- structurally closer to real
+// co-occurrence data -- which reproduces the exact panic deterministically.
+func TestLouvain_MultiLevelAggregationDoesNotPanic(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	const n = 300
+	nodes := make([]uuid.UUID, n)
+	for i := range nodes {
+		nodes[i] = uuid.New()
+	}
+
+	var edges []community.WeightedEdge
+	seen := map[[2]int]bool{}
+	for i := 0; i < n*4; i++ {
+		a, b := rng.Intn(n), rng.Intn(n)
+		if a == b {
+			continue
+		}
+		if a > b {
+			a, b = b, a
+		}
+		if seen[[2]int{a, b}] {
+			continue
+		}
+		seen[[2]int{a, b}] = true
+		edges = append(edges, community.WeightedEdge{A: nodes[a], B: nodes[b], Weight: 1.0 + rng.Float64()*5})
+	}
+
+	g := &community.Graph{Nodes: nodes, Edges: edges}
+
+	got, _, err := community.Louvain(context.Background(), g)
+	if err != nil {
+		t.Fatalf("Louvain: %v", err)
+	}
+	if len(got) != n {
+		t.Errorf("expected all %d nodes represented in result, got %d", n, len(got))
+	}
 }
