@@ -1409,9 +1409,9 @@ describe('KBDetailPage', () => {
         )
         const user = userEvent.setup()
         const reevaluateButtons = screen.getAllByRole('button', { name: /re-evaluate query/i })
-        // The France turn's button is the first one rendered (turns render
-        // in original-query order).
-        await user.click(reevaluateButtons[0])
+        // Turns render newest-first, so the Japan turn (asked second) is
+        // first and France (asked first) is second.
+        await user.click(reevaluateButtons[1])
 
         await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
 
@@ -1426,6 +1426,26 @@ describe('KBDetailPage', () => {
         const japanQuery = screen.getByText('what is the capital of Japan?')
         const japanGroup = japanQuery.parentElement!
         expect(within(japanGroup).queryByText('Paris remains the capital.')).not.toBeInTheDocument()
+      })
+
+      it('renders turns most-recently-queried first', async () => {
+        mockInquiryMessages = [
+          userMessage('what is the capital of France?', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'Paris is the capital.' }),
+          userMessage('what is the capital of Japan?', 'msg-3'),
+          assistantMessage({ id: 'msg-4', content: 'Tokyo is the capital.' }),
+          userMessage('what is the capital of Germany?', 'msg-5'),
+          assistantMessage({ id: 'msg-6', content: 'Berlin is the capital.' }),
+        ]
+        renderKBDetailPage()
+        await screen.findByText('Berlin is the capital.')
+
+        const queries = screen.getAllByText(/^what is the capital of/i)
+        expect(queries.map((el) => el.textContent)).toEqual([
+          'what is the capital of Germany?',
+          'what is the capital of Japan?',
+          'what is the capital of France?',
+        ])
       })
 
       it('shows the re-evaluation streaming in directly under the message being re-answered', async () => {
