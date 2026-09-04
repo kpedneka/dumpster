@@ -47,40 +47,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # requirements.txt copied and installed before the rest of scripts/ so an
-# unrelated change to extract_regions.py/extract_entities.py/inference_service.py
-# doesn't bust the cache for this layer — installing torch et al. from
-# scratch is the single most expensive step in this build.
+# unrelated change to extract_regions.py/inference_service.py doesn't bust
+# the cache for this layer — installing torch is the single most expensive
+# step in this build.
 COPY scripts/requirements.txt /app/scripts/requirements.txt
-# torch (a transitive dependency of gliner) defaults to the CUDA-enabled
-# PyPI wheel on Linux, which bundles the full NVIDIA/CUDA runtime (~2.9GB
-# of nvidia-* packages) and triton (~650MB, a GPU kernel compiler) — dead
-# weight on Fly's shared-cpu-1x, which has no GPU at all (confirmed:
-# torch.cuda.is_available() is False on this exact image). Installing the
-# CPU-only build first satisfies gliner's torch dependency before pip ever
-# reaches for the GPU-enabled default.
-#
-# torchvision must be pinned to the same index: it ships its own compiled
-# extension that has to exactly match the torch build it's paired with.
-# Installing only torch from the CPU index and letting torchvision resolve
-# normally afterward pairs a CPU torch with a mismatched torchvision, which
-# fails at import with "operator torchvision::nms does not exist".
-RUN --mount=type=cache,target=/root/.cache/pip pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# torch (a transitive dependency of sentence-transformers, for local
+# embeddings) defaults to the CUDA-enabled PyPI wheel on Linux, which
+# bundles the full NVIDIA/CUDA runtime (~2.9GB of nvidia-* packages) and
+# triton (~650MB, a GPU kernel compiler) — dead weight on Fly's
+# shared-cpu-1x, which has no GPU at all (confirmed: torch.cuda.is_available()
+# is False on this exact image). Installing the CPU-only build first
+# satisfies sentence-transformers' torch dependency before pip ever reaches
+# for the GPU-enabled default.
+RUN --mount=type=cache,target=/root/.cache/pip pip install torch --index-url https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,target=/root/.cache/pip pip install -r /app/scripts/requirements.txt
-# `pip install spacy` installs only the library, not a language model —
-# en_core_web_sm is a separate download. Without it, extract_entities.py
-# silently falls back to a naive punctuation-based sentencizer (see
-# scripts/extract_entities.py's _load_nlp), which badly fragments
-# citation/URL/abbreviation-heavy text and inflates entity counts with no
-# error anywhere.
-RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
-# Baking the GLiNER and local-embedding model weights into the image and
-# forcing offline mode eliminates HuggingFace Hub network round trips at
-# runtime entirely — see the Warm Entity-Extraction Sidecar topic page for
-# the full history of why baking beats downloading on first use (short
-# version: a cold network download of these weights is a multi-minute tax,
-# worth spending ~1.5GB of image size to avoid on a process that's always on
-# anyway).
-RUN python -c "from gliner import GLiNER; GLiNER.from_pretrained('urchade/gliner_mediumv2.1')"
+# Baking the local-embedding model weights into the image and forcing
+# offline mode eliminates HuggingFace Hub network round trips at runtime
+# entirely — see the Warm Entity-Extraction Sidecar topic page for the full
+# history of why baking beats downloading on first use (short version: a
+# cold network download of these weights is a multi-minute tax, worth
+# spending image size to avoid on a process that's always on anyway).
+# Entity extraction's own weights (GLiNER) are not baked here at all —
+# entity extraction runs as a separate AWS Batch GPU job
+# (Dockerfile.batch-entity-job), not in this always-on process.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1

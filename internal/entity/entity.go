@@ -89,10 +89,9 @@ type Repository interface {
 // existing chunks, it never re-chunks.
 //
 // The only implementation that talks to a vendor/ML dependency is
-// internal/entity/inference, which calls the consolidated ML inference
-// service's /entities endpoint over HTTP; every other caller depends on
-// this interface so units stay testable in isolation (see
-// internal/entity/mock for the test double).
+// internal/entity/awsbatch, which submits an AWS Batch GPU job; every
+// other caller depends on this interface so units stay testable in
+// isolation (see internal/entity/mock for the test double).
 type Extractor interface {
 	// Extract returns the entities found across chunks, restricted to the
 	// given allowed entity types. The returned entities' ChunkID/DocumentID/

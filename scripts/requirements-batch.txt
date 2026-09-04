@@ -1,0 +1,24 @@
+# Dependencies for scripts/extract_entities.py and scripts/batch_entity_job.py
+# — the AWS Batch GPU entity-extraction job's Python logic (see
+# internal/entity/awsbatch, the only entity.Extractor implementation).
+#
+# Mirrors what Dockerfile.batch-entity-job installs directly (that image
+# does not read this file — it needs the GPU-enabled torch build from
+# PyPI's default index, not the CPU-only one scripts/requirements.txt pins
+# via a separate index-url). This file exists purely so a local venv can
+# run extract_entities.py's tests or batch_entity_job.py itself without
+# needing a real AWS Batch container:
+#   python3 -m venv scripts/.venv && scripts/.venv/bin/pip install -r scripts/requirements.txt -r scripts/requirements-batch.txt
+#
+# `pip install` alone does NOT install en_core_web_sm — that's a separate
+# model download. After installing these, also run:
+#   python -m spacy download en_core_web_sm
+#
+# GLiNER.from_pretrained() also checks HuggingFace Hub for updates on every
+# call by default, even once its weights are cached. The Batch job image
+# bakes the model in and forces offline mode (see Dockerfile.batch-entity-job)
+# so this never runs there at all. For local dev, after the model has been
+# fetched once, set these to make it fully offline too:
+#   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+spacy>=3.7,<4
+gliner>=0.2,<1

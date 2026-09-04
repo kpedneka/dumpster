@@ -1,20 +1,14 @@
-# Dependencies for scripts/extract_entities.py, the local entity-extraction
-# sidecar invoked by internal/entity/gliner via subprocess.
-#
-# `pip install` alone does NOT install en_core_web_sm — that's a separate
-# model download this project previously missed everywhere (local dev and
-# the Docker image alike), silently degrading sentence segmentation. After
-# installing these, also run:
-#   python -m spacy download en_core_web_sm
-#
-# GLiNER.from_pretrained() also checks HuggingFace Hub for updates on every
-# call by default, even once its weights are cached. The runtime image bakes
-# the model in and forces offline mode (see Dockerfile) so this never runs
-# there at all. For local dev, after the model has been fetched once, set
-# these to make it fully offline too:
-#   export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
-spacy>=3.7,<4
-gliner>=0.2,<1
+# spacy/gliner (scripts/extract_entities.py's dependencies) are NOT listed
+# here. extract_entities.py is still live code — it's what
+# scripts/batch_entity_job.py runs inside the AWS Batch GPU job (see
+# internal/entity/awsbatch, the only entity.Extractor implementation) — but
+# that image (Dockerfile.batch-entity-job) installs spacy/gliner/torch
+# directly, not from this file, since it needs the GPU-enabled torch build
+# rather than the CPU-only one the rest of this file pulls in below. Listing
+# them here would only bloat scripts/inference_service.py's image
+# (Dockerfile's `inference` target), which never imports extract_entities.py
+# at all. For local testing of extract_entities.py/batch_entity_job.py, see
+# scripts/requirements-batch.txt.
 
 # Dependencies for scripts/extract_regions.py, the PDF region classifier
 # invoked by internal/manifest/layout via subprocess (no VLM layer here —
@@ -28,13 +22,13 @@ pymupdf>=1.24,<2
 pdfplumber>=0.11,<1
 Pillow>=10,<12
 
-# Dependencies for scripts/inference_service.py (v4.8): the consolidated,
-# always-on HTTP service that wraps extract_entities.py/extract_regions.py's
-# pipeline logic plus local embeddings behind /entities, /regions, and
-# /embeddings endpoints, replacing the per-Go-process subprocess sidecar
-# pattern. fastapi+uvicorn are new dependencies purely for this service —
-# extract_entities.py/extract_regions.py keep working standalone via their
-# existing stdin/stdout protocol until v4.9/v4.10 retire those call sites.
+# Dependencies for scripts/inference_service.py: the consolidated,
+# always-on HTTP service wrapping extract_regions.py's pipeline logic plus
+# local embeddings behind /regions and /embeddings, replacing the
+# per-Go-process subprocess sidecar pattern this project used before it.
+# sentence-transformers pulls in CPU torch (see the pinned index-url install
+# in Dockerfile's `inference` target) — needed for local embeddings, not
+# for anything entity-extraction-related.
 fastapi>=0.115,<1
 uvicorn>=0.32,<1
 sentence-transformers>=3.2,<4

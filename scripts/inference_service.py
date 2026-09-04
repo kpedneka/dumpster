@@ -1,38 +1,37 @@
 """Consolidated ML inference service.
 
-Wraps three CPU-bound Python capabilities behind one always-on HTTP
-service, so cmd/api and cmd/worker call over the network instead of each
-embedding its own warm Python subprocess (the pattern this replaces — see
-the System Architecture page's Inference Service sub-page for the full
-design and why it changed).
+Wraps CPU-bound Python capabilities behind one always-on HTTP service, so
+cmd/api and cmd/worker call over the network instead of each embedding its
+own warm Python subprocess (the pattern this replaces — see the System
+Architecture page's Inference Service sub-page for the full design and why
+it changed). Entity extraction is deliberately not one of these — it runs
+as an AWS Batch GPU job (see internal/entity/awsbatch and
+scripts/batch_entity_job.py), the only entity.Extractor implementation;
+this process never loads GLiNER/spacy at all.
 
 Endpoints:
-  POST /entities    — same request/response contract as extract_entities.py's
-                       stdin/stdout protocol (see that file's docstring).
-                       Logic is reused verbatim via _handle_request, not
-                       reimplemented.
   POST /regions      — same request/response contract as extract_regions.py's
                        stdin/stdout protocol (see that file's docstring).
                        Runs in a separate, memory-capped child process per
                        call via extract_regions_isolated(), not directly in
                        this one — see that function's docstring. At most
-                       REGIONS_MAX_CONCURRENCY (default 1) calls run at
+                       REGIONS_MAX_CONCURRENCY (default 2) calls run at
                        once — see _REGIONS_SEMAPHORE's comment.
-  POST /embeddings  — new: {"texts": [...], "is_query": bool} ->
+  POST /embeddings  — {"texts": [...], "is_query": bool} ->
                        {"embeddings": [[...], ...], "dims": int}
-  GET  /healthz      — 200 only once all three models have finished loading;
+  GET  /healthz      — 200 only once both models have finished loading;
                        503 before that. In practice this is belt-and-braces:
                        the ASGI server doesn't accept connections until the
                        lifespan startup below returns, so no endpoint can
                        ever serve against a partially-warm process regardless.
 
-/entities and /regions dispatch their actual (slow, CPU-bound) work via
-run_in_threadpool rather than calling it directly. uvicorn runs a single,
-single-threaded event loop by default; a synchronous multi-second call made
-directly in one of these coroutines would stop that one thread from making
-progress on anything else at all — not just this request, every request,
-including an unrelated /embeddings call for a search query — for its whole
-duration. See each handler's inline comment for the specifics.
+/regions dispatches its actual (slow, CPU-bound) work via run_in_threadpool
+rather than calling it directly. uvicorn runs a single, single-threaded
+event loop by default; a synchronous multi-second call made directly in
+this coroutine would stop that one thread from making progress on anything
+else at all — not just this request, every request, including an unrelated
+/embeddings call for a search query — for its whole duration. See the
+handler's inline comment for the specifics.
 
 Run with: uvicorn inference_service:app --host 0.0.0.0 --port 8000
 """
@@ -48,24 +47,25 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import embeddings
-import extract_entities
 import extract_regions
 
 _pipelines = {}
-_REQUIRED_PIPELINES = ("nlp", "entity_model", "embed_model")
+_REQUIRED_PIPELINES = ("embed_model",)
 
-# Caps how many /regions requests run their extract_regions() call at once.
-# A single large PDF's table extraction has been measured peaking at ~3.1GB
-# RSS on its own (a 412-page document); this process's whole memory budget
-# is 4096mb in production (see fly.inference.toml — that comment's "~1.3GB
-# headroom" figure predates this measurement and is already stale). Two such
-# requests running concurrently is what actually took the process down
-# during local testing, not raw CPU/RAM scarcity — nothing here queued or
-# rejected the second request, so both ran at once and stacked their peaks.
-# Defaults to 1: on the current memory budget, running even two large PDFs
-# concurrently isn't safe. Override via REGIONS_MAX_CONCURRENCY once a real
-# per-request memory budget justifies raising it.
-_REGIONS_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("REGIONS_MAX_CONCURRENCY", "1")))
+# Caps how many /regions requests run their extract_regions_isolated()
+# call at once. Originally defaulted to 1 because a single large PDF's
+# table extraction had been measured peaking at ~3.1GB RSS on its own —
+# two running concurrently is what actually took the whole process down
+# during local testing. That cost turned out to be pdfplumber never
+# releasing a page's parsed geometry for the life of the extraction (see
+# page.flush_cache() in extract_regions.py); with that fixed, real
+# documents now peak at 500-600MB regardless of page count, so 2 concurrent
+# requests' worst case (2 x REGIONS_MEMORY_LIMIT_MB, each isolated in its
+# own capped subprocess) fits comfortably within this process's warm
+# baseline (~550MB) plus the production machine's 4096mb budget (see
+# fly.inference.toml). Override via REGIONS_MAX_CONCURRENCY as real usage
+# data comes in.
+_REGIONS_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("REGIONS_MAX_CONCURRENCY", "2")))
 
 
 @asynccontextmanager
@@ -74,11 +74,8 @@ async def lifespan(_app: FastAPI):
     # any connections. This ordering — not a separate readiness flag — is
     # what guarantees no endpoint ever serves against a partially-warm
     # process.
-    nlp, entity_model = extract_entities.load_pipeline()
     extract_regions._load_libs()
     embed_model = embeddings.load_embedder()
-    _pipelines["nlp"] = nlp
-    _pipelines["entity_model"] = entity_model
     _pipelines["embed_model"] = embed_model
     yield
     _pipelines.clear()
@@ -107,31 +104,6 @@ def _parse_json_object(raw: bytes) -> dict:
     return body
 
 
-@app.post("/entities")
-async def entities(request: Request):
-    try:
-        body = _parse_json_object(await request.body())
-        # run_in_threadpool, not a direct call: _handle_request runs spaCy +
-        # GLiNER inference, which can take seconds for a large batch of
-        # chunks. Calling it directly here would block this process's one
-        # asyncio event loop for that whole duration — uvicorn is
-        # single-threaded by default, so every other in-flight request
-        # (including an unrelated /embeddings call for a search query)
-        # would simply stop making progress until this one call returned,
-        # not just slow down. The threadpool dispatch is the same mechanism
-        # FastAPI already uses automatically for a plain `def` endpoint
-        # (see /embeddings below) — using it explicitly here keeps this
-        # async endpoint (needed for `await request.body()`, for the
-        # custom validation-friendly JSON parsing above) from being worse
-        # off than a sync one for the actual CPU-bound work.
-        response_line = await run_in_threadpool(
-            extract_entities._handle_request, _pipelines["nlp"], _pipelines["entity_model"], json.dumps(body)
-        )
-    except (ValueError, KeyError, TypeError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
-    return JSONResponse(content=json.loads(response_line))
-
-
 @app.post("/regions")
 async def regions(request: Request):
     try:
@@ -148,10 +120,10 @@ async def regions(request: Request):
     except (base64.binascii.Error, ValueError) as exc:
         return JSONResponse(status_code=400, content={"error": f"invalid pdf_base64: {exc}"})
 
-    # See the matching comment in /entities above: PDF layout classification
-    # is the heaviest call in this whole service (can run for seconds to
-    # tens of seconds on a large document) and must not run directly on the
-    # event loop. The semaphore acquire below queues this request behind any
+    # PDF layout classification is the heaviest call in this whole service
+    # (can run for seconds to tens of seconds on a large document) and must
+    # not run directly on the event loop. The semaphore acquire below
+    # queues this request behind any
     # already-running /regions call rather than letting both run at once —
     # see _REGIONS_SEMAPHORE's comment for why. A queued request just waits;
     # the caller (internal/manifest/layout, called from a queue job with its

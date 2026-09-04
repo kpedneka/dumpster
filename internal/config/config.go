@@ -58,28 +58,25 @@ type Config struct {
 	// or remove a type by changing ENTITY_TYPES, no migration required.
 	EntityTypes []string
 	// InferenceServiceURL is the base URL of the consolidated ML inference
-	// service: entity extraction, PDF region classification, and local
-	// embeddings, called over HTTP by both cmd/api and cmd/worker
-	// instead of each embedding its own warm Python subprocess. Defaults to
-	// the docker-compose service name; override for local dev without Docker
-	// or to point at a different deployment.
+	// service: PDF region classification and local embeddings, called over
+	// HTTP by both cmd/api and cmd/worker instead of each embedding its own
+	// warm Python subprocess. Entity extraction does not go through this —
+	// see internal/entity/awsbatch and AWSRegion/BatchJobQueue/
+	// BatchJobDefinition below. Defaults to the docker-compose service
+	// name; override for local dev without Docker or to point at a
+	// different deployment.
 	InferenceServiceURL string
 
-	// EntityExtractorBackend selects which entity.Extractor implementation
-	// cmd/worker wires up: "inference" (default) calls the always-on
-	// InferenceServiceURL over HTTP; "awsbatch" submits a GPU job to AWS
-	// Batch per internal/entity/awsbatch instead. Config, not code, so an
-	// environment can switch without a rebuild.
-	EntityExtractorBackend string
-	// AWSRegion is the region AWS Batch/CloudWatch Logs calls target when
-	// EntityExtractorBackend is "awsbatch". Credentials themselves come
-	// from the standard AWS SDK chain (AWS_ACCESS_KEY_ID/
-	// AWS_SECRET_ACCESS_KEY env vars in this app's deployments), not a
-	// dedicated config field.
+	// AWSRegion is the region cmd/worker's AWS Batch/CloudWatch Logs calls
+	// target for entity extraction (internal/entity/awsbatch — the only
+	// entity.Extractor implementation; there is no non-AWS-Batch fallback).
+	// Credentials themselves come from the standard AWS SDK chain
+	// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars in this app's
+	// deployments), not a dedicated config field.
 	AWSRegion string
 	// BatchJobQueue and BatchJobDefinition identify the AWS Batch resources
-	// the "awsbatch" extractor submits jobs against. Required when that
-	// backend is selected.
+	// entity extraction submits jobs against. Required — cmd/worker exits
+	// at startup if either is empty.
 	BatchJobQueue      string
 	BatchJobDefinition string
 	// BatchPollInterval is how often the awsbatch extractor checks a
@@ -185,12 +182,11 @@ func Load() *Config {
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
 
-		EntityExtractorBackend: getEnv("ENTITY_EXTRACTOR_BACKEND", "inference"),
-		AWSRegion:              getEnv("AWS_REGION", "us-east-1"),
-		BatchJobQueue:          getEnv("BATCH_JOB_QUEUE", ""),
-		BatchJobDefinition:     getEnv("BATCH_JOB_DEFINITION", ""),
-		BatchPollInterval:      getEnvDuration("BATCH_POLL_INTERVAL", 0),
-		BatchPresignTTL:        getEnvDuration("BATCH_PRESIGN_TTL", 0),
+		AWSRegion:          getEnv("AWS_REGION", "us-east-1"),
+		BatchJobQueue:      getEnv("BATCH_JOB_QUEUE", ""),
+		BatchJobDefinition: getEnv("BATCH_JOB_DEFINITION", ""),
+		BatchPollInterval:  getEnvDuration("BATCH_POLL_INTERVAL", 0),
+		BatchPresignTTL:    getEnvDuration("BATCH_PRESIGN_TTL", 0),
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 

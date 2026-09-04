@@ -19,15 +19,12 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/entity"
 	entityawsbatch "github.com/kunalpednekar/dumpster/internal/entity/awsbatch"
-	entityinference "github.com/kunalpednekar/dumpster/internal/entity/inference"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
 	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
 	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
@@ -91,11 +88,21 @@ func main() {
 	canonicalRepo := canonicalpg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
 	embedder := llminference.NewDocumentEmbedder(cfg.InferenceServiceURL)
-	extractor, err := newEntityExtractor(ctx, cfg, obj)
-	if err != nil {
-		logger.Error("entity extractor setup failed", "err", err)
+	if cfg.BatchJobQueue == "" || cfg.BatchJobDefinition == "" {
+		logger.Error("entity extractor setup failed", "err", "BATCH_JOB_QUEUE and BATCH_JOB_DEFINITION are required")
 		os.Exit(1)
 	}
+	awsBatchClient, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
+	if err != nil {
+		logger.Error("entity extractor setup failed", "err", fmt.Errorf("aws batch client: %w", err))
+		os.Exit(1)
+	}
+	extractor := entityawsbatch.New(awsBatchClient, obj, entityawsbatch.Config{
+		JobQueue:      cfg.BatchJobQueue,
+		JobDefinition: cfg.BatchJobDefinition,
+		PollInterval:  cfg.BatchPollInterval,
+		PresignTTL:    cfg.BatchPresignTTL,
+	})
 
 	manifestRepo := manifestpg.New(txRunner)
 	layoutExtractor := layout.New(layout.Config{BaseURL: cfg.InferenceServiceURL})
@@ -137,33 +144,6 @@ func main() {
 	)
 	if err := w.Run(ctx); err != nil {
 		logger.Info("worker stopped", "reason", err)
-	}
-}
-
-// newEntityExtractor builds the entity.Extractor cfg.EntityExtractorBackend
-// selects: "inference" (default) calls the always-on ML inference service
-// over HTTP; "awsbatch" submits a GPU job to AWS Batch per
-// internal/entity/awsbatch instead. Switching is config, not code.
-func newEntityExtractor(ctx context.Context, cfg *config.Config, obj objectstore.ObjectStore) (entity.Extractor, error) {
-	switch cfg.EntityExtractorBackend {
-	case "", "inference":
-		return entityinference.New(cfg.InferenceServiceURL), nil
-	case "awsbatch":
-		if cfg.BatchJobQueue == "" || cfg.BatchJobDefinition == "" {
-			return nil, fmt.Errorf("BATCH_JOB_QUEUE and BATCH_JOB_DEFINITION are required when ENTITY_EXTRACTOR_BACKEND=awsbatch")
-		}
-		client, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
-		if err != nil {
-			return nil, fmt.Errorf("aws batch client: %w", err)
-		}
-		return entityawsbatch.New(client, obj, entityawsbatch.Config{
-			JobQueue:      cfg.BatchJobQueue,
-			JobDefinition: cfg.BatchJobDefinition,
-			PollInterval:  cfg.BatchPollInterval,
-			PresignTTL:    cfg.BatchPresignTTL,
-		}), nil
-	default:
-		return nil, fmt.Errorf("unknown ENTITY_EXTRACTOR_BACKEND %q (want %q or %q)", cfg.EntityExtractorBackend, "inference", "awsbatch")
 	}
 }
 
