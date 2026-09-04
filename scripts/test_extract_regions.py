@@ -16,12 +16,16 @@ class FakePage:
     def __init__(self, text="", tables=None):
         self._text = text
         self._tables = tables or []
+        self.flush_cache_calls = 0
 
     def get_text(self):
         return self._text
 
     def extract_tables(self):
         return self._tables
+
+    def flush_cache(self):
+        self.flush_cache_calls += 1
 
 
 class FakePyMuPDFDoc(list):
@@ -101,6 +105,22 @@ class TablesTests(ExtractRegionsTestCase):
         self.pdfplumber_pages = [FakePage(tables=[[]])]
         regions = extract_regions.extract_regions(b"fake pdf bytes")
         self.assertEqual([r for r in regions if r["region_type"] == "native_table"], [])
+
+    # Regression test: without this, pdfplumber never releases a page's
+    # parsed geometry for the life of the `with pdfplumber.open(...)`
+    # block, so peak memory grows with the cumulative complexity of every
+    # page processed so far. Measured directly against real documents: a
+    # 1345-page PDF exceeded 3.8GB and was killed before finishing without
+    # this call; with it, ~103MB start to finish -- not a marginal
+    # difference, so this call itself is worth its own regression coverage
+    # rather than trusting it stays in place by convention.
+    def test_flushes_each_pages_cache_after_extracting_its_tables(self):
+        pages = [FakePage(tables=[[["a"]]]), FakePage(tables=[[["b"]]]), FakePage()]
+        self.pdfplumber_pages = pages
+        extract_regions.extract_regions(b"fake pdf bytes")
+
+        for i, page in enumerate(pages):
+            self.assertEqual(page.flush_cache_calls, 1, f"page {i} flush_cache_calls")
 
 
 class PeakRSSKBTests(unittest.TestCase):

@@ -35,6 +35,20 @@ import time
 def _load_libs():
     """Lazy-import heavy dependencies so the module can be imported without them
     in unit-test environments that just send JSON without calling main()."""
+    # pdfminer (pdfplumber's underlying parser) logs a WARNING for every
+    # malformed-but-recoverable content-stream operator it encounters —
+    # e.g. "Cannot set non-stroke color: 2 components specified, but only
+    # 1 (grayscale), 3 (RGB), and 4 (CMYK) are supported". A single
+    # real-world PDF with unusual color-space operators can emit hundreds
+    # of these, all for conditions pdfminer already recovers from on its
+    # own (see pdfinterp.py) — noise, not something this pipeline can or
+    # needs to act on. Every pdfminer submodule logs via
+    # logging.getLogger(__name__), all children of "pdfminer", so setting
+    # the parent's level once here suppresses all of them; none of pdfminer's
+    # own submodules override it with their own explicit level.
+    import logging
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
+
     import pdfplumber
     import pymupdf
     return pdfplumber, pymupdf
@@ -136,6 +150,19 @@ def extract_regions(pdf_bytes):
 
     # Tables: pdfplumber, scoped to extract_tables() only -- the one
     # capability with a confirmed fidelity gap (see docstring above).
+    #
+    # page.flush_cache() after each page is not optional cleanup -- without
+    # it, pdfplumber never releases a page's parsed geometry (_objects,
+    # _layout, and friends -- see Page.cached_properties) for the life of
+    # this `with` block, so peak memory grows with the *cumulative* parsed
+    # complexity of every page processed so far, not just the current one.
+    # Measured directly: a real 1345-page PDF exceeded 3.8GB and was killed
+    # before finishing without this; with it, the same document peaked at
+    # ~103MB, start to finish -- a ~35x reduction, not a marginal one, and
+    # it turns peak memory from "scales with document size" into
+    # "effectively constant regardless of document size". Same extracted
+    # table count either way -- this only changes what pdfplumber keeps
+    # resident, never what it finds.
     t_tables_start = time.perf_counter()
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         page_count = len(pdf.pages)
@@ -155,6 +182,7 @@ def extract_regions(pdf_bytes):
                         "image_base64": "",
                         "needs_vlm": "",
                     })
+            page.flush_cache()
     t_tables_end = time.perf_counter()
     print(f"extract_regions: pdfplumber tables-only, {page_count} pages in {t_tables_end - t_tables_start:.2f}s")
 
@@ -190,13 +218,18 @@ def _peak_rss_kb():
 # silently taking every other in-flight request, for every other user,
 # down with them).
 #
-# Default (1536MB) is a conservative starting point, not a measured
-# figure: it's meant to comfortably fit within a single extraction's share
-# of whatever's left on the deployed machine after the always-on models'
-# own warm baseline (see fly.inference.toml's memory sizing), not to be
-# read as "documents need at most this much." Tune via env var per
-# deployment as real usage data comes in.
-_REGIONS_MEMORY_LIMIT_BYTES = int(os.environ.get("REGIONS_MEMORY_LIMIT_MB", "1536")) * 1024 * 1024
+# Default (1024MB) is set against real measurements, not a guess: the
+# dominant cost used to be pdfplumber never releasing a page's parsed
+# geometry for the life of the extraction (see page.flush_cache() below),
+# so peak memory grew with a document's cumulative page count/complexity
+# rather than staying roughly constant. With that fixed, two real
+# documents — a 412-page PDF and a 1345-page one that used to exceed 3.8GB
+# and get killed before finishing — both now peak at 500-600MB end to end.
+# 1024MB leaves real margin above that (not exactly-observed-peak) for
+# genuine unknowns this small a sample can't rule out — a single
+# pathologically dense page, a corrupted content stream, etc. Tune via env
+# var per deployment as more real documents are observed.
+_REGIONS_MEMORY_LIMIT_BYTES = int(os.environ.get("REGIONS_MEMORY_LIMIT_MB", "1024")) * 1024 * 1024
 _REGIONS_TIMEOUT_SECONDS = int(os.environ.get("REGIONS_TIMEOUT_SECONDS", "300"))
 
 
