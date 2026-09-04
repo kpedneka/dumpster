@@ -16,7 +16,7 @@ import (
 
 func TestThemeRecompute_GeneratesAndPersists(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
-	deps.ThemeSummarizer = theme.NewSummarizer(llmmock.NewGenerator("LABEL: Distributed Systems\nSUMMARY: These entities relate to building resilient software."))
+	deps.ThemeSummarizer = theme.NewSummarizer(llmmock.NewGenerator("COMMUNITY: 0\nLABEL: Distributed Systems\nSUMMARY: These entities relate to building resilient software."))
 	repo := deps.Themes.(*thememem.Repository)
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
@@ -47,6 +47,80 @@ func TestThemeRecompute_GeneratesAndPersists(t *testing.T) {
 	}
 	if got.Themes[0].EntityCount != 2 {
 		t.Errorf("EntityCount = %d, want 2", got.Themes[0].EntityCount)
+	}
+	if got.Note != "" {
+		t.Errorf("Note = %q, want empty (every community became a theme, nothing more to hint at)", got.Note)
+	}
+}
+
+func TestThemeRecompute_MoreCommunitiesThanThemes_IncludesNoteWithTheModelsReason(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	deps.ThemeSummarizer = theme.NewSummarizer(llmmock.NewGenerator(
+		"COMMUNITY: 0\nLABEL: Distributed Systems\nSUMMARY: These entities relate to building resilient software.\nNOTE: It's mentioned far more often than the other groups reviewed.",
+	))
+	repo := deps.Themes.(*thememem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	// Three communities exist, but the mock LLM only returns a theme for
+	// one of them -- the note should reflect that more community
+	// structure exists than what's being surfaced.
+	repo.SeedCommunityMembers(userID, k.ID, []theme.CommunityMembers{
+		{CommunityID: 0, Entities: []theme.EntityRef{{Text: "Kubernetes", Type: "concept"}}},
+		{CommunityID: 1, Entities: []theme.EntityRef{{Text: "X", Type: "concept"}}},
+		{CommunityID: 2, Entities: []theme.EntityRef{{Text: "Y", Type: "concept"}}},
+	})
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/themes", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+	var got themeResultResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	// The note is the model's own sentence verbatim, not wrapped in any
+	// further templated framing -- see moreThemesNote's doc comment for
+	// why (a wrapped clause produced a garbled, redundant sentence).
+	want := "It's mentioned far more often than the other groups reviewed."
+	if got.Note != want {
+		t.Errorf("Note = %q, want %q", got.Note, want)
+	}
+}
+
+func TestThemeGet_NeverIncludesNote(t *testing.T) {
+	// The note is a one-time artifact of a specific recompute response --
+	// not persisted -- so GET (including immediately after a recompute
+	// that did include one) should never surface it.
+	deps, kbRepo, _, _, _ := defaultDeps()
+	deps.ThemeSummarizer = theme.NewSummarizer(llmmock.NewGenerator(
+		"COMMUNITY: 0\nLABEL: Distributed Systems\nSUMMARY: s.\nNOTE: reason",
+	))
+	repo := deps.Themes.(*thememem.Repository)
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	repo.SeedCommunityMembers(userID, k.ID, []theme.CommunityMembers{
+		{CommunityID: 0, Entities: []theme.EntityRef{{Text: "X", Type: "concept"}}},
+		{CommunityID: 1, Entities: []theme.EntityRef{{Text: "Y", Type: "concept"}}},
+	})
+	router := NewRouter(deps)
+
+	postReq := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/themes", nil, userID)
+	router.ServeHTTP(httptest.NewRecorder(), postReq)
+
+	getReq := authedRequest(t, deps, http.MethodGet, "/kbs/"+k.ID.String()+"/themes", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, getReq)
+
+	var got themeResultResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Note != "" {
+		t.Errorf("Note = %q, want empty on GET even though the recompute that produced these themes had one", got.Note)
 	}
 }
 
@@ -113,7 +187,7 @@ func TestThemeGet_NoResultYet_ReturnsZeroValue(t *testing.T) {
 
 func TestThemeGet_AfterRecompute_ReturnsThemes(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
-	deps.ThemeSummarizer = theme.NewSummarizer(llmmock.NewGenerator("LABEL: A Theme\nSUMMARY: A summary."))
+	deps.ThemeSummarizer = theme.NewSummarizer(llmmock.NewGenerator("COMMUNITY: 0\nLABEL: A Theme\nSUMMARY: A summary."))
 	repo := deps.Themes.(*thememem.Repository)
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")

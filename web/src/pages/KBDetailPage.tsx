@@ -1112,6 +1112,17 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
     },
   })
 
+  // The recompute response's one-line "why these stood out" note (see
+  // ThemeResult.note) is kept in its own state, deliberately outside the
+  // ['themes', kbId] query cache. That cache slot is also what plain GET
+  // populates, and note is never returned by GET — once the query goes
+  // stale (30s, see main.tsx) and anything triggers a background refetch
+  // (e.g. the window regaining focus), the notes-less GET response would
+  // silently overwrite a note that was still perfectly valid, making it
+  // vanish with no error and no user action. Session-local state sidesteps
+  // that entirely: it only ever changes when a recompute actually runs.
+  const [themesNote, setThemesNote] = useState<string | null>(null)
+
   // Separate trigger from Communities' recompute, deliberately not bundled
   // into it: Louvain (Communities) is cheap in-process graph math safe to
   // rerun freely, but this makes one LLM call per selected community — a
@@ -1123,8 +1134,10 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
       if (error) throw new Error(describeError(error), { cause: response.status })
       return data
     },
+    onMutate: () => setThemesNote(null),
     onSuccess: (result) => {
       queryClient.setQueryData<ThemeResult>(['themes', kbId], result)
+      setThemesNote(result.note ?? null)
     },
     onError: (error) => {
       // 422 means communities haven't been computed yet — the panel's own
@@ -1224,14 +1237,17 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
           {themesMutation.isPending ? (
             <p className="text-xs">Labeling your knowledge base's biggest topics…</p>
           ) : hasThemes ? (
-            <ul className="flex flex-col gap-2">
-              {themes.map((t) => (
-                <li key={t.community_id}>
-                  <p className="text-xs font-medium">{t.label}</p>
-                  <p className="text-xs opacity-90">{t.summary}</p>
-                </li>
-              ))}
-            </ul>
+            <div className="flex flex-col gap-2">
+              {themesNote && <p className="text-xs italic opacity-80">{themesNote}</p>}
+              <ul className="flex flex-col gap-2">
+                {themes.map((t) => (
+                  <li key={t.community_id}>
+                    <p className="text-xs font-medium">{t.label}</p>
+                    <p className="text-xs opacity-90">{t.summary}</p>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : (
             <p className="text-xs">
               No themes yet. Compute communities first, then run this for a plain-language label on
