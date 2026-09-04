@@ -35,14 +35,16 @@
   --radius: 0.625rem;
 
   /* Explore section pill/panel pairs (KBDetailPage) — soft-tint background
-     + saturated foreground, same shape as --color-accent above, one hue
-     per category so a pill and the panel it opens read as visually linked.
-     Color is a reinforcing cue only, never the sole one — each category
-     repeats its icon in both the pill and the panel header. */
-  --color-communities: hsl(190 45% 90%);          /* soft teal tint */
-  --color-communities-foreground: hsl(192 70% 26%); /* deep teal — AA on the tint */
-  --color-themes: hsl(265 45% 93%);               /* soft violet tint */
-  --color-themes-foreground: hsl(265 55% 38%);    /* deep violet — AA on the tint */
+     + saturated foreground, same shape as --color-accent above, and the
+     panel it opens reads as visually linked to its pill. Color is a
+     reinforcing cue only, never the sole one — each category repeats its
+     icon in both the pill and the panel header. Same warm amber tone as
+     the privacy warning banner under the dropzone, for consistency with
+     the rest of the system's palette. */
+  --color-communities: hsl(40 55% 91%);           /* soft amber tint */
+  --color-communities-foreground: hsl(32 75% 28%); /* deep amber — AA on the tint */
+  --color-themes: hsl(40 55% 91%);                /* soft amber tint */
+  --color-themes-foreground: hsl(32 75% 28%);      /* deep amber — AA on the tint */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -68,10 +70,10 @@
     --color-input: hsl(36 22% 17%);
     --color-ring: hsl(22 67% 60%);
 
-    --color-communities: hsl(192 30% 16%);
-    --color-communities-foreground: hsl(190 55% 68%);
-    --color-themes: hsl(265 25% 19%);
-    --color-themes-foreground: hsl(265 60% 76%);
+    --color-communities: hsl(38 30% 17%);
+    --color-communities-foreground: hsl(40 70% 68%);
+    --color-themes: hsl(38 30% 17%);
+    --color-themes-foreground: hsl(40 70% 68%);
   }
 }
 

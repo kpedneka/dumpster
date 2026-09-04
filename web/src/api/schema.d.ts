@@ -1356,6 +1356,8 @@ export interface components {
             /** Format: date-time */
             computed_at: string | null;
             themes: components["schemas"]["Theme"][];
+            /** @description A one-line explanation of what set the returned themes apart, present only when the knowledge base has more community structure than what's shown here. Only ever populated on the response to POST — it explains that specific recompute's output and isn't persisted, so GET never includes it. */
+            note?: string;
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];

@@ -21,7 +21,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -96,14 +98,79 @@ type entityResponse struct {
 	Score   float32 `json:"score"`
 }
 
-// Extract runs entity extraction over chunks via an AWS Batch job,
+// Extract runs entity extraction over chunks via a single AWS Batch job,
 // restricted to allowedTypes, and maps the result back onto entity.Entity
 // rows populated with each input chunk's DocumentID/KBID/UserID.
 func (e *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedTypes []entity.Type) ([]*entity.Entity, error) {
 	if len(chunks) == 0 || len(allowedTypes) == 0 {
 		return nil, nil
 	}
+	sub, err := e.submit(ctx, 0, chunks, allowedTypes)
+	if err != nil {
+		return nil, err
+	}
+	result := e.await(ctx, sub)
+	return result.Entities, result.Err
+}
 
+// ExtractBatches runs entity extraction over several independent batches
+// of chunks, submitting an AWS Batch job for every batch before waiting on
+// any of them, then awaiting all of them concurrently. See
+// entity.BatchExtractor's doc for why submitting up front rather than one
+// batch at a time matters here specifically.
+func (e *Extractor) ExtractBatches(ctx context.Context, batches [][]*chunk.Chunk, allowedTypes []entity.Type) []entity.BatchResult {
+	results := make([]entity.BatchResult, len(batches))
+	if len(allowedTypes) == 0 {
+		return results
+	}
+
+	submissions := make([]*submission, len(batches))
+	for i, batch := range batches {
+		if len(batch) == 0 {
+			continue
+		}
+		sub, err := e.submit(ctx, i, batch, allowedTypes)
+		if err != nil {
+			results[i] = entity.BatchResult{Err: err}
+			continue
+		}
+		submissions[i] = sub
+	}
+
+	var wg sync.WaitGroup
+	for i, sub := range submissions {
+		if sub == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, sub *submission) {
+			defer wg.Done()
+			results[i] = e.await(ctx, sub)
+		}(i, sub)
+	}
+	wg.Wait()
+
+	return results
+}
+
+// submission is one batch's in-flight AWS Batch job: submitted, not yet
+// awaited.
+type submission struct {
+	jobID       string
+	inputKey    string
+	byID        map[string]*chunk.Chunk
+	batchIdx    int
+	submittedAt time.Time
+}
+
+// submit uploads batchIdx's input, submits its AWS Batch job, and returns
+// a handle to await it -- the "submit" half of what Extract used to do in
+// one synchronous call. batchIdx (and the batch's DocumentID, read off the
+// first chunk) name the job and its S3 input key so a real backlog of
+// concurrently-running jobs for the same document is identifiable from
+// `aws batch list-jobs` output alone, without cross-referencing the
+// Postgres jobs table -- a real, live debugging gap this closes.
+func (e *Extractor) submit(ctx context.Context, batchIdx int, chunks []*chunk.Chunk, allowedTypes []entity.Type) (*submission, error) {
 	byID := make(map[string]*chunk.Chunk, len(chunks))
 	req := entitiesRequest{
 		AllowedTypes: make([]string, len(allowedTypes)),
@@ -123,56 +190,86 @@ func (e *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedT
 		return nil, fmt.Errorf("awsbatch: marshal entities request: %w", err)
 	}
 
-	jobUUID := uuid.New().String()
-	inputKey := fmt.Sprintf("batch-jobs/entities/%s/input.json", jobUUID)
+	documentID := chunks[0].DocumentID
+	shortSuffix := uuid.New().String()[:8]
+	inputKey := fmt.Sprintf("batch-jobs/entities/%s/batch-%d-%s/input.json", documentID, batchIdx, shortSuffix)
 	if err := e.store.Put(ctx, inputKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
 		return nil, fmt.Errorf("awsbatch: upload input: %w", err)
 	}
-	defer func() {
-		// Best-effort: a leaked temp object costs pennies and isn't worth
-		// failing an otherwise-successful extraction over. Uses a
-		// cancellation-detached context since ctx may already be near its
-		// deadline by the time Extract returns.
-		_ = e.store.Delete(context.WithoutCancel(ctx), inputKey)
-	}()
 
 	inputURL, err := e.store.PresignedURL(ctx, inputKey, e.cfg.PresignTTL)
 	if err != nil {
+		_ = e.store.Delete(context.WithoutCancel(ctx), inputKey)
 		return nil, fmt.Errorf("awsbatch: presign input: %w", err)
 	}
 
 	jobID, err := e.client.SubmitJob(ctx, awsbatch.SubmitJobParams{
-		JobName:       "entity-extraction-" + jobUUID,
+		JobName:       fmt.Sprintf("entity-extraction-%s-batch-%d", documentID, batchIdx),
 		JobQueue:      e.cfg.JobQueue,
 		JobDefinition: e.cfg.JobDefinition,
 		Environment:   map[string]string{"CHUNKS_URL": inputURL},
 	})
 	if err != nil {
+		_ = e.store.Delete(context.WithoutCancel(ctx), inputKey)
 		return nil, fmt.Errorf("awsbatch: submit job: %w", err)
 	}
 
-	if err := e.waitForCompletion(ctx, jobID); err != nil {
-		return nil, err
+	return &submission{jobID: jobID, inputKey: inputKey, byID: byID, batchIdx: batchIdx, submittedAt: time.Now()}, nil
+}
+
+// await waits for sub's job to reach a terminal state, fetches and parses
+// its result, and maps it back onto entity.Entity rows -- the "await" half
+// of what Extract used to do in one synchronous call. Always cleans up the
+// job's input object, on both success and failure.
+//
+// Logs a per-phase timing breakdown for every batch -- added specifically
+// to diagnose a measured ~2.6-minute tail latency on ExtractBatches calls,
+// where the whole call is gated by whichever single batch is slowest.
+// Candidate causes were AWS Batch's own job-status-transition propagation
+// (waitForCompletion) vs. CloudWatch Logs' delivery lag (JobLogs) -- this
+// makes which one actually dominates observable per real run instead of
+// guessed at.
+func (e *Extractor) await(ctx context.Context, sub *submission) entity.BatchResult {
+	defer func() {
+		// Best-effort: a leaked temp object costs pennies and isn't worth
+		// failing an otherwise-successful extraction over. Uses a
+		// cancellation-detached context since ctx may already be near its
+		// deadline by the time this returns.
+		_ = e.store.Delete(context.WithoutCancel(ctx), sub.inputKey)
+	}()
+
+	waitStart := time.Now()
+	waitErr := e.waitForCompletion(ctx, sub.jobID)
+	waitElapsed := time.Since(waitStart)
+
+	if waitErr != nil {
+		log.Printf("awsbatch: batch %d (job %s): waitForCompletion failed after %s: %v", sub.batchIdx, sub.jobID, waitElapsed, waitErr)
+		return entity.BatchResult{Err: waitErr}
 	}
 
-	logs, err := e.client.JobLogs(ctx, jobID)
+	logsStart := time.Now()
+	logs, err := e.client.JobLogs(ctx, sub.jobID)
+	logsElapsed := time.Since(logsStart)
+	totalElapsed := time.Since(sub.submittedAt)
+	log.Printf("awsbatch: batch %d (job %s): waitForCompletion=%s JobLogs=%s totalSinceSubmit=%s",
+		sub.batchIdx, sub.jobID, waitElapsed, logsElapsed, totalElapsed)
 	if err != nil {
-		return nil, fmt.Errorf("awsbatch: fetch job %s logs: %w", jobID, err)
+		return entity.BatchResult{Err: fmt.Errorf("awsbatch: fetch job %s logs: %w", sub.jobID, err)}
 	}
 
 	resultLine, err := extractResultLine(logs)
 	if err != nil {
-		return nil, fmt.Errorf("awsbatch: job %s: %w", jobID, err)
+		return entity.BatchResult{Err: fmt.Errorf("awsbatch: job %s: %w", sub.jobID, err)}
 	}
 
 	var resp entitiesResponse
 	if err := json.Unmarshal([]byte(resultLine), &resp); err != nil {
-		return nil, fmt.Errorf("awsbatch: job %s: unmarshal entities response: %w", jobID, err)
+		return entity.BatchResult{Err: fmt.Errorf("awsbatch: job %s: unmarshal entities response: %w", sub.jobID, err)}
 	}
 
 	out := make([]*entity.Entity, 0, len(resp.Entities))
 	for _, re := range resp.Entities {
-		c, ok := byID[re.ChunkID]
+		c, ok := sub.byID[re.ChunkID]
 		if !ok {
 			// The job returned an entity for a chunk we didn't send; skip
 			// rather than fail the whole batch.
@@ -190,7 +287,7 @@ func (e *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedT
 			Score:      re.Score,
 		})
 	}
-	return out, nil
+	return entity.BatchResult{Entities: out}
 }
 
 // waitForCompletion polls jobID's status until it reaches a terminal
@@ -236,4 +333,4 @@ func extractResultLine(logs string) (string, error) {
 	return "", fmt.Errorf("no result line in job output: %s", logs)
 }
 
-var _ entity.Extractor = (*Extractor)(nil)
+var _ entity.BatchExtractor = (*Extractor)(nil)

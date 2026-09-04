@@ -18,16 +18,18 @@ import (
 const maxSelectedCommunities = 5
 
 // SelectTopCommunities returns the largest communities in members, ranked
-// by member count — the "handful of largest/most-connected clusters" a
-// theme label is worth generating for, not every community detection
-// found. Limited to the top ceil(5% of the total community count), capped
-// at maxSelectedCommunities, at least one when any communities exist:
-// nearest-rank by count rather than interpolating a size threshold, since
-// community counts are typically small (bounded by the entity-count
-// ceiling community detection itself enforces), so percentile-
-// interpolation edge cases at low N aren't worth the complexity — and
-// zero themes for a KB that genuinely has community structure would be a
-// confusing, unhelpful outcome.
+// by member count — a candidate pool for Summarize to judge, not the final
+// set of themes. It's a structural pre-filter only ("the handful of
+// largest/most-connected clusters," not every community detection found);
+// deciding which of these candidates are actually significant enough to
+// label is Summarize's job, done with an LLM call that can compare them
+// against each other. Limited to the top ceil(5% of the total community
+// count), capped at maxSelectedCommunities, at least one when any
+// communities exist: nearest-rank by count rather than interpolating a
+// size threshold, since community counts are typically small (bounded by
+// the entity-count ceiling community detection itself enforces), so
+// percentile-interpolation edge cases at low N aren't worth the
+// complexity.
 func SelectTopCommunities(members []CommunityMembers) []CommunityMembers {
 	if len(members) == 0 {
 		return nil

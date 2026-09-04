@@ -99,3 +99,42 @@ type Extractor interface {
 	// callers do not need to backfill them.
 	Extract(ctx context.Context, chunks []*chunk.Chunk, allowedTypes []Type) ([]*Entity, error)
 }
+
+// BatchResult is one batch's outcome from BatchExtractor.ExtractBatches,
+// keeping a batch's entities and error paired together so a caller can
+// tell which of several concurrently-run batches succeeded.
+type BatchResult struct {
+	Entities []*Entity
+	Err      error
+}
+
+// BatchExtractor is an optional capability an Extractor may additionally
+// implement: submitting several independent batches' extraction work up
+// front, before waiting for any of them, rather than one at a time.
+//
+// Why this matters specifically for internal/entity/awsbatch: each batch
+// is its own AWS Batch job, and a Batch compute environment scaling from
+// zero pays a real, measured cold-start tax (EC2 launch + image pull,
+// ~230s observed) independent of how much actual work the job does.
+// Submitting batches one at a time -- wait for job N, only then submit
+// job N+1 -- gives the compute environment room to scale back down
+// between jobs, so a large document can end up paying that cold-start
+// tax on every single batch even though the underlying compute
+// environment could run several jobs at once. Submitting every batch
+// before waiting on any of them lets AWS Batch's own scheduler see the
+// whole backlog immediately and run as many of them concurrently as the
+// compute environment's capacity allows.
+//
+// Implementations that don't support this (e.g. the in-memory mock used
+// by most tests) are used via the plain Extractor interface in a
+// sequential loop instead -- see EntityHandler.Handle's feature-detection
+// of this interface.
+type BatchExtractor interface {
+	Extractor
+	// ExtractBatches runs entity extraction over several independent
+	// batches, submitting all of them before waiting on any, and returns
+	// one BatchResult per batch, in the same order as batches. One batch
+	// failing does not prevent the others from completing or being
+	// reported successfully -- callers inspect each result independently.
+	ExtractBatches(ctx context.Context, batches [][]*chunk.Chunk, allowedTypes []Type) []BatchResult
+}

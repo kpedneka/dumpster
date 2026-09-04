@@ -30,16 +30,19 @@ function renderKBDetailPage(kbId = 'kb-1') {
     // class of bug at all.
     defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/kbs/${kbId}`]}>
-        <Routes>
-          <Route path="/kbs/:kbId" element={<KBDetailPage />} />
-          <Route path="/kbs" element={<div>Knowledge Bases list</div>} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  )
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/kbs/${kbId}`]}>
+          <Routes>
+            <Route path="/kbs/:kbId" element={<KBDetailPage />} />
+            <Route path="/kbs" element={<div>Knowledge Bases list</div>} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ),
+  }
 }
 
 // Read by the shared api.GET mock's /kbs/{id}/inquiry handler. Tests that
@@ -772,6 +775,114 @@ describe('KBDetailPage', () => {
         expect(await screen.findByText('New Theme')).toBeInTheDocument()
       })
 
+      it('shows the "there could be more" note when the recompute response includes one', async () => {
+        mockExplore()
+        vi.mocked(api.POST).mockImplementation(((path: string) => {
+          if (path === '/kbs/{id}/themes') {
+            return Promise.resolve({
+              data: {
+                computed_at: '2026-01-02T00:00:00Z',
+                themes: [{ community_id: 0, label: 'New Theme', summary: 'A fresh summary.', entity_count: 5 }],
+                note: "Here's the theme that stands out most, based on how densely connected it is.",
+              },
+              error: undefined,
+            })
+          }
+          throw new Error(`unexpected api.POST call: ${path}`)
+        }) as never)
+
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+
+        expect(
+          await screen.findByText("Here's the theme that stands out most, based on how densely connected it is."),
+        ).toBeInTheDocument()
+      })
+
+      // Regression test: the note used to live inside the ['themes', kbId]
+      // query cache (queryClient.setQueryData), the same slot GET
+      // populates. GET never returns a note, so once the query went stale
+      // and something triggered a background refetch, the notes-less GET
+      // response silently overwrote it -- the note vanished with no error
+      // and no user action. It's now tracked in its own state instead, so
+      // a background refetch of the themes query must not affect it.
+      it('keeps the note visible after a background refetch of the themes query', async () => {
+        // Starts empty, like a KB that's never had themes generated. The
+        // POST mock below updates this in place once "recomputed" -- a
+        // real recompute persists the themes, so a subsequent GET reflects
+        // them too, just without a note (GET never returns one).
+        let themesGetResponse: unknown = { computed_at: null, themes: [] }
+        vi.mocked(api.GET).mockImplementation(((path: string) => {
+          if (path === '/kbs/{id}') {
+            return Promise.resolve({ data: { id: 'kb-1', name: 'Test KB' }, error: undefined })
+          }
+          if (path === '/kbs/{kbId}/documents') {
+            return Promise.resolve({ data: { items: [] }, error: undefined })
+          }
+          if (path === '/kbs/{id}/inquiry') {
+            return Promise.resolve({ data: { id: null, messages: [] }, error: undefined })
+          }
+          if (path === '/kbs/{id}/communities') {
+            return Promise.resolve({
+              data: { computed_at: null, modularity: 0, community_count: 0, node_count: 0, edge_count: 0 },
+              error: undefined,
+            })
+          }
+          if (path === '/kbs/{id}/themes') {
+            return Promise.resolve({ data: themesGetResponse, error: undefined })
+          }
+          throw new Error(`unexpected api.GET call: ${path}`)
+        }) as never)
+        vi.mocked(api.POST).mockImplementation(((path: string) => {
+          if (path === '/kbs/{id}/themes') {
+            const result = {
+              computed_at: '2026-01-02T00:00:00Z',
+              themes: [{ community_id: 0, label: 'New Theme', summary: 'A fresh summary.', entity_count: 5 }],
+              note: 'These stood out because they are the most densely connected.',
+            }
+            themesGetResponse = { computed_at: result.computed_at, themes: result.themes }
+            return Promise.resolve({ data: result, error: undefined })
+          }
+          throw new Error(`unexpected api.POST call: ${path}`)
+        }) as never)
+
+        const user = userEvent.setup()
+        const { queryClient } = renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        await user.click(screen.getByRole('button', { name: 'Compute' }))
+        await screen.findByText('These stood out because they are the most densely connected.')
+
+        // A plain GET refetch (e.g. triggered by the window regaining
+        // focus once the query goes stale) never includes a note.
+        await queryClient.refetchQueries({ queryKey: ['themes', 'kb-1'] })
+
+        expect(screen.getByText('New Theme')).toBeInTheDocument()
+        expect(
+          screen.getByText('These stood out because they are the most densely connected.'),
+        ).toBeInTheDocument()
+      })
+
+      it('shows no note when the theme result has none', async () => {
+        mockExplore({
+          themes: {
+            computed_at: '2026-01-01T00:00:00Z',
+            themes: [
+              { community_id: 3, label: 'Distributed Systems', summary: 'Entities related to resilient software.', entity_count: 12 },
+            ],
+          },
+        })
+        const user = userEvent.setup()
+        renderKBDetailPage()
+
+        await user.click(await screen.findByRole('button', { name: 'Themes' }))
+        await screen.findByText('Distributed Systems')
+        expect(screen.queryByText(/stand out/i)).not.toBeInTheDocument()
+      })
+
       // Regression test: a 422 here means "communities haven't been
       // computed yet" -- exactly what the panel's own empty-state text
       // ("Compute communities first...") already says. A destructive
@@ -1409,9 +1520,9 @@ describe('KBDetailPage', () => {
         )
         const user = userEvent.setup()
         const reevaluateButtons = screen.getAllByRole('button', { name: /re-evaluate query/i })
-        // The France turn's button is the first one rendered (turns render
-        // in original-query order).
-        await user.click(reevaluateButtons[0])
+        // Turns render newest-first, so the Japan turn (asked second) is
+        // first and France (asked first) is second.
+        await user.click(reevaluateButtons[1])
 
         await waitFor(() => expect(screen.getByText('Paris remains the capital.')).toBeInTheDocument())
 
@@ -1426,6 +1537,26 @@ describe('KBDetailPage', () => {
         const japanQuery = screen.getByText('what is the capital of Japan?')
         const japanGroup = japanQuery.parentElement!
         expect(within(japanGroup).queryByText('Paris remains the capital.')).not.toBeInTheDocument()
+      })
+
+      it('renders turns most-recently-queried first', async () => {
+        mockInquiryMessages = [
+          userMessage('what is the capital of France?', 'msg-1'),
+          assistantMessage({ id: 'msg-2', content: 'Paris is the capital.' }),
+          userMessage('what is the capital of Japan?', 'msg-3'),
+          assistantMessage({ id: 'msg-4', content: 'Tokyo is the capital.' }),
+          userMessage('what is the capital of Germany?', 'msg-5'),
+          assistantMessage({ id: 'msg-6', content: 'Berlin is the capital.' }),
+        ]
+        renderKBDetailPage()
+        await screen.findByText('Berlin is the capital.')
+
+        const queries = screen.getAllByText(/^what is the capital of/i)
+        expect(queries.map((el) => el.textContent)).toEqual([
+          'what is the capital of Germany?',
+          'what is the capital of Japan?',
+          'what is the capital of France?',
+        ])
       })
 
       it('shows the re-evaluation streaming in directly under the message being re-answered', async () => {

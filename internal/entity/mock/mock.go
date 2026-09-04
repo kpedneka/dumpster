@@ -49,3 +49,30 @@ func (m *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedT
 }
 
 var _ entity.Extractor = (*Extractor)(nil)
+
+// BatchExtractor is a test double for entity.BatchExtractor, used to
+// exercise EntityHandler's concurrent-submission path — a plain Extractor
+// (above) deliberately does not satisfy entity.BatchExtractor, so tests
+// using it exercise EntityHandler's sequential fallback path instead.
+type BatchExtractor struct {
+	*Extractor
+	ExtractBatchesFn func(ctx context.Context, batches [][]*chunk.Chunk, allowedTypes []entity.Type) []entity.BatchResult
+}
+
+// NewBatch returns a BatchExtractor whose ExtractBatchesFn returns an
+// empty (zero-value) result for every batch.
+func NewBatch() *BatchExtractor {
+	return &BatchExtractor{
+		Extractor: New(),
+		ExtractBatchesFn: func(_ context.Context, batches [][]*chunk.Chunk, _ []entity.Type) []entity.BatchResult {
+			return make([]entity.BatchResult, len(batches))
+		},
+	}
+}
+
+// ExtractBatches delegates to ExtractBatchesFn.
+func (m *BatchExtractor) ExtractBatches(ctx context.Context, batches [][]*chunk.Chunk, allowedTypes []entity.Type) []entity.BatchResult {
+	return m.ExtractBatchesFn(ctx, batches, allowedTypes)
+}
+
+var _ entity.BatchExtractor = (*BatchExtractor)(nil)
