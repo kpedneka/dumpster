@@ -38,6 +38,23 @@ primary_region = "iad"
   BATCH_JOB_QUEUE          = "dumpster-batch-gpu-pilot-queue"
   BATCH_JOB_DEFINITION     = "dumpster-entity-extraction"
 
+  # Routes ingestion-time (document) embedding through AWS Batch too —
+  # see internal/llm/awsbatch's package doc for why (Fly's shared-cpu
+  # tier throttled this workload severely). Query-time embedding is
+  # unaffected and still uses INFERENCE_SERVICE_URL above.
+  EMBED_BATCH_JOB_QUEUE      = "dumpster-embedding-queue"
+  EMBED_BATCH_JOB_DEFINITION = "dumpster-embedding-jobdef"
+
+  # Separate bucket for AWS Batch jobs' transient input/output handoff
+  # (entity extraction, embedding) — never real user documents, kept
+  # apart from S3_BUCKET above deliberately (see
+  # cmd/worker/main.go's scratchObj comment). Bucket name isn't
+  # sensitive, same treatment as S3_BUCKET; credentials
+  # (R2_SCRATCH_ENDPOINT/R2_SCRATCH_ACCESS_KEY/R2_SCRATCH_SECRET_KEY)
+  # are set as Fly secrets.
+  R2_SCRATCH_REGION = "auto"
+  R2_SCRATCH_BUCKET = "dumpster-scratch"
+
 # Points Fly's built-in Prometheus scraper at the /metrics handler telemetry.Setup
 # already serves on METRICS_PORT, enabling Fly's Grafana dashboards with no new code.
 [metrics]
