@@ -68,6 +68,10 @@ func (c *stubConsumer) Nack(ctx context.Context, id uuid.UUID, _ error) (bool, e
 	return c.deadLetterOnNack, nil
 }
 
+func (c *stubConsumer) SetPhase(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
+}
+
 func (c *stubConsumer) ackedCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

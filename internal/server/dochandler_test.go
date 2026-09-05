@@ -69,6 +69,25 @@ func (p *failPublisher) PublishCanonicalization(_ context.Context, _ queue.Canon
 	return errors.New("queue unavailable")
 }
 
+// fakeJobStatusReader returns canned active queue.JobStatus entries for
+// whichever document IDs are present in its map; document IDs absent
+// from the map (or mapped to an empty/nil slice) are reported as having
+// no active job, mirroring a document with no jobs row at all (e.g.
+// already indexed, or not yet picked up by a worker).
+type fakeJobStatusReader struct {
+	statuses map[uuid.UUID][]queue.JobStatus
+}
+
+func (f *fakeJobStatusReader) ActiveJobsForDocuments(_ context.Context, _ uuid.UUID, ids []uuid.UUID) (map[uuid.UUID][]queue.JobStatus, error) {
+	out := make(map[uuid.UUID][]queue.JobStatus, len(ids))
+	for _, id := range ids {
+		if s, ok := f.statuses[id]; ok {
+			out[id] = s
+		}
+	}
+	return out, nil
+}
+
 func TestDocUpload(t *testing.T) {
 	deps, kbRepo, _, obj, pub := defaultDeps()
 	router := NewRouter(deps)
@@ -447,6 +466,286 @@ func TestDocList(t *testing.T) {
 	}
 }
 
+func TestDocList_OmitsProgress_WhenJobStatusReaderNil(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	_, _ = docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.txt",
+		S3Key: "k1", ContentType: "text/plain", Status: document.StatusPending,
+	})
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("count: got %d, want 1", len(page.Items))
+	}
+	if page.Items[0].Progress != nil {
+		t.Errorf("Progress = %+v, want nil when no JobStatusReader is configured", page.Items[0].Progress)
+	}
+}
+
+func TestDocList_IncludesProgress_ForPendingPDF(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.pdf",
+		S3Key: "k1", ContentType: "application/pdf", Status: document.StatusProcessing,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		doc.ID: {{Type: queue.JobTypeRegionClassification, Phase: queue.PhaseEmbedding}},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("count: got %d, want 1", len(page.Items))
+	}
+	progress := page.Items[0].Progress
+	if progress == nil {
+		t.Fatal("expected Progress to be set for a processing PDF")
+	}
+	if len(progress.Stages) != 4 {
+		t.Errorf("Stages: got %d, want 4 (PDF goes through region classification, plus the terminal complete stage)", len(progress.Stages))
+	}
+	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "embedding" {
+		t.Errorf("ActiveStages: got %v, want [embedding]", progress.ActiveStages)
+	}
+}
+
+func TestDocList_IncludesProgress_ForPendingText_SkipsAnalyzing(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.txt",
+		S3Key: "k1", ContentType: "text/plain", Status: document.StatusPending,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		doc.ID: {{Type: queue.JobTypeDocumentIndexing}},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	progress := page.Items[0].Progress
+	if progress == nil {
+		t.Fatal("expected Progress to be set for a pending text document")
+	}
+	// Plain text never goes through region classification, so no
+	// "analyzing" stage should appear -- but the terminal complete stage
+	// is still there, since every document ends on it.
+	if len(progress.Stages) != 3 {
+		t.Errorf("Stages: got %d, want 3 (text/markdown skips analyzing, plus the terminal complete stage)", len(progress.Stages))
+	}
+	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "embedding" {
+		t.Errorf("ActiveStages: got %v, want [embedding]", progress.ActiveStages)
+	}
+}
+
+func TestDocList_IndexedDocument_NoActiveJob_ShowsComplete(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	_, _ = docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.txt",
+		S3Key: "k1", ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	// No entry for this document at all: its entity-extraction pipeline
+	// has finished too -- the whole point of the terminal "complete"
+	// stage is that Progress stays set (as a permanent ingestion-history
+	// record) rather than disappearing once there's nothing left in
+	// flight.
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	progress := page.Items[0].Progress
+	if progress == nil {
+		t.Fatal("expected Progress to still be set once fully indexed, to show ingestion history")
+	}
+	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != queue.StageKeyComplete {
+		t.Errorf("ActiveStages: got %v, want [%s]", progress.ActiveStages, queue.StageKeyComplete)
+	}
+}
+
+func TestDocList_OmitsProgress_ForFailedDocument(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	_, _ = docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.txt",
+		S3Key: "k1", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Items[0].Progress != nil {
+		t.Errorf("Progress = %+v, want nil for a failed (dead-lettered) document", page.Items[0].Progress)
+	}
+}
+
+func TestDocList_IncludesProgress_ForIndexedDocument_ActiveEntityJob(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.pdf",
+		S3Key: "k1", ContentType: "application/pdf", Status: document.StatusIndexed,
+	})
+
+	// Indexing (region classification + embedding) has finished -- the
+	// document is searchable -- but entity extraction, which runs as a
+	// background pipeline afterward, is still active. This must still
+	// surface progress: that pipeline is real in-flight work, not
+	// something the UI should go silent about just because doc.Status
+	// has no value for "indexed but entities still extracting".
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		doc.ID: {{Type: queue.JobTypeEntityExtraction}},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	progress := page.Items[0].Progress
+	if progress == nil {
+		t.Fatal("expected Progress to still be set for an indexed document with an active entity-extraction job")
+	}
+	if len(progress.Stages) != 4 {
+		t.Errorf("Stages: got %d, want 4 (PDF goes through region classification, plus the terminal complete stage)", len(progress.Stages))
+	}
+	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "entities" {
+		t.Errorf("ActiveStages: got %v, want [entities]", progress.ActiveStages)
+	}
+}
+
+// TestDocList_ConcurrentEmbedAndEntityExtraction_ShowsBothActiveStages is
+// the regression test for the exact bug introduced by letting entity
+// extraction start before a document's own indexing job finishes: both
+// can be genuinely active for the same document at once. Collapsing that
+// down to a single "current stage" -- especially
+// picking whichever job happens to be most recently created, this
+// endpoint's earlier behavior -- risks showing "Extracting entities"
+// while the document isn't even searchable yet, cueing a user to query
+// it and find nothing. Both active stages must be reported honestly.
+func TestDocList_ConcurrentEmbedAndEntityExtraction_ShowsBothActiveStages(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.pdf",
+		S3Key: "k1", ContentType: "application/pdf", Status: document.StatusProcessing,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		doc.ID: {
+			{Type: queue.JobTypeRegionClassification, Phase: queue.PhaseEmbedding},
+			{Type: queue.JobTypeEntityExtraction},
+		},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	progress := page.Items[0].Progress
+	if progress == nil {
+		t.Fatal("expected Progress to be set")
+	}
+	if len(progress.ActiveStages) != 2 || progress.ActiveStages[0] != "embedding" || progress.ActiveStages[1] != "entities" {
+		t.Errorf("ActiveStages: got %v, want [embedding entities] (both, canonical order)", progress.ActiveStages)
+	}
+}
+
+func TestDocList_Progress_NoActiveJobYet_EmptyCurrentStage(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	_, _ = docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "a.txt",
+		S3Key: "k1", ContentType: "text/plain", Status: document.StatusPending,
+	})
+
+	// No entry in the fake's map at all: not yet picked up by a worker.
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var page documentPageResponse
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	progress := page.Items[0].Progress
+	if progress == nil {
+		t.Fatal("expected Progress to still be set (stages list) even with no active job yet")
+	}
+	if len(progress.ActiveStages) != 0 {
+		t.Errorf("ActiveStages: got %v, want empty (no active job yet)", progress.ActiveStages)
+	}
+}
+
 func TestDocGet(t *testing.T) {
 	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	router := NewRouter(deps)
@@ -753,6 +1052,73 @@ func TestDocDelete_WhileProcessing_Rejected(t *testing.T) {
 	}
 }
 
+func TestDocDelete_ActiveBackgroundJob_Rejected(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	s3Key := "documents/test/indexed-still-extracting.txt"
+	if err := obj.Put(context.TODO(), s3Key, bytes.NewReader([]byte("content")), 7, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	// Indexed (searchable), but entity extraction -- which can now start
+	// before Indexed -- is still genuinely active for it.
+	created, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "indexed-still-extracting.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		created.ID: {{Type: queue.JobTypeEntityExtraction, Status: "processing"}},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodDelete,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 — body: %s", w.Code, w.Body)
+	}
+	if _, err := docRepo.Get(context.TODO(), userID, created.ID); err != nil {
+		t.Error("document row should not have been deleted while a background job is active")
+	}
+}
+
+func TestDocDelete_DeadLetteredBackgroundJob_NotBlocked(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	s3Key := "documents/test/entities-permanently-failed.txt"
+	if err := obj.Put(context.TODO(), s3Key, bytes.NewReader([]byte("content")), 7, "text/plain"); err != nil {
+		t.Fatal(err)
+	}
+	created, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "entities-permanently-failed.txt",
+		S3Key: s3Key, ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	// A dead-lettered job's row is never deleted (only marked status =
+	// "failed"), but ActiveJobsForDocuments's real query filters to
+	// pending/processing only -- so from this handler's perspective a
+	// dead-lettered job looks exactly like no job at all: an empty
+	// result, not an entry with Status "failed". Must not permanently
+	// block deletion.
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodDelete,
+		"/kbs/"+kb.ID.String()+"/documents/"+created.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status: got %d, want 204 — body: %s", w.Code, w.Body)
+	}
+}
+
 func TestDocTenantIsolation(t *testing.T) {
 	deps, kbRepo, docRepo, obj, _ := defaultDeps()
 	router := NewRouter(deps)
@@ -1053,6 +1419,71 @@ func TestDocRetry_NotFailed(t *testing.T) {
 	}
 	if len(pub.Events()) != 0 {
 		t.Error("should not enqueue a job for a document that wasn't dead-lettered")
+	}
+}
+
+func TestDocRetry_ActiveBackgroundJob_Rejected(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	// Failed at the embed step, but entity extraction -- started early,
+	// before this document's own job failed -- is still active.
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		doc.ID: {{Type: queue.JobTypeEntityExtraction, Status: "processing"}},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 — body: %s", w.Code, w.Body)
+	}
+	if len(pub.Events()) != 0 {
+		t.Error("should not re-chunk while entity extraction is still reading the existing chunk rows")
+	}
+	got, _ := docRepo.Get(context.TODO(), userID, doc.ID)
+	if got.Status != document.StatusFailed {
+		t.Errorf("status: got %q, want failed (unchanged)", got.Status)
+	}
+}
+
+func TestDocRetry_DeadLetteredBackgroundJob_NotBlocked(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	// A dead-lettered job's row is never deleted (only marked status =
+	// "failed"), but ActiveJobsForDocuments's real query filters to
+	// pending/processing only -- so a dead-lettered job looks exactly
+	// like no job at all here: an empty result. Must not permanently
+	// block retry.
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+	if len(pub.Events()) != 1 {
+		t.Errorf("DocumentUploaded events: got %d, want 1", len(pub.Events()))
 	}
 }
 

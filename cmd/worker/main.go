@@ -147,7 +147,7 @@ func main() {
 		WithStats(statsRepo)
 	regionHandler := worker.NewRegionClassificationHandler(
 		docs, obj, chunks, manifestRepo, layoutExtractor, embedder, q,
-	).WithStats(statsRepo)
+	).WithStats(statsRepo).WithPhaseTracking(q)
 	entityHandler := worker.NewEntityHandler(docs, chunks, entities, extractor, canonicalRepo, cfg.EntityTypes).
 		WithDownstreamPublisher(q).
 		WithBatchSize(cfg.EntityExtractionBatchSize).

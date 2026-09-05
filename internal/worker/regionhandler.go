@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/document"
@@ -18,6 +20,13 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/stats"
 )
+
+// PhaseSetter is the narrow capability RegionClassificationHandler needs
+// from the queue to record which sub-stage a job is in -- see
+// WithPhaseTracking. queue.Consumer satisfies this.
+type PhaseSetter interface {
+	SetPhase(ctx context.Context, jobID uuid.UUID, phase string) error
+}
 
 // LayoutExtractor classifies PDF regions via the Python layered classifier
 // (layers 1+2: pdfplumber + unstructured.io). Defined here so the
@@ -63,6 +72,11 @@ type RegionClassificationHandler struct {
 	// cross-tenant usage counters (see internal/stats). Optional, wired via
 	// WithStats so existing call sites keep working unmodified.
 	stats stats.Repository
+	// phases, when non-nil, records the analyzing->embedding transition
+	// partway through process() -- see WithPhaseTracking. Optional for
+	// the same reason as stats: existing call sites (and tests) that don't
+	// care about phase display keep working unmodified.
+	phases PhaseSetter
 }
 
 // WithStats wires repo into h so that every document this handler
@@ -70,6 +84,16 @@ type RegionClassificationHandler struct {
 // counters.
 func (h *RegionClassificationHandler) WithStats(repo stats.Repository) *RegionClassificationHandler {
 	h.stats = repo
+	return h
+}
+
+// WithPhaseTracking wires ps into h so process() records the transition
+// from region analysis to embedding -- the two sub-stages this job type
+// runs back-to-back with no other jobs-table update in between, which is
+// otherwise invisible to anything reading job status for display (see
+// queue.StageFor and queue.PhaseEmbedding).
+func (h *RegionClassificationHandler) WithPhaseTracking(ps PhaseSetter) *RegionClassificationHandler {
+	h.phases = ps
 	return h
 }
 
@@ -117,7 +141,7 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 	}
 
 	processStart := time.Now()
-	err = h.process(ctx, doc)
+	err = h.process(ctx, job.ID, doc)
 	log.Printf("regionhandler: doc %s: process (regions+embed+persist) took %s (err=%v)", job.DocumentID, time.Since(processStart), err)
 	if err != nil {
 		return err
@@ -133,19 +157,28 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 		}
 	}
 
-	if h.publisher != nil {
-		if err := h.publisher.PublishEntityExtraction(ctx, queue.EntityExtractionRequested{
-			DocumentID: job.DocumentID,
-			UserID:     job.UserID,
-		}); err != nil {
-			log.Printf("regionhandler: failed to queue entity extraction for document %s: %v", job.DocumentID, err)
-		}
-	}
+	// Entity extraction is published from inside process(), right after
+	// chunks are persisted, not here -- see process()'s doc comment for
+	// why. Publishing it again here would be at best redundant and at
+	// worst a duplicate entity-extraction run: the jobs table only
+	// deduplicates concurrent (document_id, job_type) pairs while one is
+	// still pending/processing (see migrations/012_entity_extraction.sql),
+	// so if process()'s early job already finished and was Acked by the
+	// time Handle() reached this point, a second publish here would
+	// enqueue a genuine second run.
 
 	return nil
 }
 
-func (h *RegionClassificationHandler) process(ctx context.Context, doc *document.Document) error {
+// process classifies regions, builds chunks, persists them, publishes
+// entity extraction, embeds the chunks, and backfills their embeddings --
+// in that order. Chunks are persisted (with a nil embedding) and entity
+// extraction published *before* the embed call, not after: entity
+// extraction only needs chunk text, not embedding vectors, so publishing
+// it early lets a second worker goroutine dequeue and start extracting
+// while this call is still blocked on the embed AWS Batch job, rather
+// than only starting once this whole function returns.
+func (h *RegionClassificationHandler) process(ctx context.Context, jobID uuid.UUID, doc *document.Document) error {
 	readStart := time.Now()
 	rawBytes, err := h.readObject(ctx, doc.S3Key)
 	log.Printf("regionhandler: doc %s: readObject took %s (bytes=%d, err=%v)", doc.ID, time.Since(readStart), len(rawBytes), err)
@@ -288,7 +321,35 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 	log.Printf("regionhandler: doc %s: build chunks from regions took %s (chunks=%d)", doc.ID, time.Since(splitStart), len(allChunks))
 
 	if len(allChunks) == 0 {
+		h.publishEntityExtraction(ctx, doc)
 		return nil
+	}
+
+	// Persist chunks now, with Embedding left nil, rather than waiting
+	// until after the embed call below returns. A nil embedding is
+	// already a normal state chunks support (see migrations/
+	// 019_local_embeddings.sql: such a chunk simply drops out of vector
+	// search, keyword search still covers it) -- what matters here is
+	// that entity extraction (a distinct job/process reading chunk rows
+	// straight from Postgres, never from this function's local memory)
+	// has real rows to read before this function ever calls Embed, so
+	// publishEntityExtraction below can run concurrently with the embed
+	// call instead of waiting for it.
+	persistChunksStart := time.Now()
+	if err := h.chunks.BulkCreate(ctx, allChunks); err != nil {
+		return fmt.Errorf("regionhandler: persist chunks: %w", err)
+	}
+	log.Printf("regionhandler: doc %s: chunks.BulkCreate (text only) took %s (rows=%d)", doc.ID, time.Since(persistChunksStart), len(allChunks))
+
+	h.publishEntityExtraction(ctx, doc)
+
+	if h.phases != nil {
+		if err := h.phases.SetPhase(ctx, jobID, queue.PhaseEmbedding); err != nil {
+			// Best-effort: this only affects what the upload-progress UI
+			// displays, not correctness of the pipeline itself -- not
+			// worth failing an otherwise-successful job over.
+			log.Printf("regionhandler: doc %s: failed to set phase to embedding: %v", doc.ID, err)
+		}
 	}
 
 	texts := make([]string, len(allChunks))
@@ -301,16 +362,49 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 	if err != nil {
 		return fmt.Errorf("regionhandler: embed: %w", err)
 	}
-	for i, c := range allChunks {
-		c.Embedding = vecs[i]
+	if len(vecs) != len(allChunks) {
+		return fmt.Errorf("regionhandler: embedder returned %d vectors for %d chunks", len(vecs), len(allChunks))
 	}
-	persistChunksStart := time.Now()
-	if err := h.chunks.BulkCreate(ctx, allChunks); err != nil {
-		return fmt.Errorf("regionhandler: persist chunks: %w", err)
+
+	// Backfill each chunk's embedding by re-listing (ordered by ordinal,
+	// matching the order allChunks/texts/vecs were built in) rather than
+	// using allChunks directly -- BulkCreate never assigns generated IDs
+	// back onto its input slice, so this is the only way to learn which
+	// database row each vector belongs to. Same insert-then-backfill
+	// pattern internal/reembed/reembed.go already uses.
+	backfillStart := time.Now()
+	persisted, err := h.chunks.ListByDocument(ctx, doc.UserID, doc.ID)
+	if err != nil {
+		return fmt.Errorf("regionhandler: list chunks for embedding backfill: %w", err)
 	}
-	log.Printf("regionhandler: doc %s: chunks.BulkCreate took %s (rows=%d)", doc.ID, time.Since(persistChunksStart), len(allChunks))
+	if len(persisted) != len(vecs) {
+		return fmt.Errorf("regionhandler: chunk/embedding count mismatch: %d persisted chunks, %d vectors", len(persisted), len(vecs))
+	}
+	for i, c := range persisted {
+		if err := h.chunks.UpdateEmbedding(ctx, doc.UserID, c.ID, vecs[i]); err != nil {
+			return fmt.Errorf("regionhandler: update embedding for chunk %s: %w", c.ID, err)
+		}
+	}
+	log.Printf("regionhandler: doc %s: backfill embeddings took %s (rows=%d)", doc.ID, time.Since(backfillStart), len(persisted))
 
 	return nil
+}
+
+// publishEntityExtraction enqueues the entity-extraction stage for doc.
+// Called from inside process() -- right after chunks are persisted,
+// whether or not there are any to embed -- rather than from Handle()
+// after the document reaches Indexed, so entity extraction can run
+// concurrently with the embed call above instead of waiting for it.
+func (h *RegionClassificationHandler) publishEntityExtraction(ctx context.Context, doc *document.Document) {
+	if h.publisher == nil {
+		return
+	}
+	if err := h.publisher.PublishEntityExtraction(ctx, queue.EntityExtractionRequested{
+		DocumentID: doc.ID,
+		UserID:     doc.UserID,
+	}); err != nil {
+		log.Printf("regionhandler: failed to queue entity extraction for document %s: %v", doc.ID, err)
+	}
 }
 
 type resolvedRegion struct {

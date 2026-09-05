@@ -1,38 +1,43 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { StatusRing } from './StatusRing'
+import type { DocumentProgress } from '@/lib/status-ring'
+
+const threeStageProgress = (activeStages: string[] = []): DocumentProgress => ({
+  stages: [
+    { key: 'analyzing', label: 'Analyzing document' },
+    { key: 'embedding', label: 'Preparing for search' },
+    { key: 'entities', label: 'Extracting entities' },
+  ],
+  active_stages: activeStages,
+})
 
 describe('StatusRing', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('labels a pending document', () => {
-    render(<StatusRing status="pending" updatedAt="2026-01-01T00:00:00Z" />)
+  it('labels a pending document with no active job yet', () => {
+    render(<StatusRing status="pending" progress={threeStageProgress()} />)
     expect(screen.getByRole('img', { name: 'Pending' })).toBeInTheDocument()
   })
 
+  it('labels a processing document', () => {
+    render(<StatusRing status="processing" progress={threeStageProgress(['embedding'])} />)
+    expect(screen.getByRole('img', { name: 'Processing…' })).toBeInTheDocument()
+  })
+
   it('labels an indexed document', () => {
-    render(<StatusRing status="indexed" updatedAt="2026-01-01T00:00:00Z" />)
+    render(<StatusRing status="indexed" progress={null} />)
     expect(screen.getByRole('img', { name: 'Indexed' })).toBeInTheDocument()
   })
 
   it('labels a failed document', () => {
-    render(<StatusRing status="failed" updatedAt="2026-01-01T00:00:00Z" />)
+    render(<StatusRing status="failed" progress={null} />)
     expect(screen.getByRole('img', { name: 'Failed' })).toBeInTheDocument()
   })
 
-  it('flags a processing document that has run well past the expected duration as stalled', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-01-01T00:01:30Z')) // 90s after updatedAt, well past the 45s heuristic
-    render(<StatusRing status="processing" updatedAt="2026-01-01T00:00:00Z" />)
-    expect(screen.getByRole('img', { name: /Processing… — taking longer than usual/ })).toBeInTheDocument()
-  })
-
-  it('does not flag a recently-started processing document as stalled', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-01-01T00:00:05Z')) // 5s after updatedAt
-    render(<StatusRing status="processing" updatedAt="2026-01-01T00:00:00Z" />)
-    expect(screen.getByRole('img', { name: 'Processing…' })).toBeInTheDocument()
+  // The ring is purely decorative now -- the click-for-detail affordance
+  // lives on the inline stage label (see StageChecklist.test.tsx), not
+  // here, since a small icon turned out to be a poor "click me" signal.
+  it('renders no interactive element for any status', () => {
+    render(<StatusRing status="processing" progress={threeStageProgress(['embedding'])} />)
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })

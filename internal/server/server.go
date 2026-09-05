@@ -31,7 +31,11 @@ type Deps struct {
 	Docs      document.Repository
 	Objects   objectstore.ObjectStore
 	Publisher queue.Publisher
-	Manifest  manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
+	// JobStatusReader is optional; when nil, GET /kbs/{id}/documents omits
+	// per-document progress info and the frontend falls back to just the
+	// coarse document.Status.
+	JobStatusReader queue.JobStatusReader
+	Manifest        manifest.Repository // optional; used for ingestion manifest summaries on PDF/image docs
 	// Canonical is optional; when nil, deleting a document skips reversing
 	// its contribution to canonical entity stats (acceptable before
 	// canonicalization is wired up — there is nothing to reverse yet).
@@ -94,7 +98,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Manifest, deps.Canonical, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.JobStatusReader, deps.Manifest, deps.Canonical, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments, deps.Stats)

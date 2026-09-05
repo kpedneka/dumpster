@@ -32,13 +32,14 @@ import { toast } from '@/hooks/use-toast'
 import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
 import { StatusRing } from '@/components/StatusRing'
+import { StageProgressLabel } from '@/components/StageChecklist'
+import { hasInFlightWork, stageProgressView } from '@/lib/status-ring'
 import { getDraftQuery, setDraftQuery } from '@/lib/search-state'
 import { fileIconSrc } from '@/lib/file-icons'
 import { cn, describeError } from '@/lib/utils'
 import type { components } from '@/api/schema.d.ts'
 
 type Document = components['schemas']['Document']
-type DocStatus = Document['status']
 type Citation = components['schemas']['Citation']
 type RetrievedFile = components['schemas']['RetrievedFile']
 type InquiryMessage = components['schemas']['InquiryMessage']
@@ -64,8 +65,6 @@ type PendingTurn = PendingTurnKind & {
   retrievalMs: number | null
   error: unknown
 }
-
-const TERMINAL: DocStatus[] = ['indexed', 'failed']
 
 // Replace [N] with {CITE_N} before passing to react-markdown so remark doesn't
 // tokenize the brackets as a potential link reference, keeping citations as a
@@ -508,7 +507,7 @@ export function KBDetailPage() {
     enabled: !!kbId,
     refetchInterval: (query) => {
       const docs = query.state.data?.items ?? []
-      return docs.some((d) => !TERMINAL.includes(d.status)) ? 2000 : false
+      return docs.some((d) => hasInFlightWork(d.status, d.progress)) ? 2000 : false
     },
   })
 
@@ -1302,15 +1301,31 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
   })
 
   const isFailed = doc.status === 'failed'
+  // The stage label is a permanent ingestion-history record, not just
+  // live progress -- it stays in place (ending on "Fully indexed") even
+  // after processing finishes, so file size only shows up as a fallback
+  // for a failed document or a deployment with no progress signal at all.
+  // The label itself carries the click-for-detail affordance when a
+  // checklist is available -- see StageProgressLabel.
+  const stageView = stageProgressView(doc.status, doc.progress)
 
   return (
     <div className="lift flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-sm hover:border-primary/40">
       <img src={fileIconSrc(doc.filename)} alt="" className="h-4 w-4 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="wrap-anywhere text-sm font-medium">{doc.filename}</p>
-        <p className="text-xs text-muted-foreground">{formatSize(doc.size_bytes)}</p>
+        {stageView ? (
+          <StageProgressLabel view={stageView} />
+        ) : (
+          <p className="text-xs text-muted-foreground">{formatSize(doc.size_bytes)}</p>
+        )}
       </div>
-      <StatusRing status={doc.status} updatedAt={doc.updated_at} />
+      {/* Once a document is searchable, the ring adds nothing the stage
+          label doesn't already say more precisely -- it only ever showed
+          fully-filled/green for "indexed" anyway. Keep it for
+          pending/processing (still a useful compact glance) and for
+          failed, where it's the at-a-glance error signal. */}
+      {doc.status !== 'indexed' && <StatusRing status={doc.status} progress={doc.progress} />}
       {isFailed && (
         <Button
           variant="ghost"

@@ -149,10 +149,55 @@ type Consumer interface {
 	// JOB_STALE_TIMEOUT gets reclaimed and its attempt count burned even
 	// though nothing was actually wrong with it.
 	Heartbeat(ctx context.Context, jobID uuid.UUID) error
+	// SetPhase records an optional sub-stage within the current job_type,
+	// for job types where job_type alone isn't granular enough to say
+	// what's actually happening (see JobStatus's doc). Most handlers never
+	// call this -- their job_type already maps to exactly one display
+	// stage. region_classification is the first that does, since it runs
+	// region analysis and embedding back-to-back inside one job with no
+	// intervening jobs-table update otherwise.
+	SetPhase(ctx context.Context, jobID uuid.UUID, phase string) error
 }
 
 // Queue combines publishing and consuming into a single interface.
 type Queue interface {
 	Publisher
 	Consumer
+}
+
+// JobStatus is one active job's current state, for read-only display
+// purposes (the upload progress UI) -- distinct from Job, which
+// Consumer.Dequeue returns for claiming/processing work and so never
+// carries Status/LastError (Dequeue only ever returns jobs that were
+// pending).
+type JobStatus struct {
+	Type      JobType
+	Phase     string // empty when this job type has no explicit phase override in play
+	Status    string // "pending" or "processing" -- ActiveJobsForDocuments never returns a dead-lettered ("failed") job, see its doc
+	LastError string
+}
+
+// JobStatusReader exposes read-only job status to the API layer, kept
+// separate from Consumer (the worker-side claim/ack/nack contract) since
+// nothing about display needs the ability to mutate a job.
+type JobStatusReader interface {
+	// ActiveJobsForDocuments returns every currently pending/processing
+	// job for each document ID in documentIDs, keyed by DocumentID. A
+	// document ID with no entry (or an empty slice) has no active job --
+	// either every pipeline stage already completed successfully, or
+	// (rarer) is momentarily between one stage's job being deleted and
+	// the next one's insert committing. A dead-lettered ("failed") job
+	// is never included: its row is never deleted (see Consumer.Nack's
+	// doc), and treating it as active would misrepresent a permanently
+	// stuck job as still-in-progress forever.
+	//
+	// More than one job can be active for the same document at once now
+	// that entity extraction can start before a document's own indexing
+	// job (region_classification/document_indexing) finishes -- see
+	// worker.RegionClassificationHandler.process's doc. Callers that need
+	// a single "what stage is this document on" answer should pick the
+	// job representing the *least* progress (queue.EarliestActiveStage),
+	// not just the first or most-recently-created one: which job happens
+	// to exist is not the same question as which one is the bottleneck.
+	ActiveJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID][]JobStatus, error)
 }

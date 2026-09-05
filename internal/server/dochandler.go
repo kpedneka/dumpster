@@ -54,6 +54,7 @@ type docHandler struct {
 	docRepo           document.Repository
 	objects           objectstore.ObjectStore
 	publisher         queue.Publisher
+	jobs              queue.JobStatusReader  // nil when per-document progress is not available
 	manifest          manifest.Repository    // nil when manifest not yet available
 	canonical         canonical.Repository   // nil when canonicalization not yet available
 	instruments       *telemetry.Instruments // nil when metrics are not configured
@@ -67,6 +68,7 @@ func registerDocRoutes(
 	docRepo document.Repository,
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
+	jobs queue.JobStatusReader,
 	manifestRepo manifest.Repository,
 	canonicalRepo canonical.Repository,
 	instruments *telemetry.Instruments,
@@ -84,6 +86,7 @@ func registerDocRoutes(
 		docRepo:           docRepo,
 		objects:           objects,
 		publisher:         publisher,
+		jobs:              jobs,
 		manifest:          manifestRepo,
 		canonical:         canonicalRepo,
 		instruments:       instruments,
@@ -237,6 +240,27 @@ func (h *docHandler) recordDelete(ctx context.Context, outcome string) {
 	)
 }
 
+// hasActiveJobForDocument reports whether documentID currently has any
+// pending or processing background job -- e.g. an entity-extraction job
+// that started before this document's own ingestion job failed and was
+// dead-lettered, now that entity extraction can start before a document
+// reaches Indexed (see internal/worker/regionhandler.go's process()).
+// ActiveJobsForDocuments already excludes dead-lettered jobs (a "failed"
+// job's row is never deleted, but the query filters to pending/processing
+// only), so a document whose entity extraction permanently failed is
+// never locked out of delete/retry here. Returns false, nil (not an
+// error) when no JobStatusReader is configured for this deployment.
+func (h *docHandler) hasActiveJobForDocument(ctx context.Context, userID, documentID uuid.UUID) (bool, error) {
+	if h.jobs == nil {
+		return false, nil
+	}
+	active, err := h.jobs.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{documentID})
+	if err != nil {
+		return false, err
+	}
+	return len(active[documentID]) > 0, nil
+}
+
 func (h *docHandler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -261,7 +285,97 @@ func (h *docHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, paginateDocs(docs, limit, after))
+	page := paginateDocs(docs, limit, after)
+	writeJSON(w, http.StatusOK, h.enrichPage(r.Context(), userID, page))
+}
+
+// docListItem is a document.Document enriched with per-document ingestion
+// progress for the document list endpoint. See docDetailResponse for the
+// same enrichment pattern applied to the single-document endpoint.
+type docListItem struct {
+	*document.Document
+	// Progress is set for every status except failed (a dead-lettered
+	// document has nothing left to report). It stays set forever once a
+	// document is fully indexed -- see documentProgress.ActiveStages --
+	// so a caller can show ingestion history, not just live progress.
+	Progress *documentProgress `json:"progress,omitempty"`
+}
+
+// documentProgress is the staged-checklist view of ingestion progress a
+// document upload UI can render directly: the full ordered list of stages
+// this document will pass through, and which one(s) are active right now.
+type documentProgress struct {
+	Stages []queue.DisplayStage `json:"stages"`
+	// ActiveStages holds every DisplayStage.Key genuinely in progress
+	// right now, in canonical stage order -- more than one when e.g. a
+	// document's own indexing job is still embedding while its (already
+	// started) entity-extraction job is also running (see
+	// worker.RegionClassificationHandler.process's doc). Empty when the
+	// document is queued but no job has started processing it yet (i.e.
+	// still on the first stage, not yet picked up by a worker).
+	// Permanently [queue.StageKeyComplete] once the whole pipeline --
+	// including background entity extraction -- has finished.
+	ActiveStages []string `json:"active_stages,omitempty"`
+}
+
+// documentPageResponse mirrors DocumentPage but carries the enriched
+// docListItem in place of a raw *document.Document.
+type documentPageResponse struct {
+	Items      []*docListItem `json:"items"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+// enrichPage attaches progress info to a page of documents in a single
+// batched ActiveJobsForDocuments lookup, rather than one query per
+// document.
+func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page DocumentPage) documentPageResponse {
+	resp := documentPageResponse{NextCursor: page.NextCursor, Items: make([]*docListItem, len(page.Items))}
+
+	if h.jobs == nil {
+		for i, d := range page.Items {
+			resp.Items[i] = &docListItem{Document: d}
+		}
+		return resp
+	}
+
+	ids := make([]uuid.UUID, len(page.Items))
+	for i, d := range page.Items {
+		ids[i] = d.ID
+	}
+	activeByDoc, err := h.jobs.ActiveJobsForDocuments(ctx, userID, ids)
+	if err != nil {
+		slog.Error("failed to load job statuses for document progress", "err", err)
+	}
+
+	for i, d := range page.Items {
+		item := &docListItem{Document: d}
+		// A failed (dead-lettered) document has nothing left to show --
+		// there's no in-flight or completed pipeline to report on. Every
+		// other status gets a checklist, including "indexed": that only
+		// means region classification + embedding finished, while
+		// entity_extraction/edge_extraction/canonicalization keep running
+		// as a background pipeline afterward (document.Status has no
+		// value for "indexed but entities still extracting"). Once that
+		// pipeline is done too, the document sits permanently on
+		// queue.StageKeyComplete rather than losing its checklist --
+		// callers use this to show a document's ingestion history, not
+		// just its live progress.
+		if d.Status != document.StatusFailed {
+			hasRegionClassification := regionClassificationTypes[d.ContentType]
+			progress := &documentProgress{
+				Stages: queue.StagesForDocument(hasRegionClassification),
+			}
+			switch activeStages := queue.ActiveStageKeys(hasRegionClassification, activeByDoc[d.ID]); {
+			case len(activeStages) > 0:
+				progress.ActiveStages = activeStages
+			case d.Status == document.StatusIndexed:
+				progress.ActiveStages = []string{queue.StageKeyComplete}
+			}
+			item.Progress = progress
+		}
+		resp.Items[i] = item
+	}
+	return resp
 }
 
 func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
@@ -416,6 +530,23 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Entity extraction can now start before a document reaches Indexed
+	// (see internal/worker/regionhandler.go's process()), so it can
+	// still be genuinely active even once doc.Status has moved past
+	// Processing -- including Indexed or Failed. Deleting
+	// out from under it would cascade away the entities row it's about
+	// to write into, or leave it reading chunk rows that no longer exist.
+	hasActiveJob, err := h.hasActiveJobForDocument(r.Context(), userID, docID)
+	if err != nil {
+		h.recordDelete(r.Context(), "failure")
+		writeError(w, http.StatusInternalServerError, "failed to check for an active background job")
+		return
+	}
+	if hasActiveJob {
+		writeError(w, http.StatusConflict, "document has an active background job and cannot be deleted yet")
+		return
+	}
+
 	// Reverse this document's contribution to canonical entity stats before
 	// its entities row are cascade-deleted by the document delete below —
 	// the mention -> canonical linkage DecrementForDocument needs to
@@ -479,6 +610,21 @@ func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
 
 	if doc.Status != document.StatusFailed {
 		writeError(w, http.StatusConflict, "only a failed document can be retried")
+		return
+	}
+
+	// A document can fail (e.g. an embed error) after entity extraction
+	// has already started for it (see internal/worker/regionhandler.go's
+	// process()) -- retrying here re-chunks the document from scratch,
+	// which must not race that still-active job reading the old chunk
+	// rows out from under it.
+	hasActiveJob, err := h.hasActiveJobForDocument(r.Context(), userID, docID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check for an active background job")
+		return
+	}
+	if hasActiveJob {
+		writeError(w, http.StatusConflict, "document has an active background job and cannot be retried yet")
 		return
 	}
 
