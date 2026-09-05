@@ -49,6 +49,10 @@ func main() {
 		logger.Error("embedder setup failed", "err", "EMBED_BATCH_JOB_QUEUE and EMBED_BATCH_JOB_DEFINITION are required")
 		os.Exit(1)
 	}
+	if cfg.R2ScratchEndpoint == "" || cfg.R2ScratchBucket == "" || cfg.R2ScratchAccessKey == "" || cfg.R2ScratchSecretKey == "" {
+		logger.Error("scratch object store setup failed", "err", "R2_SCRATCH_ENDPOINT, R2_SCRATCH_BUCKET, R2_SCRATCH_ACCESS_KEY, and R2_SCRATCH_SECRET_KEY are required")
+		os.Exit(1)
+	}
 	awsBatchClient, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
 	if err != nil {
 		logger.Error("aws batch client setup failed", "err", err)
