@@ -86,11 +86,15 @@ EXPOSE 8000
 # "fly-local-6pn" — Fly's private network (6PN) is IPv6-only, and
 # 0.0.0.0 never binds an IPv6 address, so another machine reaching this
 # one over 6PN would get "connection refused" despite the process being
-# up and DNS resolving correctly. Shell form (not exec form) so the env
-# var actually expands; Fly's own docs are explicit that no [[services]]
-# block substitutes for this — 6PN traffic bypasses Fly's proxy entirely,
-# so the process has to be the thing actually listening on that address.
-CMD exec uvicorn inference_service:app --host ${UVICORN_HOST:-0.0.0.0} --port 8000
+# up and DNS resolving correctly. Needs a shell (not plain exec form) so
+# the env var actually expands; Fly's own docs are explicit that no
+# [[services]] block substitutes for this — 6PN traffic bypasses Fly's
+# proxy entirely, so the process has to be the thing actually listening
+# on that address. Written as a JSON array invoking /bin/sh -c, not bare
+# shell form, purely to satisfy Docker's JSONArgsRecommended lint check —
+# the inner `exec` still does the actual work of replacing the shell
+# with uvicorn (PID 1) so SIGTERM/SIGINT reach it directly.
+CMD ["/bin/sh", "-c", "exec uvicorn inference_service:app --host ${UVICORN_HOST:-0.0.0.0} --port 8000"]
 
 # No ENTRYPOINT/CMD on runtime: Fly.io selects the binary via [processes] in
 # fly.toml; docker-compose selects it via the `command:` key in

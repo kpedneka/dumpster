@@ -38,3 +38,11 @@ __pycache__/
 # Local scratch files for manual testing (sample documents, etc.) — not
 # meant to be checked in.
 examples/
+
+# Compiled binaries from `go build ./cmd/...` run without -o — these have
+# no file extension on macOS/Linux, so *.exe/*.dll above don't catch them.
+/worker
+/api
+/reembed
+/canonicalize
+/cleanup

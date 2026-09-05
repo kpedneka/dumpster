@@ -26,6 +26,23 @@ primary_region = "iad"
 # address proxy-less private traffic actually lands on.
 [env]
   UVICORN_HOST = "fly-local-6pn"
+  # Caps PyTorch's (and the underlying BLAS library's) CPU thread count to
+  # this machine's actual allocation (shared-cpu-2x, below). Without this,
+  # measured directly: embedding 433 chunks for a real document took
+  # 13m18s here vs. 47s on a local dev machine for the identical input --
+  # a ~17x blowup, far worse than the ~3x slowdown a different, non-torch
+  # CPU-bound step (region extraction) saw on this same machine at the
+  # same time. PyTorch defaults to one intra-op thread per CPU core it
+  # *detects*, which on a shared/throttled vCPU allocation can wildly
+  # overshoot the cgroup's real quota -- the container sees more logical
+  # CPUs than it's actually granted -- and the resulting over-threading
+  # causes scheduling thrashing under throttling, not just a proportional
+  # slowdown. See embeddings.py's load_embedder() for where this is read.
+  # Not set for local dev (docker-compose), where the default already
+  # performs fine on real, uncontended cores.
+  OMP_NUM_THREADS      = "2"
+  MKL_NUM_THREADS      = "2"
+  OPENBLAS_NUM_THREADS = "2"
 
 # Always-on, never scale-to-zero: the whole point of this service is to
 # keep GLiNER, the layout classifier, and the local embedding model warm.

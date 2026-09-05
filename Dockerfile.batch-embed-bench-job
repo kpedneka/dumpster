@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+#
+# One-off AWS Batch experiment image (see scripts/embed_bench_job.py for
+# the full story and why this exists): measures cold-start-included wall
+# time for the exact same local-embedding workload that took 13-16+
+# minutes on Fly's shared-cpu-2x machine, on genuinely dedicated Fargate
+# vCPU instead.
+#
+# Deliberately its own Dockerfile, not a variant of the root Dockerfile's
+# `inference` target: that image bundles fastapi/uvicorn/pymupdf/pdfplumber
+# for the always-on HTTP service, none of which this one-off timing
+# experiment needs. The whole point of the experiment is measuring a
+# genuinely smaller, embeddings-only image's cold start — bundling the
+# rest of the inference service's weight would contaminate that number.
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# CPU-only torch, same pinned index-url as the root Dockerfile's `inference`
+# target and for the same reason: the default PyPI wheel bundles the full
+# CUDA runtime (~2.9GB of nvidia-* packages), dead weight on a CPU-only
+# Fargate task.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "sentence-transformers>=3.2,<4"
+
+# Baking the weights in and forcing offline mode avoids a live HuggingFace
+# Hub round trip on every job invocation -- every Batch job is a fresh
+# container, so this cost would otherwise be paid per document instead of
+# once at image build time (same rationale as Dockerfile.batch-entity-job's
+# GLiNER weights, and the root Dockerfile's `inference` target for this
+# same model).
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+COPY scripts/embeddings.py scripts/embed_bench_job.py /app/
+
+CMD ["python", "embed_bench_job.py"]

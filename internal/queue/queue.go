@@ -43,6 +43,20 @@ const (
 	JobTypeCanonicalization JobType = "canonicalization"
 )
 
+// SingleShotMaxAttempts overrides the jobs table's default max_attempts
+// (3) for job types whose failures are deterministic rather than
+// transient: entity_extraction and region_classification are, end to end,
+// thin wrappers around a single AWS Batch job submission — the same
+// input hitting the same code produces the same outcome every time, so a
+// failure here (a code bug, a malformed response, bad input) will
+// reproduce identically on retry, not resolve itself. Retrying 3x in that
+// case only triples the compute cost and the time before the failure
+// becomes visible, for a job type where retrying essentially never helps
+// the way it might for something genuinely flaky (a transient network
+// blip on an HTTP call, momentary DB contention). See
+// internal/queue/pgstore's Publish* functions for where this is applied.
+const SingleShotMaxAttempts = 1
+
 // DocumentUploaded is published once a document's bytes land in object storage
 // and a documents row has been created at status "pending".
 type DocumentUploaded struct {

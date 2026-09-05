@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
@@ -115,7 +116,10 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 		return fmt.Errorf("regionhandler: mark processing: %w", err)
 	}
 
-	if err := h.process(ctx, doc); err != nil {
+	processStart := time.Now()
+	err = h.process(ctx, doc)
+	log.Printf("regionhandler: doc %s: process (regions+embed+persist) took %s (err=%v)", job.DocumentID, time.Since(processStart), err)
+	if err != nil {
 		return err
 	}
 
@@ -142,7 +146,9 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 }
 
 func (h *RegionClassificationHandler) process(ctx context.Context, doc *document.Document) error {
+	readStart := time.Now()
 	rawBytes, err := h.readObject(ctx, doc.S3Key)
+	log.Printf("regionhandler: doc %s: readObject took %s (bytes=%d, err=%v)", doc.ID, time.Since(readStart), len(rawBytes), err)
 	if err != nil {
 		return err
 	}
@@ -162,7 +168,9 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 		if h.layout == nil {
 			return fmt.Errorf("regionhandler: no layout extractor configured for PDF document %s", doc.ID)
 		}
+		extractStart := time.Now()
 		rawRegions, err = h.layout.ExtractRegions(ctx, rawBytes)
+		log.Printf("regionhandler: doc %s: ExtractRegions took %s (regions=%d, err=%v)", doc.ID, time.Since(extractStart), len(rawRegions), err)
 		if err != nil {
 			return fmt.Errorf("regionhandler: extract regions from %s: %w", doc.ID, err)
 		}
@@ -204,9 +212,11 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 	}
 
 	// Delete any previous manifest rows from a prior attempt.
+	deleteManifestStart := time.Now()
 	if err := h.manifest.DeleteByDocument(ctx, doc.UserID, doc.ID); err != nil {
 		return fmt.Errorf("regionhandler: clear existing manifest: %w", err)
 	}
+	log.Printf("regionhandler: doc %s: manifest.DeleteByDocument took %s", doc.ID, time.Since(deleteManifestStart))
 
 	// Persist all regions, including skipped ones.
 	regions := make([]*manifest.Region, 0, len(resolved))
@@ -223,21 +233,28 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 			ExtractorVersion: extractorVersion,
 		})
 	}
+	bulkCreateManifestStart := time.Now()
 	if err := h.manifest.BulkCreate(ctx, regions); err != nil {
 		return fmt.Errorf("regionhandler: persist manifest: %w", err)
 	}
+	log.Printf("regionhandler: doc %s: manifest.BulkCreate took %s (rows=%d)", doc.ID, time.Since(bulkCreateManifestStart), len(regions))
 
 	// Look up the newly-assigned region IDs.
+	listManifestStart := time.Now()
 	persistedRegions, err := h.manifest.ListByDocument(ctx, doc.UserID, doc.ID)
 	if err != nil {
 		return fmt.Errorf("regionhandler: list manifest after create: %w", err)
 	}
+	log.Printf("regionhandler: doc %s: manifest.ListByDocument took %s", doc.ID, time.Since(listManifestStart))
 
 	// Build chunks for indexed regions.
+	deleteChunksStart := time.Now()
 	if err := h.chunks.DeleteByDocument(ctx, doc.UserID, doc.ID); err != nil {
 		return fmt.Errorf("regionhandler: clear existing chunks: %w", err)
 	}
+	log.Printf("regionhandler: doc %s: chunks.DeleteByDocument took %s", doc.ID, time.Since(deleteChunksStart))
 
+	splitStart := time.Now()
 	var allChunks []*chunk.Chunk
 	splitter := chunk.DefaultFixedWindow()
 	ordinal := 0
@@ -268,6 +285,8 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 		}
 	}
 
+	log.Printf("regionhandler: doc %s: build chunks from regions took %s (chunks=%d)", doc.ID, time.Since(splitStart), len(allChunks))
+
 	if len(allChunks) == 0 {
 		return nil
 	}
@@ -276,16 +295,20 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 	for i, c := range allChunks {
 		texts[i] = c.Text
 	}
+	embedStart := time.Now()
 	vecs, err := h.embedder.Embed(ctx, texts)
+	log.Printf("regionhandler: doc %s: embedder.Embed took %s (texts=%d, err=%v)", doc.ID, time.Since(embedStart), len(texts), err)
 	if err != nil {
 		return fmt.Errorf("regionhandler: embed: %w", err)
 	}
 	for i, c := range allChunks {
 		c.Embedding = vecs[i]
 	}
+	persistChunksStart := time.Now()
 	if err := h.chunks.BulkCreate(ctx, allChunks); err != nil {
 		return fmt.Errorf("regionhandler: persist chunks: %w", err)
 	}
+	log.Printf("regionhandler: doc %s: chunks.BulkCreate took %s (rows=%d)", doc.ID, time.Since(persistChunksStart), len(allChunks))
 
 	return nil
 }

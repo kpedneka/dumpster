@@ -65,5 +65,13 @@ func (s *Store) PresignedURL(_ context.Context, key string, _ time.Duration) (st
 	return "http://mock/" + key, nil
 }
 
+// PresignedPutURL returns a fake URL unconditionally, unlike PresignedURL —
+// a real presigned PUT URL is valid for a key that doesn't exist yet (the
+// whole point is to create it), so there's no existing object to check
+// against here.
+func (s *Store) PresignedPutURL(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "http://mock/" + key, nil
+}
+
 // Compile-time check.
 var _ objectstore.ObjectStore = (*Store)(nil)

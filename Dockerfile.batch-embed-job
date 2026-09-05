@@ -1,0 +1,38 @@
+# syntax=docker/dockerfile:1
+#
+# AWS Batch job image for CPU-only local embedding (see
+# scripts/batch_embed_job.py for the job logic and why this exists as a
+# Batch job rather than a call to the always-on Fly inference service --
+# short version: Fly's shared-cpu tier throttles CPU-bound work severely
+# once burst balance empties, turning a 47.5s embedding call into 13-16+
+# minutes; Fargate's dedicated vCPU allocation has no such throttling).
+#
+# Separate from the root Dockerfile: that image's `inference` target
+# bundles fastapi/uvicorn/pymupdf/pdfplumber for the always-on HTTP
+# service (regions + query-time embeddings), none of which this
+# ingestion-only batch job needs. Pushed to ECR, not deployed to Fly.
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# CPU-only torch, same pinned index-url as the root Dockerfile's
+# `inference` target and for the same reason: the default PyPI wheel
+# bundles the full CUDA runtime, dead weight on a CPU-only Fargate task.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "sentence-transformers>=3.2,<4"
+
+# Baking the weights in and forcing offline mode avoids a live HuggingFace
+# Hub round trip on every job invocation -- every Batch job is a fresh
+# container, so this cost would otherwise be paid per document instead of
+# once at image build time.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
+
+COPY scripts/embeddings.py scripts/batch_embed_job.py /app/
+
+CMD ["python", "batch_embed_job.py"]

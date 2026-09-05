@@ -48,12 +48,17 @@ func (s *Store) PublishDocumentUploaded(ctx context.Context, evt queue.DocumentU
 // config changes — without re-chunking or re-embedding. If a pending or
 // processing entity-extraction job already exists for the document the
 // insert is silently skipped, making enqueue idempotent.
+//
+// max_attempts is set to queue.SingleShotMaxAttempts (1), not the jobs
+// table's default (3) -- see that constant's doc for why: this job type
+// is a thin wrapper around one AWS Batch submission, and Batch failures
+// here are deterministic, not transient, so retrying just wastes compute.
 func (s *Store) PublishEntityExtraction(ctx context.Context, evt queue.EntityExtractionRequested) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO jobs (document_id, user_id, job_type)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO jobs (document_id, user_id, job_type, max_attempts)
+		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT DO NOTHING`,
-		evt.DocumentID, evt.UserID, string(queue.JobTypeEntityExtraction),
+		evt.DocumentID, evt.UserID, string(queue.JobTypeEntityExtraction), queue.SingleShotMaxAttempts,
 	)
 	if err != nil {
 		return fmt.Errorf("queue: enqueue entity extraction for document %s: %w", evt.DocumentID, err)
@@ -80,12 +85,20 @@ func (s *Store) PublishEdgeExtraction(ctx context.Context, evt queue.EdgeExtract
 // PublishRegionClassification inserts a pending region-classification job
 // for the given PDF or image document as the alternative ingestion entry
 // point to document indexing.
+//
+// max_attempts is set to queue.SingleShotMaxAttempts (1) -- this job type
+// now embeds its chunks via an AWS Batch job (internal/llm/awsbatch) as
+// its final step, and a failure there is exactly as deterministic as
+// entity extraction's own Batch failures. See that constant's doc for the
+// full reasoning; accepted as covering the whole job type even though its
+// earlier steps (the /regions HTTP call, DB writes) could in principle
+// have more transient failure modes.
 func (s *Store) PublishRegionClassification(ctx context.Context, evt queue.RegionClassificationRequested) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO jobs (document_id, user_id, job_type)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO jobs (document_id, user_id, job_type, max_attempts)
+		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT DO NOTHING`,
-		evt.DocumentID, evt.UserID, string(queue.JobTypeRegionClassification),
+		evt.DocumentID, evt.UserID, string(queue.JobTypeRegionClassification), queue.SingleShotMaxAttempts,
 	)
 	if err != nil {
 		return fmt.Errorf("queue: enqueue region classification for document %s: %w", evt.DocumentID, err)

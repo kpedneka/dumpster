@@ -18,6 +18,8 @@ caller (the Go llm.Embedder adapter that will wire local embeddings into
 the query and ingestion paths) is responsible for saying which case it's
 in, since this module has no way to infer it from the text alone.
 """
+import os
+
 _MODEL_NAME = "BAAI/bge-small-en-v1.5"
 _DIMS = 384
 _QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
@@ -25,7 +27,28 @@ _QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages: "
 
 def load_embedder():
     """Loads the embedding model once. Call at process startup, not per
-    request — construction includes loading the model weights."""
+    request — construction includes loading the model weights.
+
+    Also caps PyTorch's own CPU thread count when OMP_NUM_THREADS is set
+    (see fly.inference.toml) -- PyTorch defaults to spawning one intra-op
+    thread per CPU core it *detects*, which on a throttled/shared cloud
+    vCPU allocation can wildly overshoot the CPU the container actually
+    gets: the container can report far more logical CPUs than its cgroup
+    quota grants. Measured directly in production: the exact same 433-text
+    batch that took 47s locally (uncapped, real dedicated cores) took
+    13m18s on Fly's shared-cpu-2x -- a ~17x blowup for identical CPU-bound
+    work, and a much bigger hit than the ~3x slowdown region extraction
+    (a different, non-torch CPU-bound step) saw on the same machine at the
+    same time -- consistent with thread-scheduling thrashing from
+    over-threading, not just "the CPU is slower." Left uncapped for local
+    dev (the env var is only set in fly.inference.toml), where the default
+    already performs fine."""
+    threads = os.environ.get("OMP_NUM_THREADS")
+    if threads:
+        import torch
+
+        torch.set_num_threads(int(threads))
+
     from sentence_transformers import SentenceTransformer
 
     return SentenceTransformer(_MODEL_NAME)

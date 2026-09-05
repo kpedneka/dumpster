@@ -50,6 +50,20 @@ func (c *Client) NextJobID() string {
 	return fmt.Sprintf("mock-job-%d", c.nextJobID+1)
 }
 
+// Jobs returns a snapshot of every SubmitJobParams passed to SubmitJob so
+// far, in order. Unlike reading SubmittedJobs directly, this is safe to
+// call from a goroutine other than the one driving the code under test —
+// needed by any test that must observe a submission while the call that
+// made it (e.g. Embed, which submits and then blocks awaiting the result)
+// is still in flight.
+func (c *Client) Jobs() []awsbatch.SubmitJobParams {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]awsbatch.SubmitJobParams, len(c.SubmittedJobs))
+	copy(out, c.SubmittedJobs)
+	return out
+}
+
 func (c *Client) SubmitJob(_ context.Context, params awsbatch.SubmitJobParams) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
