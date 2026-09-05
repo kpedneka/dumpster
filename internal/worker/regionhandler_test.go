@@ -45,6 +45,22 @@ func (fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error
 
 func (fakeEmbedder) Dims() int { return 2 }
 
+// orderRecordingEmbedder wraps fakeEmbedder, invoking onEmbed (if set)
+// before delegating -- mirrors publisherSpy (dochandler_test.go, same
+// package) for proving call order relative to entity extraction being
+// published.
+type orderRecordingEmbedder struct {
+	fakeEmbedder
+	onEmbed func()
+}
+
+func (e *orderRecordingEmbedder) Embed(ctx context.Context, texts []string) ([][]float32, error) {
+	if e.onEmbed != nil {
+		e.onEmbed()
+	}
+	return e.fakeEmbedder.Embed(ctx, texts)
+}
+
 // fakePhaseSetter is a minimal worker.PhaseSetter for tests, recording
 // every SetPhase call in order.
 type fakePhaseSetter struct {
@@ -446,6 +462,101 @@ func TestRegionHandler_Handle_SetPhaseError_DoesNotFailJob(t *testing.T) {
 	).WithPhaseTracking(phases)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v (a SetPhase failure should not fail the job)", err)
+	}
+}
+
+// TestRegionHandler_Handle_PublishesEntityExtractionBeforeEmbed proves the
+// property this handler's parallelization depends on: entity extraction
+// is enqueued before the (potentially slow, AWS-Batch-backed) embed call
+// runs, not after -- so a second worker goroutine can dequeue and start
+// extracting while this one is still blocked waiting on Embed, instead of
+// only starting once the whole document is already indexed.
+func TestRegionHandler_Handle_PublishesEntityExtractionBeforeEmbed(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+
+	var order []string
+	embedder := &orderRecordingEmbedder{onEmbed: func() { order = append(order, "embed") }}
+	publisher := &publisherSpy{
+		Publisher:                 qmem.New(),
+		onPublishEntityExtraction: func() { order = append(order, "publish_entity_extraction") },
+	}
+
+	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
+		{RegionType: "native_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 0.3}, Text: "Some text.", NeedsVLM: ""},
+	}}
+	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, fakeExtractor, embedder, publisher,
+	)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if len(order) != 2 || order[0] != "publish_entity_extraction" || order[1] != "embed" {
+		t.Errorf("call order = %v, want [publish_entity_extraction embed]", order)
+	}
+}
+
+// TestRegionHandler_Handle_ChunksPersistedBeforeEntityExtractionPublished
+// proves entity extraction has real chunk rows to read the moment it's
+// published, with their embedding still nil (embed hasn't run yet) --
+// the actual precondition that makes concurrent extraction safe, not
+// just an ordering coincidence.
+func TestRegionHandler_Handle_ChunksPersistedBeforeEntityExtractionPublished(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+
+	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
+		{RegionType: "native_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 0.3}, Text: "Some text.", NeedsVLM: ""},
+	}}
+	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// chunkmem.ListByDocument returns pointers to its own internal
+	// records, which UpdateEmbedding later mutates in place -- so text
+	// and embedding-length must be copied out *inside* the callback, not
+	// just the []*chunk.Chunk slice, or this would observe the final
+	// post-backfill state instead of the moment of publish.
+	var chunkCount int
+	var emptyTexts, nonNilEmbeddings int
+	publisher := &publisherSpy{
+		Publisher: qmem.New(),
+		onPublishEntityExtraction: func() {
+			snapshot, _ := chunks.ListByDocument(ctx, userID, job.DocumentID)
+			chunkCount = len(snapshot)
+			for _, c := range snapshot {
+				if c.Text == "" {
+					emptyTexts++
+				}
+				if len(c.Embedding) != 0 {
+					nonNilEmbeddings++
+				}
+			}
+		},
+	}
+
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, publisher,
+	)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if chunkCount == 0 {
+		t.Fatal("expected chunks to already be persisted at the moment entity extraction is published")
+	}
+	if emptyTexts != 0 {
+		t.Errorf("expected all chunk text to already be set, got %d empty", emptyTexts)
+	}
+	if nonNilEmbeddings != 0 {
+		t.Errorf("expected embedding to still be nil at publish time (embed hasn't run yet), got %d non-nil", nonNilEmbeddings)
 	}
 }
 

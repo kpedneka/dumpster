@@ -21,6 +21,23 @@ import (
 
 const testDims = 4
 
+// publisherSpy wraps a queue.Publisher, invoking onPublishEntityExtraction
+// (if set) synchronously before delegating -- used to observe handler
+// state (call order relative to Embed, DB state) at the exact moment
+// entity extraction is enqueued. Shared by dochandler_test.go and
+// regionhandler_test.go (both package worker_test).
+type publisherSpy struct {
+	*queuemem.Publisher
+	onPublishEntityExtraction func()
+}
+
+func (p *publisherSpy) PublishEntityExtraction(ctx context.Context, evt queue.EntityExtractionRequested) error {
+	if p.onPublishEntityExtraction != nil {
+		p.onPublishEntityExtraction()
+	}
+	return p.Publisher.PublishEntityExtraction(ctx, evt)
+}
+
 // makeDocJob creates a document seeded into docs and objects, returning a matching Job.
 func makeDocJob(t *testing.T, docs *docmem.Repository, objects *objmock.Store, status document.Status, content string) (*queue.Job, uuid.UUID) {
 	t.Helper()
@@ -230,6 +247,103 @@ func TestDocumentHandler_Handle_PublishesEntityExtractionOnIndexed(t *testing.T)
 	}
 	if events[0].DocumentID != job.DocumentID || events[0].UserID != userID {
 		t.Errorf("unexpected event: %+v", events[0])
+	}
+}
+
+// TestDocumentHandler_Handle_PublishesEntityExtractionBeforeEmbed proves
+// the property this handler's parallelization depends on: entity
+// extraction is enqueued before the (potentially slow, AWS-Batch-backed)
+// embed call runs, not after -- so a second worker goroutine can dequeue
+// and start extracting while this one is still blocked waiting on Embed,
+// instead of only starting once the whole document is already indexed.
+func TestDocumentHandler_Handle_PublishesEntityExtractionBeforeEmbed(t *testing.T) {
+	docs := docmem.New()
+	objects := objmock.New()
+	chunks := chunkmem.New()
+
+	var order []string
+	embedder := mock.NewEmbedder(testDims)
+	embedder.EmbedFn = func(_ context.Context, texts []string) ([][]float32, error) {
+		order = append(order, "embed")
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = make([]float32, testDims)
+		}
+		return out, nil
+	}
+	publisher := &publisherSpy{
+		Publisher: queuemem.New(),
+		onPublishEntityExtraction: func() {
+			order = append(order, "publish_entity_extraction")
+		},
+	}
+
+	content := makeText(50)
+	job, userID := makeDocJob(t, docs, objects, document.StatusPending, content)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), embedder).
+		WithEntityExtractionPublisher(publisher)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if len(order) != 2 || order[0] != "publish_entity_extraction" || order[1] != "embed" {
+		t.Errorf("call order = %v, want [publish_entity_extraction embed]", order)
+	}
+}
+
+// TestDocumentHandler_Handle_ChunksPersistedBeforeEntityExtractionPublished
+// proves entity extraction has real chunk rows to read the moment it's
+// published, with their embedding still nil (embed hasn't run yet) --
+// the actual precondition that makes concurrent extraction safe, not
+// just an ordering coincidence.
+func TestDocumentHandler_Handle_ChunksPersistedBeforeEntityExtractionPublished(t *testing.T) {
+	docs := docmem.New()
+	objects := objmock.New()
+	chunks := chunkmem.New()
+
+	content := makeText(50)
+	job, userID := makeDocJob(t, docs, objects, document.StatusPending, content)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// chunkmem.ListByDocument returns pointers to its own internal
+	// records, which UpdateEmbedding later mutates in place -- so texts
+	// and embedding lengths must be copied out *inside* the callback,
+	// not just the []*chunk.Chunk slice, or this would observe the final
+	// post-backfill state instead of the moment of publish.
+	var chunkCount int
+	var emptyTexts, nonNilEmbeddings int
+	publisher := &publisherSpy{
+		Publisher: queuemem.New(),
+		onPublishEntityExtraction: func() {
+			snapshot, _ := chunks.ListByDocument(ctx, userID, job.DocumentID)
+			chunkCount = len(snapshot)
+			for _, c := range snapshot {
+				if c.Text == "" {
+					emptyTexts++
+				}
+				if len(c.Embedding) != 0 {
+					nonNilEmbeddings++
+				}
+			}
+		},
+	}
+
+	h := worker.NewDocumentHandler(docs, objects, chunks, chunk.NewFixedWindow(100, 10), mock.NewEmbedder(testDims)).
+		WithEntityExtractionPublisher(publisher)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if chunkCount == 0 {
+		t.Fatal("expected chunks to already be persisted at the moment entity extraction is published")
+	}
+	if emptyTexts != 0 {
+		t.Errorf("expected all chunk text to already be set, got %d empty", emptyTexts)
+	}
+	if nonNilEmbeddings != 0 {
+		t.Errorf("expected embedding to still be nil at publish time (embed hasn't run yet), got %d non-nil", nonNilEmbeddings)
 	}
 }
 
