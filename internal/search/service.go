@@ -69,9 +69,9 @@ func (s *Service) Search(ctx context.Context, kbID uuid.UUID, query string) (Res
 //     then generate a cited answer, forwarding each generated text chunk
 //     via onEvent as it arrives.
 //
-// When no router is configured the Service behaves exactly as before
-// v2.7 — the graph legs are never activated and existing callers need
-// no changes.
+// When no router is configured the Service behaves exactly as it did
+// before graph-leg routing was introduced — the graph legs are never
+// activated and existing callers need no changes.
 //
 // Known limitation (parked deliberately): aggregation queries promise
 // completeness ("all orgs mentioned with FEMA") but feeding their chunks into

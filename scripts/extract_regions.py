@@ -192,8 +192,8 @@ def extract_regions(pdf_bytes):
 
 def _peak_rss_kb():
     """Returns this process's peak resident set size in KB, for sizing
-    decisions (see v4.6): the fixed OOM floor observed in production came
-    from this exact number, but only for jobs that survive to report it —
+    decisions: a prior memory-sizing incident's fixed OOM floor came from
+    this exact number, but only for jobs that survive to report it —
     a killed job's peak RSS is only visible via the OOM killer's own log
     line, not this function. ru_maxrss is already KB on Linux (the
     production runtime) but bytes on macOS/BSD, so normalize for local dev.

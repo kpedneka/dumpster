@@ -1,7 +1,7 @@
 """Unit tests for extract_entities.py's spaCy pipeline loader and request
 handling.
 
-No pytest/CI harness exists for scripts/ yet (see v4.6) — run directly with:
+No pytest/CI harness exists for scripts/ yet — run directly with:
     python3 -m unittest scripts/test_extract_entities.py
 """
 import io

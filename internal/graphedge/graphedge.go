@@ -22,8 +22,8 @@ var ErrNotFound = errors.New("graphedge: not found")
 // Edge is a co-occurrence relationship between two entity mentions
 // (internal/entity.Entity) found within the same chunk. EntityAID and
 // EntityBID reference individual mention rows, not deduplicated/canonical
-// entities — v2.1's entity extraction has no canonicalization step, so an
-// edge connects the exact mentions GLiNER found. EntityAID is always
+// entities — entity extraction has no canonicalization step at this layer,
+// so an edge connects the exact mentions GLiNER found. EntityAID is always
 // lexically less than EntityBID (by UUID string form, equivalent to
 // Postgres's native uuid byte-order comparison) so the same pair found in
 // either extraction order collapses to one row; see NewEdge.

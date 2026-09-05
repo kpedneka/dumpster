@@ -16,7 +16,8 @@ CREATE INDEX chunks_document_id_idx ON chunks(document_id);
 CREATE INDEX chunks_kb_id_idx       ON chunks(kb_id);
 CREATE INDEX chunks_user_id_idx     ON chunks(user_id);
 
--- HNSW index for approximate nearest-neighbour search (populated in M5).
+-- HNSW index for approximate nearest-neighbour search over embeddings,
+-- populated once ingestion writes vectors into this table.
 CREATE INDEX chunks_embedding_hnsw_idx ON chunks USING hnsw (embedding vector_cosine_ops);
 
 -- +goose Down

@@ -1,9 +1,10 @@
 // Package inquiry defines the domain types and persistence boundary for an
 // Inquiry: a persisted, ordered sequence of query/answer turns a researcher
-// can leave and return to within one knowledge base. v1 supports exactly
-// one Inquiry per (KBID, UserID) — see Repository.GetOrCreate — and each
-// turn is answered independently: no conversation history is fed back into
-// retrieval or generation (that would be a v2 change to
+// can leave and return to within one knowledge base. The current design
+// supports exactly one Inquiry per (KBID, UserID) — see
+// Repository.GetOrCreate — and each turn is answered independently: no
+// conversation history is fed back into retrieval or generation
+// (context-aware retrieval would be a future change to
 // internal/search.Service, not to this package).
 package inquiry
 
