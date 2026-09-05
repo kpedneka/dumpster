@@ -22,7 +22,7 @@ import (
 	entityawsbatch "github.com/kunalpednekar/dumpster/internal/entity/awsbatch"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
-	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
+	llmawsbatch "github.com/kunalpednekar/dumpster/internal/llm/awsbatch"
 	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
@@ -79,6 +79,20 @@ func main() {
 		SecretKey:    cfg.S3SecretKey,
 		UsePathStyle: cfg.S3UsePathStyle,
 	})
+	// Separate bucket for AWS Batch jobs' transient input/output handoff
+	// (entity extraction, embedding) -- never real user documents. Kept
+	// apart from obj above deliberately: scratch objects don't need (and
+	// shouldn't get) real documents' durability/retention contract, and a
+	// dedicated bucket makes its size alone a useful at-a-glance signal
+	// for whether Batch scratch cleanup is actually working.
+	scratchObj := s3store.New(s3store.Config{
+		Endpoint:     cfg.R2ScratchEndpoint,
+		Region:       cfg.R2ScratchRegion,
+		Bucket:       cfg.R2ScratchBucket,
+		AccessKey:    cfg.R2ScratchAccessKey,
+		SecretKey:    cfg.R2ScratchSecretKey,
+		UsePathStyle: cfg.R2ScratchUsePathStyle,
+	})
 
 	q := qpg.New(pool)
 	docs := docpg.New(txRunner)
@@ -87,17 +101,34 @@ func main() {
 	edges := graphedgepg.New(txRunner)
 	canonicalRepo := canonicalpg.New(txRunner)
 	splitter := chunk.DefaultFixedWindow()
-	embedder := llminference.NewDocumentEmbedder(cfg.InferenceServiceURL)
 	if cfg.BatchJobQueue == "" || cfg.BatchJobDefinition == "" {
 		logger.Error("entity extractor setup failed", "err", "BATCH_JOB_QUEUE and BATCH_JOB_DEFINITION are required")
 		os.Exit(1)
 	}
-	awsBatchClient, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
-	if err != nil {
-		logger.Error("entity extractor setup failed", "err", fmt.Errorf("aws batch client: %w", err))
+	if cfg.EmbedBatchJobQueue == "" || cfg.EmbedBatchJobDefinition == "" {
+		logger.Error("embedder setup failed", "err", "EMBED_BATCH_JOB_QUEUE and EMBED_BATCH_JOB_DEFINITION are required")
 		os.Exit(1)
 	}
-	extractor := entityawsbatch.New(awsBatchClient, obj, entityawsbatch.Config{
+	awsBatchClient, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
+	if err != nil {
+		logger.Error("aws batch client setup failed", "err", err)
+		os.Exit(1)
+	}
+	// Ingestion-time embedding runs on AWS Batch (a separate, CPU-only
+	// Fargate compute environment from entity extraction's GPU one) —
+	// moved off the HTTP inference service after measuring Fly's
+	// shared-cpu tier throttling a 47.5s embedding call into 13-16+
+	// minutes in production. Query-time embedding (cmd/api) is
+	// unaffected — it still uses llminference.NewQueryEmbedder, since a
+	// per-request Batch cold start would be unacceptable for a live
+	// search. See internal/llm/awsbatch's package doc for the full story.
+	embedder := llmawsbatch.New(awsBatchClient, scratchObj, llmawsbatch.Config{
+		JobQueue:      cfg.EmbedBatchJobQueue,
+		JobDefinition: cfg.EmbedBatchJobDefinition,
+		PollInterval:  cfg.BatchPollInterval,
+		PresignTTL:    cfg.BatchPresignTTL,
+	})
+	extractor := entityawsbatch.New(awsBatchClient, scratchObj, entityawsbatch.Config{
 		JobQueue:      cfg.BatchJobQueue,
 		JobDefinition: cfg.BatchJobDefinition,
 		PollInterval:  cfg.BatchPollInterval,

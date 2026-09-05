@@ -16,4 +16,8 @@ type ObjectStore interface {
 	Delete(ctx context.Context, key string) error
 	// PresignedURL returns a time-limited GET URL for key.
 	PresignedURL(ctx context.Context, key string, ttl time.Duration) (string, error)
+	// PresignedPutURL returns a time-limited PUT URL for key, for a caller
+	// without real credentials to upload directly (e.g. an AWS Batch job
+	// writing its result) — the write-side counterpart to PresignedURL.
+	PresignedPutURL(ctx context.Context, key string, ttl time.Duration) (string, error)
 }

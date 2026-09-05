@@ -34,8 +34,8 @@ type Config struct {
 func New(cfg Config) *Store {
 	creds := credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")
 	client := s3.New(s3.Options{
-		Region:      cfg.Region,
-		Credentials: creds,
+		Region:       cfg.Region,
+		Credentials:  creds,
 		BaseEndpoint: aws.String(cfg.Endpoint),
 		UsePathStyle: cfg.UsePathStyle,
 	})
@@ -89,6 +89,18 @@ func (s *Store) PresignedURL(ctx context.Context, key string, ttl time.Duration)
 	}, s3.WithPresignExpires(ttl))
 	if err != nil {
 		return "", fmt.Errorf("s3store: presign %q: %w", key, err)
+	}
+	return req.URL, nil
+}
+
+// PresignedPutURL returns a time-limited PUT URL for key.
+func (s *Store) PresignedPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	req, err := s.presign.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("s3store: presign put %q: %w", key, err)
 	}
 	return req.URL, nil
 }

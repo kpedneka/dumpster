@@ -40,13 +40,30 @@ type Config struct {
 	// Use the Neon pooler endpoint (host has -pooler suffix) for the API.
 	DatabaseURLPooled string
 	// Object storage — endpoint-configurable so the same adapter serves
-	// MinIO locally and Cloudflare R2 in the cloud.
+	// MinIO locally and Cloudflare R2 in the cloud. Holds real,
+	// user-owned documents — a different retention/access contract than
+	// the scratch bucket below, which is why the two are never conflated.
 	S3Endpoint     string
 	S3Region       string
 	S3Bucket       string
 	S3AccessKey    string
 	S3SecretKey    string
 	S3UsePathStyle bool
+	// R2Scratch* configures a separate bucket for AWS Batch jobs'
+	// transient input/output handoff (internal/entity/awsbatch,
+	// internal/llm/awsbatch) — never real user documents. Kept out of the
+	// main document bucket above deliberately: scratch objects don't need
+	// (and shouldn't get) the same durability/retention guarantees real
+	// documents do, and a separate bucket makes that bucket's size alone
+	// a useful at-a-glance signal for whether Batch scratch cleanup is
+	// actually working, without it being muddied by real document
+	// storage growth.
+	R2ScratchEndpoint     string
+	R2ScratchRegion       string
+	R2ScratchBucket       string
+	R2ScratchAccessKey    string
+	R2ScratchSecretKey    string
+	R2ScratchUsePathStyle bool
 	// Observability
 	MetricsPort string
 	// LLM
@@ -58,19 +75,24 @@ type Config struct {
 	// or remove a type by changing ENTITY_TYPES, no migration required.
 	EntityTypes []string
 	// InferenceServiceURL is the base URL of the consolidated ML inference
-	// service: PDF region classification and local embeddings, called over
-	// HTTP by both cmd/api and cmd/worker instead of each embedding its own
-	// warm Python subprocess. Entity extraction does not go through this —
-	// see internal/entity/awsbatch and AWSRegion/BatchJobQueue/
+	// service, called over HTTP: PDF region classification (both cmd/api
+	// and cmd/worker) and query-time embeddings (cmd/api only — see
+	// internal/llm/inference.NewQueryEmbedder). Ingestion-time (document)
+	// embeddings do NOT go through this any more — see
+	// internal/llm/awsbatch and EmbedBatchJobQueue/EmbedBatchJobDefinition
+	// below for why (Fly's shared-cpu tier throttled that CPU-bound work
+	// severely; a live search query still can't tolerate a Batch cold
+	// start, so it stays here). Entity extraction never went through this
+	// either — see internal/entity/awsbatch and AWSRegion/BatchJobQueue/
 	// BatchJobDefinition below. Defaults to the docker-compose service
 	// name; override for local dev without Docker or to point at a
 	// different deployment.
 	InferenceServiceURL string
 
 	// AWSRegion is the region cmd/worker's AWS Batch/CloudWatch Logs calls
-	// target for entity extraction (internal/entity/awsbatch — the only
-	// entity.Extractor implementation; there is no non-AWS-Batch fallback).
-	// Credentials themselves come from the standard AWS SDK chain
+	// target, for both entity extraction (internal/entity/awsbatch) and
+	// ingestion-time embedding (internal/llm/awsbatch). Credentials
+	// themselves come from the standard AWS SDK chain
 	// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars in this app's
 	// deployments), not a dedicated config field.
 	AWSRegion string
@@ -79,13 +101,22 @@ type Config struct {
 	// at startup if either is empty.
 	BatchJobQueue      string
 	BatchJobDefinition string
-	// BatchPollInterval is how often the awsbatch extractor checks a
-	// submitted job's status. Defaults to 5s (internal/entity/awsbatch's
-	// own default) when unset.
+	// EmbedBatchJobQueue and EmbedBatchJobDefinition identify the separate
+	// AWS Batch resources ingestion-time embedding submits jobs against
+	// (internal/llm/awsbatch) — a distinct, CPU-only Fargate compute
+	// environment from entity extraction's GPU one above, since the two
+	// have nothing in common but "runs on AWS Batch." Required —
+	// cmd/worker and cmd/reembed exit at startup if either is empty.
+	EmbedBatchJobQueue      string
+	EmbedBatchJobDefinition string
+	// BatchPollInterval is how often the awsbatch extractor/embedder
+	// checks a submitted job's status. Defaults to 5s (their own default)
+	// when unset. Shared between entity extraction and embedding — both
+	// poll AWS Batch the same way, no reason for two separate knobs.
 	BatchPollInterval time.Duration
 	// BatchPresignTTL is how long the input URL handed to a Batch job stays
-	// valid. Defaults to 15m (internal/entity/awsbatch's own default) when
-	// unset.
+	// valid. Defaults to 15m (their own default) when unset. Shared for
+	// the same reason as BatchPollInterval.
 	BatchPresignTTL time.Duration
 
 	// CookieSecure controls the Secure attribute on the session cookie.
@@ -176,17 +207,29 @@ func Load() *Config {
 		S3AccessKey:       getEnv("S3_ACCESS_KEY", "minioadmin"),
 		S3SecretKey:       getEnv("S3_SECRET_KEY", "minioadmin"),
 		S3UsePathStyle:    getEnv("S3_USE_PATH_STYLE", "true") == "true",
-		AnthropicAPIKey:   getEnv("ANTHROPIC_API_KEY", ""),
-		AnthropicModel:    getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+		// No local-dev default (unlike S3* above): the Fargate job writing
+		// here needs a real, internet-reachable bucket regardless of
+		// environment -- a local MinIO instance on docker-compose's
+		// internal network isn't reachable from AWS.
+		R2ScratchEndpoint:     getEnv("R2_SCRATCH_ENDPOINT", ""),
+		R2ScratchRegion:       getEnv("R2_SCRATCH_REGION", "auto"),
+		R2ScratchBucket:       getEnv("R2_SCRATCH_BUCKET", ""),
+		R2ScratchAccessKey:    getEnv("R2_SCRATCH_ACCESS_KEY", ""),
+		R2ScratchSecretKey:    getEnv("R2_SCRATCH_SECRET_KEY", ""),
+		R2ScratchUsePathStyle: getEnv("R2_SCRATCH_USE_PATH_STYLE", "false") == "true",
+		AnthropicAPIKey:       getEnv("ANTHROPIC_API_KEY", ""),
+		AnthropicModel:        getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
 
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
 
-		AWSRegion:          getEnv("AWS_REGION", "us-east-1"),
-		BatchJobQueue:      getEnv("BATCH_JOB_QUEUE", ""),
-		BatchJobDefinition: getEnv("BATCH_JOB_DEFINITION", ""),
-		BatchPollInterval:  getEnvDuration("BATCH_POLL_INTERVAL", 0),
-		BatchPresignTTL:    getEnvDuration("BATCH_PRESIGN_TTL", 0),
+		AWSRegion:               getEnv("AWS_REGION", "us-east-1"),
+		BatchJobQueue:           getEnv("BATCH_JOB_QUEUE", ""),
+		BatchJobDefinition:      getEnv("BATCH_JOB_DEFINITION", ""),
+		EmbedBatchJobQueue:      getEnv("EMBED_BATCH_JOB_QUEUE", ""),
+		EmbedBatchJobDefinition: getEnv("EMBED_BATCH_JOB_DEFINITION", ""),
+		BatchPollInterval:       getEnvDuration("BATCH_POLL_INTERVAL", 0),
+		BatchPresignTTL:         getEnvDuration("BATCH_PRESIGN_TTL", 0),
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 

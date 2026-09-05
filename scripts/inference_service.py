@@ -39,6 +39,7 @@ import asyncio
 import base64
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -137,11 +138,21 @@ async def regions(request: Request):
     # are complementary, not redundant. A document that blows past its
     # child's memory limit fails cleanly here (500) instead of taking this
     # whole process, and every other in-flight request, down with it.
+    wait_start = time.monotonic()
     async with _REGIONS_SEMAPHORE:
+        acquired_at = time.monotonic()
         try:
             result = await run_in_threadpool(extract_regions.extract_regions_isolated, pdf_bytes)
         except RuntimeError as exc:
+            print(
+                f"/regions: semaphore wait {acquired_at - wait_start:.2f}s, "
+                f"failed after {time.monotonic() - acquired_at:.2f}s: {exc}"
+            )
             return JSONResponse(status_code=500, content={"error": str(exc)})
+    print(
+        f"/regions: semaphore wait {acquired_at - wait_start:.2f}s, "
+        f"extract_regions_isolated {time.monotonic() - acquired_at:.2f}s"
+    )
     return {"regions": result["regions"], "peak_rss_kb": result["peak_rss_kb"]}
 
 
@@ -152,5 +163,7 @@ class EmbedRequest(BaseModel):
 
 @app.post("/embeddings")
 def embed(req: EmbedRequest):
+    embed_start = time.monotonic()
     vectors = embeddings.embed(_pipelines["embed_model"], req.texts, is_query=req.is_query)
+    print(f"/embeddings: {len(req.texts)} texts in {time.monotonic() - embed_start:.2f}s")
     return {"embeddings": vectors, "dims": embeddings.dims()}
