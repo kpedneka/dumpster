@@ -92,11 +92,13 @@ func main() {
 		search.WithGraphRetriever(graphRetriever),
 	)
 
+	jobs := qpg.New(pool)
 	deps := server.Deps{
 		KBs:                       kbpg.New(txRunner),
 		Docs:                      docpg.New(txRunner),
 		Objects:                   obj,
-		Publisher:                 qpg.New(pool),
+		Publisher:                 jobs,
+		JobStatusReader:           jobs,
 		Manifest:                  manifestpg.New(txRunner),
 		Canonical:                 canonicalpg.New(txRunner),
 		Communities:               communitypg.New(txRunner),

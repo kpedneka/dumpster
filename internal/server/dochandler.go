@@ -54,6 +54,7 @@ type docHandler struct {
 	docRepo           document.Repository
 	objects           objectstore.ObjectStore
 	publisher         queue.Publisher
+	jobs              queue.JobStatusReader  // nil when per-document progress is not available
 	manifest          manifest.Repository    // nil when manifest not yet available
 	canonical         canonical.Repository   // nil when canonicalization not yet available
 	instruments       *telemetry.Instruments // nil when metrics are not configured
@@ -67,6 +68,7 @@ func registerDocRoutes(
 	docRepo document.Repository,
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
+	jobs queue.JobStatusReader,
 	manifestRepo manifest.Repository,
 	canonicalRepo canonical.Repository,
 	instruments *telemetry.Instruments,
@@ -84,6 +86,7 @@ func registerDocRoutes(
 		docRepo:           docRepo,
 		objects:           objects,
 		publisher:         publisher,
+		jobs:              jobs,
 		manifest:          manifestRepo,
 		canonical:         canonicalRepo,
 		instruments:       instruments,
@@ -261,7 +264,93 @@ func (h *docHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, paginateDocs(docs, limit, after))
+	page := paginateDocs(docs, limit, after)
+	writeJSON(w, http.StatusOK, h.enrichPage(r.Context(), userID, page))
+}
+
+// docListItem is a document.Document enriched with per-document ingestion
+// progress for the document list endpoint. See docDetailResponse for the
+// same enrichment pattern applied to the single-document endpoint.
+type docListItem struct {
+	*document.Document
+	// Progress is set for every status except failed (a dead-lettered
+	// document has nothing left to report). It stays set forever once a
+	// document is fully indexed -- see documentProgress.CurrentStage --
+	// so a caller can show ingestion history, not just live progress.
+	Progress *documentProgress `json:"progress,omitempty"`
+}
+
+// documentProgress is the staged-checklist view of ingestion progress a
+// document upload UI can render directly: the full ordered list of stages
+// this document will pass through, and which one it's on right now.
+type documentProgress struct {
+	Stages []queue.DisplayStage `json:"stages"`
+	// CurrentStage is a DisplayStage.Key. Empty when the document is
+	// queued but no job has started processing it yet (i.e. still on the
+	// first stage, not yet picked up by a worker). Permanently
+	// queue.StageKeyComplete once the whole pipeline -- including
+	// background entity extraction -- has finished.
+	CurrentStage string `json:"current_stage,omitempty"`
+}
+
+// documentPageResponse mirrors DocumentPage but carries the enriched
+// docListItem in place of a raw *document.Document.
+type documentPageResponse struct {
+	Items      []*docListItem `json:"items"`
+	NextCursor string         `json:"next_cursor,omitempty"`
+}
+
+// enrichPage attaches progress info to a page of documents in a single
+// batched CurrentJobsForDocuments lookup, rather than one query per
+// document.
+func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page DocumentPage) documentPageResponse {
+	resp := documentPageResponse{NextCursor: page.NextCursor, Items: make([]*docListItem, len(page.Items))}
+
+	if h.jobs == nil {
+		for i, d := range page.Items {
+			resp.Items[i] = &docListItem{Document: d}
+		}
+		return resp
+	}
+
+	ids := make([]uuid.UUID, len(page.Items))
+	for i, d := range page.Items {
+		ids[i] = d.ID
+	}
+	statuses, err := h.jobs.CurrentJobsForDocuments(ctx, userID, ids)
+	if err != nil {
+		slog.Error("failed to load job statuses for document progress", "err", err)
+	}
+
+	for i, d := range page.Items {
+		item := &docListItem{Document: d}
+		status, hasActiveJob := statuses[d.ID]
+		// A failed (dead-lettered) document has nothing left to show --
+		// there's no in-flight or completed pipeline to report on. Every
+		// other status gets a checklist, including "indexed": that only
+		// means region classification + embedding finished, while
+		// entity_extraction/edge_extraction/canonicalization keep running
+		// as a background pipeline afterward (document.Status has no
+		// value for "indexed but entities still extracting"). Once that
+		// pipeline is done too, the document sits permanently on
+		// queue.StageKeyComplete rather than losing its checklist --
+		// callers use this to show a document's ingestion history, not
+		// just its live progress.
+		if d.Status != document.StatusFailed {
+			progress := &documentProgress{
+				Stages: queue.StagesForDocument(regionClassificationTypes[d.ContentType]),
+			}
+			switch {
+			case hasActiveJob:
+				progress.CurrentStage = queue.StageFor(status.Type, status.Phase).Key
+			case d.Status == document.StatusIndexed:
+				progress.CurrentStage = queue.StageKeyComplete
+			}
+			item.Progress = progress
+		}
+		resp.Items[i] = item
+	}
+	return resp
 }
 
 func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {

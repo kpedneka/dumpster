@@ -1273,6 +1273,16 @@ export interface components {
                 skipped: number;
                 failed: number;
             } | null;
+            /** @description Staged ingestion checklist, always ending on a "complete" stage. Set for every status except failed (a dead-lettered document has nothing left to report), and omitted entirely on responses where per-document progress isn't available. Stays set forever once a document finishes its whole pipeline -- including background entity extraction, which keeps running after the document is already searchable -- so it doubles as a permanent ingestion-history record, not just live progress. */
+            progress?: {
+                stages: {
+                    key: string;
+                    label: string;
+                    message?: string;
+                }[];
+                /** @description The key of the stage currently in progress, matching one of stages[].key. Empty when the document is queued but no worker has picked it up yet. Permanently "complete" once the whole pipeline, including background entity extraction, has finished. */
+                current_stage?: string;
+            } | null;
         };
         Citation: {
             /** @description The 1-indexed [N] marker this citation corresponds to in the summary text. Match markers to citations by this field, not by array position — the list is sparse whenever the model didn't cite every numbered source chunk. */
