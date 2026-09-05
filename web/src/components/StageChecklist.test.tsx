@@ -96,4 +96,30 @@ describe('StageProgressLabel', () => {
     // lucide's Loader2 renders as an <svg class="lucide-loader-circle">.
     expect(document.querySelector('.lucide-loader-circle')).not.toBeInTheDocument()
   })
+
+  // The regression test for the exact bug introduced by letting entity
+  // extraction start before a document's own indexing job finishes:
+  // entity extraction can now be active at the same time as embedding.
+  // The checklist must honestly show both as active
+  // (spinner + message each), not collapse to a single in-progress row,
+  // since real concurrent work is happening.
+  it('shows more than one stage as active at once, each with its own spinner and message', async () => {
+    const user = userEvent.setup()
+    const view: StageProgressView = {
+      text: labels.embedding,
+      stages: [
+        { key: 'analyzing', label: labels.analyzing, message: messages.analyzing, state: 'done' },
+        { key: 'embedding', label: labels.embedding, message: messages.embedding, state: 'active' },
+        { key: 'entities', label: labels.entities, message: messages.entities, state: 'active' },
+        { key: 'complete', label: labels.complete, message: messages.complete, state: 'upcoming' },
+      ],
+    }
+    render(<StageProgressLabel view={view} />)
+
+    await user.click(screen.getByRole('button'))
+
+    expect(await screen.findByText(messages.embedding)).toBeInTheDocument()
+    expect(screen.getByText(messages.entities)).toBeInTheDocument()
+    expect(document.querySelectorAll('.lucide-loader-circle')).toHaveLength(2)
+  })
 })

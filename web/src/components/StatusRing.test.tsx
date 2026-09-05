@@ -3,23 +3,23 @@ import { render, screen } from '@testing-library/react'
 import { StatusRing } from './StatusRing'
 import type { DocumentProgress } from '@/lib/status-ring'
 
-const threeStageProgress = (currentStage?: string): DocumentProgress => ({
+const threeStageProgress = (activeStages: string[] = []): DocumentProgress => ({
   stages: [
     { key: 'analyzing', label: 'Analyzing document' },
     { key: 'embedding', label: 'Preparing for search' },
     { key: 'entities', label: 'Extracting entities' },
   ],
-  current_stage: currentStage,
+  active_stages: activeStages,
 })
 
 describe('StatusRing', () => {
   it('labels a pending document with no active job yet', () => {
-    render(<StatusRing status="pending" progress={threeStageProgress(undefined)} />)
+    render(<StatusRing status="pending" progress={threeStageProgress()} />)
     expect(screen.getByRole('img', { name: 'Pending' })).toBeInTheDocument()
   })
 
   it('labels a processing document', () => {
-    render(<StatusRing status="processing" progress={threeStageProgress('embedding')} />)
+    render(<StatusRing status="processing" progress={threeStageProgress(['embedding'])} />)
     expect(screen.getByRole('img', { name: 'Processing…' })).toBeInTheDocument()
   })
 
@@ -37,7 +37,7 @@ describe('StatusRing', () => {
   // lives on the inline stage label (see StageChecklist.test.tsx), not
   // here, since a small icon turned out to be a poor "click me" signal.
   it('renders no interactive element for any status', () => {
-    render(<StatusRing status="processing" progress={threeStageProgress('embedding')} />)
+    render(<StatusRing status="processing" progress={threeStageProgress(['embedding'])} />)
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
   })
 })

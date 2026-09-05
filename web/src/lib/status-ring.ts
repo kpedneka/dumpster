@@ -8,7 +8,12 @@ export interface Stage {
 
 export interface DocumentProgress {
   stages: Stage[]
-  current_stage?: string
+  /** Every stage genuinely active right now, in canonical stage order.
+   * More than one can be present at once: entity extraction can start
+   * before a document's own indexing job finishes, so e.g. "embedding"
+   * and "entities" can both be active for the same document
+   * simultaneously -- reported honestly rather than collapsed to one. */
+  active_stages?: string[]
 }
 
 export type StageState = 'done' | 'active' | 'upcoming'
@@ -52,9 +57,11 @@ export function computeStatusRing(status: StatusRingStatus, progress?: DocumentP
     return { fraction: status === 'pending' ? 0 : 0.5, label }
   }
 
-  const activeIndex = progress.current_stage
-    ? progress.stages.findIndex((s) => s.key === progress.current_stage)
-    : -1
+  // The ring only needs a coarse position, so the earliest active stage
+  // (the bottleneck) anchors it -- same reasoning as stageProgressView's
+  // inline text, just consumed as an index here instead of a label.
+  const activeKeys = progress.active_stages ?? []
+  const activeIndex = progress.stages.findIndex((s) => activeKeys.includes(s.key))
 
   // +0.5 so a stage in progress reads as "partway through this step", not
   // "just finished the previous one" -- there's no finer-grained signal
@@ -64,23 +71,29 @@ export function computeStatusRing(status: StatusRingStatus, progress?: DocumentP
 }
 
 function buildStageViews(progress: DocumentProgress): StageView[] {
-  const activeIndex = progress.current_stage
-    ? progress.stages.findIndex((s) => s.key === progress.current_stage)
-    : -1
+  const activeKeys = new Set(progress.active_stages ?? [])
+  if (activeKeys.size === 0) {
+    return progress.stages.map((s) => ({ ...s, state: 'upcoming' }))
+  }
+  const activeIndices = progress.stages.map((s, i) => (activeKeys.has(s.key) ? i : -1)).filter((i) => i >= 0)
+  const earliestActive = Math.min(...activeIndices)
   return progress.stages.map((s, i) => ({
     ...s,
-    state: activeIndex === -1 ? 'upcoming' : i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'upcoming',
+    state: activeKeys.has(s.key) ? 'active' : i < earliestActive ? 'done' : 'upcoming',
   }))
 }
 
 export interface StageProgressView {
   /** Short text a document row shows inline (e.g. under the filename) so
-   * the current step is visible without any click. */
+   * the current step is visible without any click -- the label of the
+   * earliest active stage (the bottleneck), even when more than one
+   * stage is genuinely active at once. */
   text: string
-  /** The full checklist for the detail popover. Empty when there's
-   * nothing more to show than text itself (no progress signal available),
-   * in which case the caller should render text as plain, non-interactive
-   * text rather than a clickable trigger. */
+  /** The full checklist for the detail popover, honestly marking every
+   * currently active stage (not just the bottleneck) as such. Empty when
+   * there's nothing more to show than text itself (no progress signal
+   * available), in which case the caller should render text as plain,
+   * non-interactive text rather than a clickable trigger. */
   stages: StageView[]
 }
 
@@ -113,10 +126,10 @@ export function stageProgressView(status: StatusRingStatus, progress?: DocumentP
 // extraction/canonicalization keep running as a background pipeline
 // afterward. The backend now always attaches `progress` for an indexed
 // document (see dochandler.go's enrichPage), landing permanently on
-// STAGE_KEY_COMPLETE once that background pipeline is done too -- so an
-// indexed document only counts as settled once its current stage is that
-// terminal one (or progress is missing entirely, e.g. a deployment with
-// no JobStatusReader configured at all).
+// [STAGE_KEY_COMPLETE] once that background pipeline is done too -- so an
+// indexed document only counts as settled once its active stages are
+// exactly that terminal one (or progress is missing entirely, e.g. a
+// deployment with no JobStatusReader configured at all).
 export function hasInFlightWork(status: StatusRingStatus, progress?: DocumentProgress | null): boolean {
   if (status === 'failed') {
     return false
@@ -124,5 +137,6 @@ export function hasInFlightWork(status: StatusRingStatus, progress?: DocumentPro
   if (status !== 'indexed') {
     return true
   }
-  return progress != null && progress.current_stage !== STAGE_KEY_COMPLETE
+  const activeKeys = progress?.active_stages ?? []
+  return activeKeys.length > 0 && !activeKeys.includes(STAGE_KEY_COMPLETE)
 }

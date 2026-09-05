@@ -2,39 +2,44 @@ import { describe, it, expect } from 'vitest'
 import { computeStatusRing, hasInFlightWork, stageProgressView, STAGE_KEY_COMPLETE, type DocumentProgress } from './status-ring'
 
 // Mirrors queue.StagesForDocument(true) in internal/queue/stage.go.
-const pdfProgress = (currentStage?: string): DocumentProgress => ({
+const pdfProgress = (activeStages: string[] = []): DocumentProgress => ({
   stages: [
     { key: 'analyzing', label: 'Analyzing document' },
     { key: 'embedding', label: 'Preparing for search' },
     { key: 'entities', label: 'Extracting entities' },
     { key: 'complete', label: 'Fully indexed', message: 'Indexed, searchable, and included in communities and themes.' },
   ],
-  current_stage: currentStage,
+  active_stages: activeStages,
 })
 
 // Mirrors queue.StagesForDocument(false).
-const textProgress = (currentStage?: string): DocumentProgress => ({
+const textProgress = (activeStages: string[] = []): DocumentProgress => ({
   stages: [
     { key: 'embedding', label: 'Preparing for search' },
     { key: 'entities', label: 'Extracting entities' },
     { key: 'complete', label: 'Fully indexed', message: 'Indexed, searchable, and included in communities and themes.' },
   ],
-  current_stage: currentStage,
+  active_stages: activeStages,
 })
 
 describe('computeStatusRing', () => {
   // The ring only ever reflects doc.status -- see stageProgressView for
   // the separate, longer-lived entity-extraction signal.
   it('is empty for a queued (pending) document', () => {
-    const result = computeStatusRing('pending', pdfProgress(undefined))
+    const result = computeStatusRing('pending', pdfProgress())
     expect(result.fraction).toBe(0)
     expect(result.label).toBe('Pending')
   })
 
   it('fills partway through based on which stage is current while processing', () => {
-    const result = computeStatusRing('processing', pdfProgress('embedding'))
+    const result = computeStatusRing('processing', pdfProgress(['embedding']))
     expect(result.fraction).toBeCloseTo(1.5 / 4, 5)
     expect(result.label).toBe('Processing…')
+  })
+
+  it('anchors on the earliest active stage when more than one is active at once', () => {
+    const result = computeStatusRing('processing', pdfProgress(['embedding', 'entities']))
+    expect(result.fraction).toBeCloseTo(1.5 / 4, 5)
   })
 
   it('falls back to a half-filled ring when no progress signal is available while processing', () => {
@@ -44,13 +49,13 @@ describe('computeStatusRing', () => {
   })
 
   it('is fully filled for an indexed document regardless of progress', () => {
-    const result = computeStatusRing('indexed', pdfProgress('entities'))
+    const result = computeStatusRing('indexed', pdfProgress(['entities']))
     expect(result.fraction).toBe(1)
     expect(result.label).toBe('Indexed')
   })
 
   it('is fully filled for a failed document', () => {
-    const result = computeStatusRing('failed', pdfProgress('embedding'))
+    const result = computeStatusRing('failed', pdfProgress(['embedding']))
     expect(result.fraction).toBe(1)
     expect(result.label).toBe('Failed')
   })
@@ -58,13 +63,13 @@ describe('computeStatusRing', () => {
 
 describe('stageProgressView', () => {
   it('returns the active stage label as text, plus the full checklist, when a stage is in progress', () => {
-    const view = stageProgressView('processing', pdfProgress('embedding'))
+    const view = stageProgressView('processing', pdfProgress(['embedding']))
     expect(view?.text).toBe('Preparing for search')
     expect(view?.stages.map((s) => s.state)).toEqual(['done', 'active', 'upcoming', 'upcoming'])
   })
 
   it('falls back to the coarse status label when no stage is active yet, but still returns the checklist', () => {
-    const view = stageProgressView('pending', pdfProgress(undefined))
+    const view = stageProgressView('pending', pdfProgress())
     expect(view?.text).toBe('Pending')
     expect(view?.stages).toHaveLength(4)
   })
@@ -76,12 +81,12 @@ describe('stageProgressView', () => {
   })
 
   it('returns null for a failed (dead-lettered) document', () => {
-    expect(stageProgressView('failed', pdfProgress('embedding'))).toBeNull()
+    expect(stageProgressView('failed', pdfProgress(['embedding']))).toBeNull()
   })
 
   it('returns null for an indexed document with no progress signal at all (e.g. no JobStatusReader configured)', () => {
     expect(stageProgressView('indexed', undefined)).toBeNull()
-    expect(stageProgressView('indexed', { stages: [], current_stage: undefined })).toBeNull()
+    expect(stageProgressView('indexed', { stages: [], active_stages: [] })).toBeNull()
   })
 
   // The whole reason stageProgressView doesn't short-circuit on
@@ -92,24 +97,38 @@ describe('stageProgressView', () => {
   // dochandler.go's enrichPage). Losing the checklist the moment a
   // document becomes searchable would hide real in-flight work.
   it('still surfaces the checklist for an indexed document whose entity-extraction pipeline is still active', () => {
-    const view = stageProgressView('indexed', pdfProgress('entities'))
+    const view = stageProgressView('indexed', pdfProgress(['entities']))
     expect(view?.text).toBe('Extracting entities')
     expect(view?.stages.map((s) => s.state)).toEqual(['done', 'done', 'active', 'upcoming'])
   })
 
   it('works the same for a plain-text document (three stages, no analyzing step)', () => {
-    const view = stageProgressView('indexed', textProgress('entities'))
+    const view = stageProgressView('indexed', textProgress(['entities']))
     expect(view?.text).toBe('Extracting entities')
     expect(view?.stages.map((s) => s.state)).toEqual(['done', 'active', 'upcoming'])
   })
 
+  // The regression test for the exact bug introduced by letting entity
+  // extraction start before a document's own indexing job finishes: both
+  // can be genuinely active at once.
+  // Collapsing that down to a single stage would either hide real
+  // concurrent work or, worse, show "Extracting entities" while the
+  // document isn't searchable yet -- a false cue that querying it would
+  // work. Both stages must show as active, with the earlier one
+  // (embedding, the actual bottleneck) driving the inline text.
+  it('marks every currently active stage as active, not just the bottleneck, when more than one job is running', () => {
+    const view = stageProgressView('processing', pdfProgress(['embedding', 'entities']))
+    expect(view?.text).toBe('Preparing for search')
+    expect(view?.stages.map((s) => s.state)).toEqual(['done', 'active', 'active', 'upcoming'])
+  })
+
   // The terminal state this whole feature exists for: once the background
-  // pipeline is truly done, the backend lands current_stage on
-  // STAGE_KEY_COMPLETE forever, rather than progress disappearing --
+  // pipeline is truly done, the backend lands active_stages on
+  // [STAGE_KEY_COMPLETE] forever, rather than progress disappearing --
   // stageProgressView surfaces that as its own polished label/checklist
   // entry instead of falling back to file size.
   it('shows the fully-indexed terminal stage once the whole pipeline (including entities) is done', () => {
-    const view = stageProgressView('indexed', pdfProgress(STAGE_KEY_COMPLETE))
+    const view = stageProgressView('indexed', pdfProgress([STAGE_KEY_COMPLETE]))
     expect(view?.text).toBe('Fully indexed')
     expect(view?.stages.map((s) => s.state)).toEqual(['done', 'done', 'done', 'active'])
     expect(view?.stages.at(-1)?.key).toBe(STAGE_KEY_COMPLETE)
@@ -123,7 +142,7 @@ describe('hasInFlightWork', () => {
   })
 
   it('is false for a failed (dead-lettered) document', () => {
-    expect(hasInFlightWork('failed', pdfProgress('embedding'))).toBe(false)
+    expect(hasInFlightWork('failed', pdfProgress(['embedding']))).toBe(false)
   })
 
   // This is the exact bug this function fixes: doc.status never changes
@@ -133,11 +152,15 @@ describe('hasInFlightWork', () => {
   // before that pipeline is actually done, permanently freezing the UI at
   // whatever it last happened to fetch.
   it('is true for an indexed document that still has an active background job', () => {
-    expect(hasInFlightWork('indexed', pdfProgress('entities'))).toBe(true)
+    expect(hasInFlightWork('indexed', pdfProgress(['entities']))).toBe(true)
+  })
+
+  it('is true for an indexed document with multiple concurrently active jobs', () => {
+    expect(hasInFlightWork('indexed', pdfProgress(['embedding', 'entities']))).toBe(true)
   })
 
   it('is false once an indexed document lands on the terminal complete stage', () => {
-    expect(hasInFlightWork('indexed', pdfProgress(STAGE_KEY_COMPLETE))).toBe(false)
+    expect(hasInFlightWork('indexed', pdfProgress([STAGE_KEY_COMPLETE]))).toBe(false)
   })
 
   it('is false for an indexed document with no progress signal at all', () => {

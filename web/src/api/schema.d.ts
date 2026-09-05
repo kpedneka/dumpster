@@ -1280,8 +1280,8 @@ export interface components {
                     label: string;
                     message?: string;
                 }[];
-                /** @description The key of the stage currently in progress, matching one of stages[].key. Empty when the document is queued but no worker has picked it up yet. Permanently "complete" once the whole pipeline, including background entity extraction, has finished. */
-                current_stage?: string;
+                /** @description Every stages[].key currently in progress, in canonical stage order. More than one can be present at once: entity extraction can start before a document's own indexing job finishes, so e.g. "embedding" and "entities" can both be genuinely active for the same document simultaneously -- this is reported honestly rather than collapsed to a single stage. Empty when the document is queued but no worker has picked it up yet. Permanently ["complete"] once the whole pipeline, including background entity extraction, has finished. */
+                active_stages?: string[];
             } | null;
         };
         Citation: {

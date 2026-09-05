@@ -354,7 +354,7 @@ describe('KBDetailPage', () => {
               { key: 'entities', label: 'Extracting entities' },
               { key: 'complete', label: 'Fully indexed', message: 'Indexed, searchable, and included in communities and themes.' },
             ],
-            current_stage: 'complete',
+            active_stages: ['complete'],
           },
         },
       ])
