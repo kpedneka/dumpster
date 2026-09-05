@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/document"
@@ -18,6 +20,13 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/stats"
 )
+
+// PhaseSetter is the narrow capability RegionClassificationHandler needs
+// from the queue to record which sub-stage a job is in -- see
+// WithPhaseTracking. queue.Consumer satisfies this.
+type PhaseSetter interface {
+	SetPhase(ctx context.Context, jobID uuid.UUID, phase string) error
+}
 
 // LayoutExtractor classifies PDF regions via the Python layered classifier
 // (layers 1+2: pdfplumber + unstructured.io). Defined here so the
@@ -63,6 +72,11 @@ type RegionClassificationHandler struct {
 	// cross-tenant usage counters (see internal/stats). Optional, wired via
 	// WithStats so existing call sites keep working unmodified.
 	stats stats.Repository
+	// phases, when non-nil, records the analyzing->embedding transition
+	// partway through process() -- see WithPhaseTracking. Optional for
+	// the same reason as stats: existing call sites (and tests) that don't
+	// care about phase display keep working unmodified.
+	phases PhaseSetter
 }
 
 // WithStats wires repo into h so that every document this handler
@@ -70,6 +84,16 @@ type RegionClassificationHandler struct {
 // counters.
 func (h *RegionClassificationHandler) WithStats(repo stats.Repository) *RegionClassificationHandler {
 	h.stats = repo
+	return h
+}
+
+// WithPhaseTracking wires ps into h so process() records the transition
+// from region analysis to embedding -- the two sub-stages this job type
+// runs back-to-back with no other jobs-table update in between, which is
+// otherwise invisible to anything reading job status for display (see
+// queue.StageFor and queue.PhaseEmbedding).
+func (h *RegionClassificationHandler) WithPhaseTracking(ps PhaseSetter) *RegionClassificationHandler {
+	h.phases = ps
 	return h
 }
 
@@ -117,7 +141,7 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 	}
 
 	processStart := time.Now()
-	err = h.process(ctx, doc)
+	err = h.process(ctx, job.ID, doc)
 	log.Printf("regionhandler: doc %s: process (regions+embed+persist) took %s (err=%v)", job.DocumentID, time.Since(processStart), err)
 	if err != nil {
 		return err
@@ -145,7 +169,7 @@ func (h *RegionClassificationHandler) Handle(ctx context.Context, job *queue.Job
 	return nil
 }
 
-func (h *RegionClassificationHandler) process(ctx context.Context, doc *document.Document) error {
+func (h *RegionClassificationHandler) process(ctx context.Context, jobID uuid.UUID, doc *document.Document) error {
 	readStart := time.Now()
 	rawBytes, err := h.readObject(ctx, doc.S3Key)
 	log.Printf("regionhandler: doc %s: readObject took %s (bytes=%d, err=%v)", doc.ID, time.Since(readStart), len(rawBytes), err)
@@ -289,6 +313,15 @@ func (h *RegionClassificationHandler) process(ctx context.Context, doc *document
 
 	if len(allChunks) == 0 {
 		return nil
+	}
+
+	if h.phases != nil {
+		if err := h.phases.SetPhase(ctx, jobID, queue.PhaseEmbedding); err != nil {
+			// Best-effort: this only affects what the upload-progress UI
+			// displays, not correctness of the pipeline itself -- not
+			// worth failing an otherwise-successful job over.
+			log.Printf("regionhandler: doc %s: failed to set phase to embedding: %v", doc.ID, err)
+		}
 	}
 
 	texts := make([]string, len(allChunks))

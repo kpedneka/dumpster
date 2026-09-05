@@ -2,6 +2,7 @@ package worker_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -43,6 +44,18 @@ func (fakeEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error
 }
 
 func (fakeEmbedder) Dims() int { return 2 }
+
+// fakePhaseSetter is a minimal worker.PhaseSetter for tests, recording
+// every SetPhase call in order.
+type fakePhaseSetter struct {
+	calls []string
+	err   error
+}
+
+func (f *fakePhaseSetter) SetPhase(_ context.Context, _ uuid.UUID, phase string) error {
+	f.calls = append(f.calls, phase)
+	return f.err
+}
 
 func seedRegionJob(
 	t *testing.T,
@@ -363,6 +376,76 @@ func TestRegionHandler_Handle_NilStats_NoPanic(t *testing.T) {
 	)
 	if err := h.Handle(ctx, job); err != nil {
 		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestRegionHandler_Handle_SetsPhaseToEmbedding(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+	pub := qmem.New()
+	phases := &fakePhaseSetter{}
+
+	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
+		{RegionType: "native_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 0.3}, Text: "Some text.", NeedsVLM: ""},
+	}}
+	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, pub,
+	).WithPhaseTracking(phases)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	if len(phases.calls) != 1 || phases.calls[0] != queue.PhaseEmbedding {
+		t.Errorf("SetPhase calls = %v, want exactly one call with %q", phases.calls, queue.PhaseEmbedding)
+	}
+}
+
+func TestRegionHandler_Handle_NilPhaseTracking_NoPanic(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+	pub := qmem.New()
+
+	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
+		{RegionType: "native_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 0.3}, Text: "Some text.", NeedsVLM: ""},
+	}}
+	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	// No WithPhaseTracking call: phases stays nil.
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, pub,
+	)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+}
+
+func TestRegionHandler_Handle_SetPhaseError_DoesNotFailJob(t *testing.T) {
+	docs := docmem.New()
+	objects := mock.New()
+	chunks := chunkmem.New()
+	manifestRepo := manifestmem.New()
+	pub := qmem.New()
+	phases := &fakePhaseSetter{err: fmt.Errorf("boom")}
+
+	fakeExtractor := &fakeLayoutExtractor{regions: []*layout.RawRegion{
+		{RegionType: "native_text", PageNumber: 1, BoundingBox: [4]float64{0, 0, 1, 0.3}, Text: "Some text.", NeedsVLM: ""},
+	}}
+	job, userID := seedRegionJob(t, docs, objects, "%PDF-fake", "application/pdf")
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	h := worker.NewRegionClassificationHandler(
+		docs, objects, chunks, manifestRepo, fakeExtractor, fakeEmbedder{}, pub,
+	).WithPhaseTracking(phases)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v (a SetPhase failure should not fail the job)", err)
 	}
 }
 

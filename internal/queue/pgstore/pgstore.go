@@ -179,6 +179,72 @@ func (s *Store) Heartbeat(ctx context.Context, jobID uuid.UUID) error {
 	return nil
 }
 
+// SetPhase records phase as jobID's current sub-stage -- see
+// queue.Consumer.SetPhase's doc for when a handler needs this at all.
+func (s *Store) SetPhase(ctx context.Context, jobID uuid.UUID, phase string) error {
+	if _, err := s.pool.Exec(ctx, `UPDATE jobs SET phase = $1, updated_at = NOW() WHERE id = $2`, phase, jobID); err != nil {
+		return fmt.Errorf("queue: set phase %s: %w", jobID, err)
+	}
+	return nil
+}
+
+// CurrentJobsForDocuments returns the most recently created job (if any)
+// per document ID in documentIDs, keyed by document_id. A document can
+// only ever have one truly active job in practice (each stage's
+// PublishX call happens before the current stage's own job row is
+// deleted via Ack, so at most a brief overlap is possible) -- ORDER BY
+// created_at DESC, DISTINCT ON picks the newer of the two in that rare
+// case, which is also the more accurate answer since the newer job
+// existing at all means the previous stage is effectively done.
+func (s *Store) CurrentJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID]queue.JobStatus, error) {
+	out := make(map[uuid.UUID]queue.JobStatus, len(documentIDs))
+	if len(documentIDs) == 0 {
+		return out, nil
+	}
+	// Passed as []string, not []uuid.UUID: this store's pool runs in
+	// pgx's simple-protocol mode (see internal/db.Connect, needed for
+	// PgBouncer transaction-mode compatibility), which encodes parameters
+	// client-side with no server round trip to learn $1's real OID. pgx
+	// has no default encode plan for a bare []uuid.UUID in that mode
+	// ("cannot find encode plan" against OID 0); []string encodes fine,
+	// and the explicit ::uuid[] cast in the query does the rest.
+	idStrings := make([]string, len(documentIDs))
+	for i, id := range documentIDs {
+		idStrings[i] = id.String()
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT ON (document_id) document_id, job_type, phase, status, last_error
+		 FROM jobs
+		 WHERE document_id = ANY($1::uuid[]) AND user_id = $2
+		 ORDER BY document_id, created_at DESC`,
+		idStrings, userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("queue: current jobs for documents: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var docID uuid.UUID
+		var jobType, status string
+		var phase, lastError *string
+		if err := rows.Scan(&docID, &jobType, &phase, &status, &lastError); err != nil {
+			return nil, fmt.Errorf("queue: current jobs for documents: scan: %w", err)
+		}
+		js := queue.JobStatus{Type: queue.JobType(jobType), Status: status}
+		if phase != nil {
+			js.Phase = *phase
+		}
+		if lastError != nil {
+			js.LastError = *lastError
+		}
+		out[docID] = js
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue: current jobs for documents: %w", err)
+	}
+	return out, nil
+}
+
 // Nack records a processing failure. On the final attempt the job is
 // dead-lettered (status = 'failed') and the function returns (true, nil).
 // Otherwise the job is rescheduled with exponential backoff and returns
@@ -310,3 +376,4 @@ func (s *Store) ReclaimStale(ctx context.Context, staleAfter time.Duration) (rec
 }
 
 var _ queue.Queue = (*Store)(nil)
+var _ queue.JobStatusReader = (*Store)(nil)
