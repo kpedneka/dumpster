@@ -1,7 +1,7 @@
 //go:build integration
 
 // Integration tests for queue/pgstore's SetPhase and
-// CurrentJobsForDocuments -- the two new read/write paths added for the
+// ActiveJobsForDocuments -- the read/write paths added for the
 // upload-progress feature. jobs has no RLS policy (unlike most other
 // tables in this app), so these tests filter by user_id manually, same
 // as the production code they're testing.
@@ -14,6 +14,7 @@ package pgstore_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -52,7 +53,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 // resolves parameter types via a server round trip and so does not
 // exercise the client-side-only encoding path simple protocol requires.
 // A bare []uuid.UUID query parameter silently fails only under this mode
-// ("cannot find encode plan" against OID 0); CurrentJobsForDocuments must
+// ("cannot find encode plan" against OID 0); ActiveJobsForDocuments must
 // be tested against it directly, not just the default pool.
 func testSimpleProtocolPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -106,7 +107,7 @@ func newDocument(t *testing.T, pool *pgxpool.Pool) (userID, docID uuid.UUID) {
 	return userID, doc.ID
 }
 
-func TestSetPhase_PersistsAndIsReadableViaCurrentJobsForDocuments(t *testing.T) {
+func TestSetPhase_PersistsAndIsReadableViaActiveJobsForDocuments(t *testing.T) {
 	pool := testPool(t)
 	store := pgstore.New(pool)
 	ctx := context.Background()
@@ -116,47 +117,51 @@ func TestSetPhase_PersistsAndIsReadableViaCurrentJobsForDocuments(t *testing.T) 
 		t.Fatalf("PublishRegionClassification: %v", err)
 	}
 
-	statuses, err := store.CurrentJobsForDocuments(ctx, userID, []uuid.UUID{docID})
+	statuses, err := store.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{docID})
 	if err != nil {
-		t.Fatalf("CurrentJobsForDocuments: %v", err)
+		t.Fatalf("ActiveJobsForDocuments: %v", err)
 	}
-	got, ok := statuses[docID]
-	if !ok {
-		t.Fatal("expected a job status for the document")
+	active := statuses[docID]
+	if len(active) != 1 {
+		t.Fatalf("expected exactly 1 active job for the document, got %d", len(active))
 	}
-	if got.Type != queue.JobTypeRegionClassification || got.Phase != "" {
-		t.Errorf("before SetPhase: got %+v, want Type=region_classification, Phase=\"\"", got)
+	if active[0].Type != queue.JobTypeRegionClassification || active[0].Phase != "" {
+		t.Errorf("before SetPhase: got %+v, want Type=region_classification, Phase=\"\"", active[0])
 	}
 
-	job, err := store.Dequeue(ctx)
-	if err != nil {
-		t.Fatalf("Dequeue: %v", err)
+	// Look up this test's own job by document_id rather than
+	// store.Dequeue(ctx): Dequeue claims the globally-oldest pending job
+	// across the whole table with no document scoping, so it can pick up
+	// an unrelated leftover pending row from another test sharing this
+	// same real database instead of the one this test just created.
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM jobs WHERE document_id = $1`, docID).Scan(&jobID); err != nil {
+		t.Fatalf("look up job for document: %v", err)
 	}
-	if err := store.SetPhase(ctx, job.ID, queue.PhaseEmbedding); err != nil {
+	if err := store.SetPhase(ctx, jobID, queue.PhaseEmbedding); err != nil {
 		t.Fatalf("SetPhase: %v", err)
 	}
 
-	statuses, err = store.CurrentJobsForDocuments(ctx, userID, []uuid.UUID{docID})
+	statuses, err = store.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{docID})
 	if err != nil {
-		t.Fatalf("CurrentJobsForDocuments (after SetPhase): %v", err)
+		t.Fatalf("ActiveJobsForDocuments (after SetPhase): %v", err)
 	}
-	got = statuses[docID]
-	if got.Phase != queue.PhaseEmbedding {
-		t.Errorf("after SetPhase: Phase = %q, want %q", got.Phase, queue.PhaseEmbedding)
+	active = statuses[docID]
+	if len(active) != 1 || active[0].Phase != queue.PhaseEmbedding {
+		t.Errorf("after SetPhase: got %+v, want a single job with Phase=%q", active, queue.PhaseEmbedding)
 	}
 }
 
-// TestCurrentJobsForDocuments_WorksUnderSimpleProtocol guards against a
-// regression that shipped once: passing []uuid.UUID as a query parameter
-// works fine under pgx's default extended protocol (used by testPool
-// above) but fails client-side under the QueryExecModeSimpleProtocol
-// cmd/api actually runs with in production ("unable to encode
-// []uuid.UUID ... cannot find encode plan"), because that mode has no
-// server round trip to resolve the parameter's array element type. See
-// testSimpleProtocolPool's doc comment and CurrentJobsForDocuments's own
-// comment on why document IDs are marshaled to []string before the query.
-func TestCurrentJobsForDocuments_WorksUnderSimpleProtocol(t *testing.T) {
-	pool := testSimpleProtocolPool(t)
+// TestActiveJobsForDocuments_ConcurrentJobs_ReturnsBoth is the regression
+// test for the exact scenario introduced by letting entity extraction
+// start before a document's own indexing job finishes: entity
+// extraction is now published earlier, so both can be genuinely active
+// for the same document at
+// once. The query must surface both, not just whichever was created most
+// recently (this method's predecessor, CurrentJobsForDocuments, picked
+// only the latest row per document -- exactly the bug this replaces).
+func TestActiveJobsForDocuments_ConcurrentJobs_ReturnsBoth(t *testing.T) {
+	pool := testPool(t)
 	store := pgstore.New(pool)
 	ctx := context.Background()
 	userID, docID := newDocument(t, pool)
@@ -164,36 +169,93 @@ func TestCurrentJobsForDocuments_WorksUnderSimpleProtocol(t *testing.T) {
 	if err := store.PublishRegionClassification(ctx, queue.RegionClassificationRequested{DocumentID: docID, UserID: userID}); err != nil {
 		t.Fatalf("PublishRegionClassification: %v", err)
 	}
+	if err := store.PublishEntityExtraction(ctx, queue.EntityExtractionRequested{DocumentID: docID, UserID: userID}); err != nil {
+		t.Fatalf("PublishEntityExtraction: %v", err)
+	}
 
-	statuses, err := store.CurrentJobsForDocuments(ctx, userID, []uuid.UUID{docID})
+	statuses, err := store.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{docID})
 	if err != nil {
-		t.Fatalf("CurrentJobsForDocuments under simple protocol: %v", err)
+		t.Fatalf("ActiveJobsForDocuments: %v", err)
 	}
-	got, ok := statuses[docID]
-	if !ok {
-		t.Fatal("expected a job status for the document")
+	active := statuses[docID]
+	if len(active) != 2 {
+		t.Fatalf("expected both concurrently active jobs, got %d: %+v", len(active), active)
 	}
-	if got.Type != queue.JobTypeRegionClassification {
-		t.Errorf("Type = %q, want %q", got.Type, queue.JobTypeRegionClassification)
+	var types []queue.JobType
+	for _, s := range active {
+		types = append(types, s.Type)
+	}
+	if types[0] != queue.JobTypeRegionClassification || types[1] != queue.JobTypeEntityExtraction {
+		t.Errorf("job types = %v, want [region_classification entity_extraction] (created_at order)", types)
+	}
+
+	// Clean up both jobs directly (bypassing the queue) so they don't
+	// linger as globally-pending rows a later test's store.Dequeue(ctx)
+	// call could pick up instead of its own -- Dequeue has no document
+	// scoping.
+	if _, err := pool.Exec(ctx, `DELETE FROM jobs WHERE document_id = $1`, docID); err != nil {
+		t.Fatalf("cleanup: %v", err)
 	}
 }
 
-func TestCurrentJobsForDocuments_NoActiveJob_OmittedFromResult(t *testing.T) {
+// TestActiveJobsForDocuments_DeadLetteredJob_Excluded guards against the
+// other failure mode a "most recent row wins" query had: a dead-lettered
+// job's row is never deleted (only marked status = "failed"), so it must
+// be excluded here rather than shown as permanently active.
+func TestActiveJobsForDocuments_DeadLetteredJob_Excluded(t *testing.T) {
 	pool := testPool(t)
 	store := pgstore.New(pool)
 	ctx := context.Background()
 	userID, docID := newDocument(t, pool)
 
-	statuses, err := store.CurrentJobsForDocuments(ctx, userID, []uuid.UUID{docID})
-	if err != nil {
-		t.Fatalf("CurrentJobsForDocuments: %v", err)
+	if err := store.PublishRegionClassification(ctx, queue.RegionClassificationRequested{DocumentID: docID, UserID: userID}); err != nil {
+		t.Fatalf("PublishRegionClassification: %v", err)
 	}
-	if _, ok := statuses[docID]; ok {
-		t.Error("expected no entry for a document with no jobs row at all")
+	// Look up this test's own job by document_id rather than
+	// store.Dequeue(ctx): Dequeue claims the globally-oldest pending job
+	// across the whole table with no document scoping, so it can pick up
+	// an unrelated leftover pending row from another test sharing this
+	// same real database instead of the one this test just created.
+	var jobID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM jobs WHERE document_id = $1`, docID).Scan(&jobID); err != nil {
+		t.Fatalf("look up job for document: %v", err)
+	}
+	// region_classification uses queue.SingleShotMaxAttempts (1), so a
+	// single Nack dead-letters it immediately -- see
+	// PublishRegionClassification's doc.
+	deadLettered, err := store.Nack(ctx, jobID, errors.New("simulated failure"))
+	if err != nil {
+		t.Fatalf("Nack: %v", err)
+	}
+	if !deadLettered {
+		t.Fatal("expected the job to be dead-lettered on the first Nack (SingleShotMaxAttempts=1)")
+	}
+
+	statuses, err := store.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{docID})
+	if err != nil {
+		t.Fatalf("ActiveJobsForDocuments: %v", err)
+	}
+	if len(statuses[docID]) != 0 {
+		t.Errorf("expected no active jobs for a dead-lettered job, got %+v", statuses[docID])
 	}
 }
 
-func TestCurrentJobsForDocuments_TenantIsolation(t *testing.T) {
+func TestActiveJobsForDocuments_NoActiveJob_OmittedFromResult(t *testing.T) {
+	pool := testPool(t)
+	store := pgstore.New(pool)
+	ctx := context.Background()
+	userID, docID := newDocument(t, pool)
+
+	statuses, err := store.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{docID})
+	if err != nil {
+		t.Fatalf("ActiveJobsForDocuments: %v", err)
+	}
+	if len(statuses[docID]) != 0 {
+		t.Error("expected no entries for a document with no jobs row at all")
+	}
+}
+
+func TestActiveJobsForDocuments_TenantIsolation(t *testing.T) {
 	pool := testPool(t)
 	store := pgstore.New(pool)
 	ctx := context.Background()
@@ -210,14 +272,43 @@ func TestCurrentJobsForDocuments_TenantIsolation(t *testing.T) {
 	// Tenant A queries for tenant B's document ID under tenant A's own
 	// user_id -- must not see it, even though the document ID is known
 	// and a job for it genuinely exists.
-	statuses, err := store.CurrentJobsForDocuments(ctx, userA, []uuid.UUID{docA, docB})
+	statuses, err := store.ActiveJobsForDocuments(ctx, userA, []uuid.UUID{docA, docB})
 	if err != nil {
-		t.Fatalf("CurrentJobsForDocuments: %v", err)
+		t.Fatalf("ActiveJobsForDocuments: %v", err)
 	}
-	if _, ok := statuses[docA]; !ok {
+	if len(statuses[docA]) == 0 {
 		t.Error("expected tenant A's own document to be present")
 	}
-	if _, ok := statuses[docB]; ok {
+	if len(statuses[docB]) != 0 {
 		t.Error("tenant A must not see tenant B's job status")
+	}
+}
+
+// TestActiveJobsForDocuments_WorksUnderSimpleProtocol guards against a
+// regression that shipped once: passing []uuid.UUID as a query parameter
+// works fine under pgx's default extended protocol (used by testPool
+// above) but fails client-side under the QueryExecModeSimpleProtocol
+// cmd/api actually runs with in production ("unable to encode
+// []uuid.UUID ... cannot find encode plan"), because that mode has no
+// server round trip to resolve the parameter's array element type. See
+// testSimpleProtocolPool's doc comment and ActiveJobsForDocuments's own
+// comment on why document IDs are marshaled to []string before the query.
+func TestActiveJobsForDocuments_WorksUnderSimpleProtocol(t *testing.T) {
+	pool := testSimpleProtocolPool(t)
+	store := pgstore.New(pool)
+	ctx := context.Background()
+	userID, docID := newDocument(t, pool)
+
+	if err := store.PublishRegionClassification(ctx, queue.RegionClassificationRequested{DocumentID: docID, UserID: userID}); err != nil {
+		t.Fatalf("PublishRegionClassification: %v", err)
+	}
+
+	statuses, err := store.ActiveJobsForDocuments(ctx, userID, []uuid.UUID{docID})
+	if err != nil {
+		t.Fatalf("ActiveJobsForDocuments under simple protocol: %v", err)
+	}
+	active := statuses[docID]
+	if len(active) != 1 || active[0].Type != queue.JobTypeRegionClassification {
+		t.Errorf("got %+v, want a single region_classification job", active)
 	}
 }

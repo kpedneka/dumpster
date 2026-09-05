@@ -90,3 +90,37 @@ func StagesForDocument(hasRegionClassification bool) []DisplayStage {
 	}
 	return []DisplayStage{stageEmbedding, stageEntities, stageComplete}
 }
+
+// ActiveStageKeys returns the deduplicated set of stage keys genuinely
+// active right now, in canonical stage order (the same order
+// StagesForDocument returns). More than one can come back at once now
+// that entity extraction can start before a document's own indexing job
+// (region_classification/document_indexing) finishes -- see
+// worker.RegionClassificationHandler.process's doc: while
+// region_classification is still embedding (phase=embedding) and
+// entity_extraction is already processing, both are genuinely active for
+// the same document simultaneously, and collapsing that down to a single
+// "current stage" would either hide real concurrent work or (worse, if
+// the wrong one were picked) claim the document is further along than it
+// actually is.
+//
+// The first key in the result is always the *earliest* stage still in
+// progress -- the actual bottleneck, i.e. what a single-line inline
+// summary should name -- while the full slice is what a checklist needs
+// to mark every currently-active stage, not just one. Returns nil if
+// active is empty.
+func ActiveStageKeys(hasRegionClassification bool, active []JobStatus) []string {
+	stages := StagesForDocument(hasRegionClassification)
+	presentKeys := make(map[string]bool, len(active))
+	for _, job := range active {
+		presentKeys[StageFor(job.Type, job.Phase).Key] = true
+	}
+
+	var keys []string
+	for _, s := range stages {
+		if presentKeys[s.Key] {
+			keys = append(keys, s.Key)
+		}
+	}
+	return keys
+}

@@ -188,16 +188,18 @@ func (s *Store) SetPhase(ctx context.Context, jobID uuid.UUID, phase string) err
 	return nil
 }
 
-// CurrentJobsForDocuments returns the most recently created job (if any)
-// per document ID in documentIDs, keyed by document_id. A document can
-// only ever have one truly active job in practice (each stage's
-// PublishX call happens before the current stage's own job row is
-// deleted via Ack, so at most a brief overlap is possible) -- ORDER BY
-// created_at DESC, DISTINCT ON picks the newer of the two in that rare
-// case, which is also the more accurate answer since the newer job
-// existing at all means the previous stage is effectively done.
-func (s *Store) CurrentJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID]queue.JobStatus, error) {
-	out := make(map[uuid.UUID]queue.JobStatus, len(documentIDs))
+// ActiveJobsForDocuments returns every currently pending/processing job
+// per document ID in documentIDs, keyed by document_id. Filtering to
+// active statuses directly in SQL, rather than picking "the most
+// recently created row" (this method's previous approach), matters now
+// that more than one job can be genuinely active for the same document
+// at once -- entity extraction can start before a document's own
+// indexing job finishes (see worker.RegionClassificationHandler.process's
+// doc) -- and it also means a dead-lettered ("failed") job, whose row is
+// never deleted, is naturally excluded rather than needing a separate
+// check by every caller.
+func (s *Store) ActiveJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID][]queue.JobStatus, error) {
+	out := make(map[uuid.UUID][]queue.JobStatus, len(documentIDs))
 	if len(documentIDs) == 0 {
 		return out, nil
 	}
@@ -213,14 +215,14 @@ func (s *Store) CurrentJobsForDocuments(ctx context.Context, userID uuid.UUID, d
 		idStrings[i] = id.String()
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT ON (document_id) document_id, job_type, phase, status, last_error
+		`SELECT document_id, job_type, phase, status, last_error
 		 FROM jobs
-		 WHERE document_id = ANY($1::uuid[]) AND user_id = $2
-		 ORDER BY document_id, created_at DESC`,
+		 WHERE document_id = ANY($1::uuid[]) AND user_id = $2 AND status IN ('pending', 'processing')
+		 ORDER BY document_id, created_at`,
 		idStrings, userID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("queue: current jobs for documents: %w", err)
+		return nil, fmt.Errorf("queue: active jobs for documents: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -228,7 +230,7 @@ func (s *Store) CurrentJobsForDocuments(ctx context.Context, userID uuid.UUID, d
 		var jobType, status string
 		var phase, lastError *string
 		if err := rows.Scan(&docID, &jobType, &phase, &status, &lastError); err != nil {
-			return nil, fmt.Errorf("queue: current jobs for documents: scan: %w", err)
+			return nil, fmt.Errorf("queue: active jobs for documents: scan: %w", err)
 		}
 		js := queue.JobStatus{Type: queue.JobType(jobType), Status: status}
 		if phase != nil {
@@ -237,10 +239,10 @@ func (s *Store) CurrentJobsForDocuments(ctx context.Context, userID uuid.UUID, d
 		if lastError != nil {
 			js.LastError = *lastError
 		}
-		out[docID] = js
+		out[docID] = append(out[docID], js)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("queue: current jobs for documents: %w", err)
+		return nil, fmt.Errorf("queue: active jobs for documents: %w", err)
 	}
 	return out, nil
 }

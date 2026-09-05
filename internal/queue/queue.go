@@ -165,19 +165,15 @@ type Queue interface {
 	Consumer
 }
 
-// JobStatus is a document's most relevant job's current state, for
-// read-only display purposes (the upload progress UI) -- distinct from
-// Job, which Consumer.Dequeue returns for claiming/processing work and so
-// never carries Status/LastError (Dequeue only ever returns jobs that
-// were pending). A job that succeeds is deleted (see Consumer.Ack's
-// doc), so Status here is never "succeeded" -- its absence from
-// JobStatusReader's result entirely, for a document not yet fully
-// indexed or failed, is exactly what "still working, nothing wrong"
-// looks like between one stage finishing and the next one's row existing.
+// JobStatus is one active job's current state, for read-only display
+// purposes (the upload progress UI) -- distinct from Job, which
+// Consumer.Dequeue returns for claiming/processing work and so never
+// carries Status/LastError (Dequeue only ever returns jobs that were
+// pending).
 type JobStatus struct {
 	Type      JobType
 	Phase     string // empty when this job type has no explicit phase override in play
-	Status    string // "pending" or "processing" ("failed" only if dead-lettered)
+	Status    string // "pending" or "processing" -- ActiveJobsForDocuments never returns a dead-lettered ("failed") job, see its doc
 	LastError string
 }
 
@@ -185,11 +181,23 @@ type JobStatus struct {
 // separate from Consumer (the worker-side claim/ack/nack contract) since
 // nothing about display needs the ability to mutate a job.
 type JobStatusReader interface {
-	// CurrentJobsForDocuments returns the most relevant job (if any) per
-	// document ID in documentIDs, keyed by DocumentID. A document ID with
-	// no entry in the result has no active job -- either every pipeline
-	// stage already completed successfully, or (rarer) is momentarily
-	// between one stage's job being deleted and the next one's insert
-	// committing.
-	CurrentJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID]JobStatus, error)
+	// ActiveJobsForDocuments returns every currently pending/processing
+	// job for each document ID in documentIDs, keyed by DocumentID. A
+	// document ID with no entry (or an empty slice) has no active job --
+	// either every pipeline stage already completed successfully, or
+	// (rarer) is momentarily between one stage's job being deleted and
+	// the next one's insert committing. A dead-lettered ("failed") job
+	// is never included: its row is never deleted (see Consumer.Nack's
+	// doc), and treating it as active would misrepresent a permanently
+	// stuck job as still-in-progress forever.
+	//
+	// More than one job can be active for the same document at once now
+	// that entity extraction can start before a document's own indexing
+	// job (region_classification/document_indexing) finishes -- see
+	// worker.RegionClassificationHandler.process's doc. Callers that need
+	// a single "what stage is this document on" answer should pick the
+	// job representing the *least* progress (queue.EarliestActiveStage),
+	// not just the first or most-recently-created one: which job happens
+	// to exist is not the same question as which one is the bottleneck.
+	ActiveJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID][]JobStatus, error)
 }
