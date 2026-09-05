@@ -77,7 +77,7 @@ func TestExtractRegions_PostsToRegionsEndpointAndMapsResponse(t *testing.T) {
 	}
 }
 
-// TestExtractRegions_LogsPeakRSS covers the v4.6 instrumentation: peak RSS
+// TestExtractRegions_LogsPeakRSS covers peak-RSS instrumentation: peak RSS
 // reported by a completed run should be logged so future machine-sizing
 // decisions can be based on a measured distribution, not a few OOM-kill log
 // lines from jobs that crashed.

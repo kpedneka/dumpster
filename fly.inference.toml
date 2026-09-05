@@ -45,9 +45,13 @@ primary_region = "iad"
   OPENBLAS_NUM_THREADS = "2"
 
 # Always-on, never scale-to-zero: the whole point of this service is to
-# keep GLiNER, the layout classifier, and the local embedding model warm.
-# A cold start here reintroduces exactly the multi-second-to-multi-minute
-# tax this consolidation exists to eliminate.
+# keep the local embedding model warm. A cold start here reintroduces
+# exactly the multi-second-to-multi-minute tax this consolidation exists
+# to eliminate. Region classification isn't "kept warm" the same way --
+# inference_service.py runs each /regions call in its own isolated,
+# memory-capped child process rather than in this resident process, so its
+# cost shows up as a transient peak (see the memory comment below), not a
+# steady-state one.
 [[vm]]
   count  = 1
   # shared-cpu-2x, not -1x: Fly caps memory at 2GB per shared vCPU
@@ -60,10 +64,13 @@ primary_region = "iad"
   # core to actually run those requests in parallel rather than interleave
   # them on a single shared core.
   size   = "shared-cpu-2x"
-  # Combined warm footprint, measured directly from a real running
-  # container (not estimated): 2.69GB RSS with all three models loaded
-  # (GLiNER, the layout classifier's dependency stack, and the local
-  # embedding model) after processing one request of each kind. 4096mb
-  # gives ~1.3GB of headroom above that measured figure for the transient
-  # peak during active PDF parsing plus normal process overhead.
+  # 4096mb was sized while this process still loaded three models (GLiNER,
+  # the layout classifier's dependency stack, and the local embedding
+  # model -- 2.69GB RSS measured at the time). Entity extraction has since
+  # moved to AWS Batch GPU (see internal/entity/awsbatch), and this process
+  # no longer loads GLiNER at all -- the steady-state footprint today is
+  # almost certainly smaller, but hasn't been re-measured since the
+  # removal, so this value is left unchanged rather than guessed down.
+  # Re-measure real RSS (steady-state embedding-model-only, plus peak
+  # during an isolated /regions call) before shrinking this.
   memory = "4096mb"

@@ -112,9 +112,9 @@ func TestEdge_TenantIsolation(t *testing.T) {
 	}
 }
 
-// TestEdge_CooccurrenceAggregation proves the query shape described in the
-// v2.6 acceptance criterion: "entities co-occurring with X resolves as a
-// single indexed join/aggregate." The actual SQL (JOIN entity_edges JOIN
+// TestEdge_CooccurrenceAggregation proves the query shape behind the
+// aggregation-query acceptance criterion: "entities co-occurring with X
+// resolves as a single indexed join/aggregate." The actual SQL (JOIN entity_edges JOIN
 // entities GROUP BY entity text) is exercised at the pgstore/integration
 // level; here we prove the same query semantics against the in-memory
 // repository so the logic is verifiable without a live Postgres instance.

@@ -47,8 +47,8 @@ type Reembed struct {
 }
 
 // New returns a Reembed wired to the given stores and embedder. embedder
-// must be a document embedder (is_query: false) — see
-// internal/llm/inference.NewDocumentEmbedder.
+// must be a document (ingestion-time) embedder — see internal/llm/awsbatch,
+// the AWS Batch adapter cmd/reembed actually wires this to today.
 func New(sessions session.SessionStore, kbs kb.Repository, chunks chunk.Repository, embedder llm.Embedder) *Reembed {
 	return &Reembed{sessions: sessions, kbs: kbs, chunks: chunks, embedder: embedder}
 }

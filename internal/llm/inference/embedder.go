@@ -1,8 +1,9 @@
 // Package inference is the HTTP-client adapter for the consolidated ML
 // inference service's /embeddings endpoint, implementing llm.Embedder. It
-// replaces internal/llm/openai as the embedder for both ingestion-time
-// chunk text and query-time search text. See the System Architecture
-// page's Inference Service sub-page for the full design.
+// now serves query-time search text only -- ingestion-time (bulk) chunk
+// embedding moved to internal/llm/awsbatch after this service's shared-cpu
+// Fly machine proved too slow under sustained ingestion load. See the
+// System Architecture page's Hybrid Cloud sub-page for the full story.
 package inference
 
 import (
@@ -37,7 +38,9 @@ type Embedder struct {
 
 // NewDocumentEmbedder returns an Embedder for ingestion-time text (chunks,
 // passages) against the inference service at baseURL (e.g.
-// "http://inference.internal:8000").
+// "http://inference.internal:8000"). Unused in production today --
+// ingestion-time embedding now goes through internal/llm/awsbatch instead --
+// kept for its test coverage of the shared HTTP request/response shape.
 func NewDocumentEmbedder(baseURL string) *Embedder {
 	return newEmbedder(baseURL, false)
 }

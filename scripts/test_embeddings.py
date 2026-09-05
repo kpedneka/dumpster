@@ -1,6 +1,6 @@
 """Unit tests for embeddings.py.
 
-No pytest/CI harness exists for scripts/ yet (see v4.6) — run directly with:
+No pytest/CI harness exists for scripts/ yet — run directly with:
     python3 -m unittest scripts/test_embeddings.py
 sentence-transformers is not imported at module level (see load_embedder),
 so this runs without the real model installed.

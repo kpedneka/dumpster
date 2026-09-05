@@ -31,13 +31,13 @@ type Config struct {
 	// BaseURL is the inference service's base URL (e.g.
 	// "http://inference.internal:8000").
 	BaseURL string
-	// Logger receives per-run peak-RSS observations (see v4.6): the fixed
-	// ~390MB floor that drove the worker's 512MB->1024MB memory bump was
-	// found by reading OOM-kill log lines for jobs that crashed. This gives
-	// the other half of the picture — peak RSS for jobs that complete
-	// normally — so a future sizing decision can be based on a measured
-	// distribution instead of the handful of crashes that happened to get
-	// logged. Defaults to the standard logger when nil.
+	// Logger receives per-run peak-RSS observations. A prior memory-sizing
+	// incident found the worker's peak RSS floor (~390MB, behind its
+	// 512MB->1024MB memory bump) only by reading OOM-kill log lines for jobs
+	// that crashed. This gives the other half of the picture — peak RSS for
+	// jobs that complete normally — so a future sizing decision can be based
+	// on a measured distribution instead of the handful of crashes that
+	// happened to get logged. Defaults to the standard logger when nil.
 	Logger *log.Logger
 }
 

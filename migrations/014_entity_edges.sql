@@ -2,8 +2,8 @@
 -- Untyped co-occurrence edges between entity mentions found in the same
 -- chunk — the ingestion-side foundation for GraphRAG aggregation queries
 -- ("what orgs are mentioned with FEMA"). entity_a_id/entity_b_id reference
--- individual entity mention rows (v2.1's entities are per-mention, not
--- deduplicated), canonically ordered (entity_a_id < entity_b_id) so a pair
+-- individual entity mention rows (entities are per-mention, not
+-- deduplicated across documents), canonically ordered (entity_a_id < entity_b_id) so a pair
 -- found in either extraction order collapses to one row.
 CREATE TABLE entity_edges (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),

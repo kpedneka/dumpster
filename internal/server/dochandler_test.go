@@ -1333,7 +1333,7 @@ func TestDocDelete_RecordsFailureMetric(t *testing.T) {
 	}
 }
 
-// --- v4.5: manual retry for dead-lettered (failed) documents ---
+// --- Manual retry for dead-lettered (failed) documents ---
 
 func TestDocRetry(t *testing.T) {
 	deps, kbRepo, docRepo, _, pub := defaultDeps()

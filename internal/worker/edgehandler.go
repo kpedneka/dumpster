@@ -20,8 +20,9 @@ import (
 // meaningful co-occurring concepts — not a richer one. A real chunk like
 // this produced 128 entities and 8,128 edges on its own; across one
 // document, 63,760 edges, turning a single BulkCreate into a multi-minute
-// transaction that held locks blocking unrelated deletes (see the v4.6
-// lessons-learned page). Oversized chunks are skipped entirely rather than
+// transaction that held locks blocking unrelated deletes (see the
+// production ingestion lessons-learned writeup). Oversized chunks are
+// skipped entirely rather than
 // truncated: an arbitrary subset of a reference list's "entities" isn't a
 // more meaningful signal, just a smaller amount of noise.
 const maxEntitiesForEdges = 25
