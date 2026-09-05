@@ -439,6 +439,29 @@ func TestSearch_MissingQuery(t *testing.T) {
 	}
 }
 
+func TestSearch_QueryTooLong(t *testing.T) {
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	router := NewRouter(deps)
+
+	tooLong := strings.Repeat("a", maxQueryBytes+1)
+	reqBody, err := json.Marshal(map[string]string{"query": tooLong})
+	if err != nil {
+		t.Fatalf("marshal request body: %v", err)
+	}
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(string(reqBody)), userID)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status: got %d, want 400", w.Code)
+	}
+}
+
 func TestSearch_KBNotFound(t *testing.T) {
 	deps, _, _, _, _ := defaultDeps()
 	router := NewRouter(deps)
