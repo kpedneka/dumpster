@@ -18,6 +18,18 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
+// maxQueryBytes bounds a search query's size. BAAI/bge-small-en-v1.5 (the
+// query-time embedding model, see internal/llm/inference.NewQueryEmbedder)
+// truncates at 512 tokens regardless of input length -- measured directly
+// against representative English text at ~5.7 chars/token, so anything
+// past ~2900 characters is already silently discarded by the model and
+// buys nothing. This cap is well above that (comfortable margin for any
+// legitimate query, which in practice is a sentence or two) while still
+// rejecting input that's pure waste -- tokenization CPU and network cost
+// for text the model will never actually use, and a mild DoS surface with
+// no cap at all.
+const maxQueryBytes = 4000
+
 type searchHandler struct {
 	kbRepo      kb.Repository
 	docRepo     document.Repository
@@ -72,6 +84,10 @@ func (h *searchHandler) search(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Query == "" {
 		writeError(w, http.StatusBadRequest, "query is required")
+		return
+	}
+	if len(body.Query) > maxQueryBytes {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("query exceeds maximum length of %d characters", maxQueryBytes))
 		return
 	}
 
