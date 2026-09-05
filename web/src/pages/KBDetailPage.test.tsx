@@ -341,6 +341,50 @@ describe('KBDetailPage', () => {
       expect(screen.getByText('2.0 KB')).toBeInTheDocument()
     })
 
+    it('shows a permanent "Fully indexed" stage label instead of file size once the whole pipeline is done', async () => {
+      mockDocs([
+        {
+          id: 'doc-1',
+          filename: 'notes.txt',
+          status: 'indexed',
+          size_bytes: 2048,
+          progress: {
+            stages: [
+              { key: 'embedding', label: 'Preparing for search' },
+              { key: 'entities', label: 'Extracting entities' },
+              { key: 'complete', label: 'Fully indexed', message: 'Indexed, searchable, and included in communities and themes.' },
+            ],
+            current_stage: 'complete',
+          },
+        },
+      ])
+      renderKBDetailPage()
+
+      await screen.findByText('notes.txt')
+      expect(screen.getByText('Fully indexed')).toBeInTheDocument()
+      expect(screen.queryByText('2.0 KB')).not.toBeInTheDocument()
+    })
+
+    it('hides the status ring once a document is indexed, since the stage label already covers it', async () => {
+      mockDocs([
+        { id: 'doc-1', filename: 'notes.txt', status: 'indexed', size_bytes: 2048 },
+        { id: 'doc-2', filename: 'uploading.txt', status: 'pending', size_bytes: 2048 },
+      ])
+      renderKBDetailPage()
+
+      await screen.findByText('notes.txt')
+      expect(screen.queryByRole('img', { name: 'Indexed' })).not.toBeInTheDocument()
+      expect(screen.getByRole('img', { name: 'Pending' })).toBeInTheDocument()
+    })
+
+    it('keeps the status ring visible for a failed document', async () => {
+      mockDocs([{ id: 'doc-1', filename: 'broken.txt', status: 'failed', size_bytes: 2048 }])
+      renderKBDetailPage()
+
+      await screen.findByText('broken.txt')
+      expect(screen.getByRole('img', { name: 'Failed' })).toBeInTheDocument()
+    })
+
     it('wraps long filenames instead of truncating or scrolling', async () => {
       // No spaces or hyphens: a delimited long name would already wrap at
       // those break points under plain CSS defaults, so it wouldn't
@@ -386,8 +430,12 @@ describe('KBDetailPage', () => {
       expect(api.POST).toHaveBeenCalledWith('/kbs/{kbId}/documents/{docId}/retry', {
         params: { path: { kbId: 'kb-1', docId: 'doc-1' } },
       })
+      // "Pending" now appears twice on a successful retry: once as the
+      // visible inline stage label, once as the status ring's sr-only
+      // accessible name -- both are intentional, so disambiguate rather
+      // than asserting there's exactly one.
       await waitFor(() => {
-        expect(screen.getByText('Pending')).toBeInTheDocument()
+        expect(screen.getAllByText('Pending').length).toBeGreaterThan(0)
       })
     })
 
