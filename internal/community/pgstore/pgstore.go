@@ -140,6 +140,10 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 	// separately and re-attached rather than passed through it.
 	type pair struct{ a, b uuid.UUID }
 	edgeDocCount := make(map[pair]int)
+	// edgeRelationType mirrors edgeDocCount's reason for existing --
+	// PMI weighting round-trips through community.WeightedEdge, which has
+	// no room for it either.
+	edgeRelationType := make(map[pair]*string)
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		nodeRows, err := tx.Query(ctx,
 			`SELECT id, canonical_text, entity_type, community_id, mention_count, document_count
@@ -168,7 +172,10 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 			SELECT LEAST(ea.canonical_entity_id, eb.canonical_entity_id)    AS a,
 			       GREATEST(ea.canonical_entity_id, eb.canonical_entity_id) AS b,
 			       SUM(ee.co_occurrence_count)                              AS weight,
-			       COUNT(DISTINCT ee.document_id)                           AS doc_count
+			       COUNT(DISTINCT ee.document_id)                           AS doc_count,
+			       MAX(ee.relation_type) FILTER (
+			           WHERE ee.relation_type IS NOT NULL AND ee.relation_type <> 'none'
+			       )                                                        AS relation_type
 			FROM   entity_edges ee
 			JOIN   entities ea ON ea.id = ee.entity_a_id
 			JOIN   entities eb ON eb.id = ee.entity_b_id
@@ -187,11 +194,13 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 			var source, target uuid.UUID
 			var weight int64
 			var docCount int
-			if err := edgeRows.Scan(&source, &target, &weight, &docCount); err != nil {
+			var relationType *string
+			if err := edgeRows.Scan(&source, &target, &weight, &docCount, &relationType); err != nil {
 				return err
 			}
 			view.Edges = append(view.Edges, community.GraphEdge{Source: source, Target: target, Weight: float64(weight)})
 			edgeDocCount[pair{source, target}] = docCount
+			edgeRelationType[pair{source, target}] = relationType
 		}
 		return edgeRows.Err()
 	})
@@ -202,7 +211,9 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 	weighted := community.ApplyPMIWeighting(&community.Graph{Nodes: nodesOf(view.Nodes), Edges: toWeightedEdges(view.Edges)}, freq)
 	view.Edges = fromWeightedEdges(weighted.Edges)
 	for i := range view.Edges {
-		view.Edges[i].DocumentCount = edgeDocCount[pair{view.Edges[i].Source, view.Edges[i].Target}]
+		p := pair{view.Edges[i].Source, view.Edges[i].Target}
+		view.Edges[i].DocumentCount = edgeDocCount[p]
+		view.Edges[i].RelationType = edgeRelationType[p]
 	}
 
 	degree := make(map[uuid.UUID]int, len(view.Nodes))

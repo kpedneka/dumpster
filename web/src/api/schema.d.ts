@@ -831,6 +831,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{id}/relations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Review a bounded batch of not-yet-checked co-occurrence edges for an actual relationship
+         * @description For up to a small, fixed number of chunks that still have a co-occurrence edge with no relation type, asks an LLM whether the source text actually supports a specific relationship for each candidate pair (e.g. "founded", "works at") -- and if not, marks it reviewed with no relationship found, so it isn't asked about again. Incremental and idempotent: reviewing a knowledge base in full is a matter of calling this endpoint repeatedly, not raising any limit. Returns a zero-value summary (not an error) once every pair has already been reviewed, or if none exist yet.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Summary of this run. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RelationExtractionResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{id}/graph": {
         parameters: {
             query?: never;
@@ -1628,6 +1687,13 @@ export interface components {
             tested_count: number;
             communities: components["schemas"]["IntrusionTestCommunity"][];
         };
+        /** @description Summary of one relation-extraction run: how many not-yet-checked co-occurrence edges were reviewed, and how many of those the model found an actual relationship for versus none. pairs_reviewed can exceed relations_found + none_count if the model's response didn't address every pair -- those are simply left for a later run. */
+        RelationExtractionResult: {
+            chunks_reviewed: number;
+            pairs_reviewed: number;
+            relations_found: number;
+            none_count: number;
+        };
         /** @description One canonical entity in a knowledge base's graph view. community_id is null if community detection has never been run, or ran before this entity existed. */
         GraphNode: {
             /** Format: uuid */
@@ -1648,6 +1714,8 @@ export interface components {
             weight: number;
             /** @description Number of distinct documents whose chunks contributed a co-occurrence to this pair. */
             document_count: number;
+            /** @description The actual relationship found between these two entities (e.g. "founded", "works at"), null if relation extraction hasn't reviewed this pair yet or found no clear relationship in the source text. */
+            relation_type: string | null;
         };
         /** @description A knowledge base's canonical-entity graph, shaped for display — every canonical entity as a node and every aggregated co-occurrence edge. Unfiltered; percentile-based server-side filtering is a later refinement, not yet applied here. */
         GraphView: {
