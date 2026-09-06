@@ -61,7 +61,7 @@ func TestExtract_MapsAnswersBackToOriginalPairs(t *testing.T) {
 	gen := llmmock.NewGenerator("CHUNK: 1\nPAIR: 1\nRELATION: founded\nCHUNK: 1\nPAIR: 2\nRELATION: NONE\n")
 	e := NewExtractor(gen)
 
-	got, err := e.Extract(context.Background(), chunks)
+	got, _, err := e.Extract(context.Background(), chunks)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestExtract_UnaddressedPairIsOmittedNotGuessed(t *testing.T) {
 	gen := llmmock.NewGenerator("CHUNK: 1\nPAIR: 1\nRELATION: related to\n")
 	e := NewExtractor(gen)
 
-	got, err := e.Extract(context.Background(), chunks)
+	got, _, err := e.Extract(context.Background(), chunks)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestExtract_NoCandidatePairsAtAll_ReturnsNilWithoutCallingLLM(t *testing.T)
 	gen := llmmock.NewErrorGenerator("should not be called")
 	e := NewExtractor(gen)
 
-	got, err := e.Extract(context.Background(), []ChunkCandidates{
+	got, reviewed, err := e.Extract(context.Background(), []ChunkCandidates{
 		{ChunkID: uuid.New(), Text: "text", Pairs: nil},
 	})
 	if err != nil {
@@ -110,6 +110,9 @@ func TestExtract_NoCandidatePairsAtAll_ReturnsNilWithoutCallingLLM(t *testing.T)
 	}
 	if got != nil {
 		t.Errorf("got %+v, want nil", got)
+	}
+	if reviewed != 0 {
+		t.Errorf("reviewed = %d, want 0", reviewed)
 	}
 }
 
@@ -126,8 +129,16 @@ func TestExtract_CapsPairsPerChunk(t *testing.T) {
 		return "", nil
 	}}
 	e := NewExtractor(gen)
-	if _, err := e.Extract(context.Background(), chunks); err != nil {
+	_, reviewed, err := e.Extract(context.Background(), chunks)
+	if err != nil {
 		t.Fatalf("Extract: %v", err)
+	}
+	// Real bug this guards against: a caller summarizing cost/coverage from
+	// len(chunks[i].Pairs) instead of this return value would report every
+	// candidate as "reviewed" even though only maxPairsPerChunk of them
+	// were actually shown to the model.
+	if reviewed != maxPairsPerChunk {
+		t.Errorf("reviewed = %d, want %d (capped, not the full candidate count of %d)", reviewed, maxPairsPerChunk, len(pairs))
 	}
 
 	// The prompt should only list maxPairsPerChunk pairs, not all of them --

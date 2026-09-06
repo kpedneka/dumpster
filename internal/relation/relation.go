@@ -60,16 +60,27 @@ type Update struct {
 // same multi-tenancy contract as graphedge.Repository.
 type Repository interface {
 	// CandidateChunks returns up to limit chunks for kbID that have at
-	// least one entity_edges row with relation_type still NULL and a
-	// co-occurrence count of at least 2, each with only its not-yet-checked
-	// pairs. The count floor exists purely to bound LLM spend: a pair that
-	// only ever co-occurred once is exactly the kind of coincidental
-	// pairing not worth an LLM call to ask about, matching the same
-	// distrust community.ApplyPMIWeighting has for it (see its own
-	// minCoOccurrenceForPMI) without sharing computation with it. Repeated
-	// calls make incremental progress across a KB rather than re-asking
-	// about pairs a prior run already resolved (to a real relation or to
-	// NoneRelation).
+	// least one entity_edges row with relation_type still NULL, each with
+	// only its not-yet-checked pairs. Repeated calls make incremental
+	// progress across a KB rather than re-asking about pairs a prior run
+	// already resolved (to a real relation or to NoneRelation) -- limit
+	// (and the LLM call it costs) is the only spend control here, and
+	// deliberately so.
+	//
+	// An earlier version of this also required co_occurrence_count >= 2,
+	// reasoning that a pair co-occurring only once was the same kind of
+	// coincidental noise community.ApplyPMIWeighting's minCoOccurrenceForPMI
+	// distrusts. Real data proved that reasoning doesn't transfer: PMI is
+	// judging statistical surprise in aggregate co-occurrence counts across
+	// a whole KB; this reads the actual source text once, so a relationship
+	// stated exactly once ("Gerald Combs founded Wireshark") is often the
+	// *cleanest* case, not noise -- and entity_edges.co_occurrence_count is
+	// per-chunk besides, so ordinary prose (a pair rarely repeating within
+	// one chunk) sits at 1 almost everywhere regardless of how significant
+	// the pair is KB-wide. The floor didn't cut noise; it silently emptied
+	// the candidate set on exactly the documents (short, single-mention
+	// prose) this feature is most useful for. Bounding cost by limit alone,
+	// with the caller deciding how many times to call this, is what's left.
 	CandidateChunks(ctx context.Context, userID, kbID uuid.UUID, limit int) ([]ChunkCandidates, error)
 
 	// ApplyUpdates sets relation_type on the entity_edges rows matching

@@ -39,17 +39,9 @@ func (s *Store) CandidateChunks(ctx context.Context, userID, kbID uuid.UUID, lim
 			JOIN   entities ea ON ea.id = ee.entity_a_id
 			JOIN   entities eb ON eb.id = ee.entity_b_id
 			WHERE  ee.kb_id = $1 AND ee.user_id = $2 AND ee.relation_type IS NULL
-			  -- A pair that only ever co-occurred once is exactly the kind
-			  -- of coincidental pairing community.ApplyPMIWeighting also
-			  -- distrusts (see its minCoOccurrenceForPMI) -- spending an
-			  -- LLM call asking whether it has a real relationship is the
-			  -- same mistake in a different layer. This is a cheap proxy
-			  -- for that same judgment, not a shared computation with it.
-			  AND  ee.co_occurrence_count >= 2
 			  AND  ee.chunk_id IN (
 			          SELECT DISTINCT chunk_id FROM entity_edges
 			          WHERE kb_id = $1 AND user_id = $2 AND relation_type IS NULL
-			            AND co_occurrence_count >= 2
 			          ORDER BY chunk_id
 			          LIMIT $3
 			      )

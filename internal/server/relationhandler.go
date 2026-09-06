@@ -67,7 +67,7 @@ func (h *relationHandler) extract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updates, err := h.extractor.Extract(r.Context(), chunks)
+	updates, reviewed, err := h.extractor.Extract(r.Context(), chunks)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to extract relations")
 		return
@@ -77,10 +77,7 @@ func (h *relationHandler) extract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := relationExtractionResponse{ChunksReviewed: len(chunks)}
-	for _, c := range chunks {
-		resp.PairsReviewed += len(c.Pairs)
-	}
+	resp := relationExtractionResponse{ChunksReviewed: len(chunks), PairsReviewed: reviewed}
 	for _, u := range updates {
 		if u.RelationType == relation.NoneRelation {
 			resp.NoneCount++

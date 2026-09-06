@@ -35,10 +35,14 @@ func NewExtractor(gen llm.Generator) *Extractor {
 // Extract reviews every chunk's candidate pairs in a single LLM call and
 // returns one Update per pair the model gave an answer for -- a real
 // relation type, or NoneRelation when the model found no clear
-// relationship. A pair the model's response never addresses (a malformed
-// or truncated response) is simply absent from the result, left for a
-// later run to pick up again rather than guessed at.
-func (e *Extractor) Extract(ctx context.Context, chunks []ChunkCandidates) ([]Update, error) {
+// relationship -- plus reviewed, the number of pairs actually included in
+// the prompt after maxPairsPerChunk trimming (always <= the sum of
+// len(chunks[i].Pairs); a caller wanting an accurate cost/coverage summary
+// should report this, not the raw candidate count it passed in). A pair
+// the model's response never addresses (a malformed or truncated
+// response) is simply absent from updates, left for a later run to pick
+// up again rather than guessed at.
+func (e *Extractor) Extract(ctx context.Context, chunks []ChunkCandidates) (updates []Update, reviewed int, err error) {
 	trimmed := make([]ChunkCandidates, len(chunks))
 	for i, c := range chunks {
 		pairs := c.Pairs
@@ -46,39 +50,31 @@ func (e *Extractor) Extract(ctx context.Context, chunks []ChunkCandidates) ([]Up
 			pairs = pairs[:maxPairsPerChunk]
 		}
 		trimmed[i] = ChunkCandidates{ChunkID: c.ChunkID, Text: c.Text, Pairs: pairs}
+		reviewed += len(pairs)
+	}
+	if reviewed == 0 {
+		return nil, 0, nil
 	}
 
-	var anyPairs bool
-	for _, c := range trimmed {
-		if len(c.Pairs) > 0 {
-			anyPairs = true
-			break
-		}
-	}
-	if !anyPairs {
-		return nil, nil
-	}
-
-	resp, err := e.gen.Generate(ctx, buildPrompt(trimmed))
-	if err != nil {
-		return nil, fmt.Errorf("relation: generate: %w", err)
+	resp, genErr := e.gen.Generate(ctx, buildPrompt(trimmed))
+	if genErr != nil {
+		return nil, 0, fmt.Errorf("relation: generate: %w", genErr)
 	}
 	answers := parseResponse(resp)
 
-	var updates []Update
 	for ci, c := range trimmed {
 		for pi, p := range c.Pairs {
-			relation, ok := answers[answerKey{chunk: ci + 1, pair: pi + 1}]
+			rel, ok := answers[answerKey{chunk: ci + 1, pair: pi + 1}]
 			if !ok {
 				continue
 			}
 			updates = append(updates, Update{
 				ChunkID: c.ChunkID, EntityAID: p.EntityAID, EntityBID: p.EntityBID,
-				RelationType: relation,
+				RelationType: rel,
 			})
 		}
 	}
-	return updates, nil
+	return updates, reviewed, nil
 }
 
 func buildPrompt(chunks []ChunkCandidates) string {
