@@ -56,9 +56,19 @@ func (s *Store) CountCanonicalEntities(ctx context.Context, userID, kbID uuid.UU
 // community — a "topic" made entirely of noise. PMI corrects for this by
 // weighting a pair against how often chance alone would predict it,
 // given each entity's own overall frequency (mention_count).
+//
+// After PMI, community.ApplyRelationBoost applies a further, independent
+// adjustment from whatever internal/relation has found for each pair so
+// far: boosted if it confirmed a real relationship, damped if it reviewed
+// the pair and found none, unchanged if not yet reviewed (still the
+// common case, given relation extraction's incremental design) -- see
+// ApplyRelationBoost's own comment for why this is a multiplier on top of
+// PMI rather than a replacement for it.
 func (s *Store) KBGraph(ctx context.Context, userID, kbID uuid.UUID) (*community.Graph, error) {
 	g := &community.Graph{}
 	freq := make(map[uuid.UUID]int)
+	confirmed := make(map[[2]uuid.UUID]bool)
+	noneFound := make(map[[2]uuid.UUID]bool)
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		nodeRows, err := tx.Query(ctx,
 			`SELECT id, mention_count FROM canonical_entities WHERE kb_id = $1 AND user_id = $2`,
@@ -84,7 +94,9 @@ func (s *Store) KBGraph(ctx context.Context, userID, kbID uuid.UUID) (*community
 		edgeRows, err := tx.Query(ctx, `
 			SELECT LEAST(ea.canonical_entity_id, eb.canonical_entity_id)    AS a,
 			       GREATEST(ea.canonical_entity_id, eb.canonical_entity_id) AS b,
-			       SUM(ee.co_occurrence_count)                              AS weight
+			       SUM(ee.co_occurrence_count)                              AS weight,
+			       BOOL_OR(ee.relation_type IS NOT NULL AND ee.relation_type <> 'none') AS confirmed,
+			       BOOL_OR(ee.relation_type = 'none')                       AS none_found
 			FROM   entity_edges ee
 			JOIN   entities ea ON ea.id = ee.entity_a_id
 			JOIN   entities eb ON eb.id = ee.entity_b_id
@@ -102,18 +114,23 @@ func (s *Store) KBGraph(ctx context.Context, userID, kbID uuid.UUID) (*community
 		for edgeRows.Next() {
 			var e community.WeightedEdge
 			var weight int64
-			if err := edgeRows.Scan(&e.A, &e.B, &weight); err != nil {
+			var isConfirmed, isNoneFound bool
+			if err := edgeRows.Scan(&e.A, &e.B, &weight, &isConfirmed, &isNoneFound); err != nil {
 				return err
 			}
 			e.Weight = float64(weight)
 			g.Edges = append(g.Edges, e)
+			key := community.PairKey(e.A, e.B)
+			confirmed[key] = isConfirmed
+			noneFound[key] = isNoneFound
 		}
 		return edgeRows.Err()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("community: kb graph: %w", err)
 	}
-	return community.ApplyPMIWeighting(g, freq), nil
+	weighted := community.ApplyPMIWeighting(g, freq)
+	return community.ApplyRelationBoost(weighted, g, confirmed, noneFound), nil
 }
 
 // GraphView returns kbID's canonical-entity graph shaped for display.
@@ -144,6 +161,12 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 	// PMI weighting round-trips through community.WeightedEdge, which has
 	// no room for it either.
 	edgeRelationType := make(map[pair]*string)
+	// confirmed/noneFound feed community.ApplyRelationBoost, same as
+	// KBGraph -- so the graph rendered here (including any edge PMI
+	// dropped but a confirmed relation rescued) never disagrees with the
+	// one Louvain actually saw.
+	confirmed := make(map[[2]uuid.UUID]bool)
+	noneFound := make(map[[2]uuid.UUID]bool)
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		nodeRows, err := tx.Query(ctx,
 			`SELECT id, canonical_text, entity_type, community_id, mention_count, document_count
@@ -175,7 +198,8 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 			       COUNT(DISTINCT ee.document_id)                           AS doc_count,
 			       MAX(ee.relation_type) FILTER (
 			           WHERE ee.relation_type IS NOT NULL AND ee.relation_type <> 'none'
-			       )                                                        AS relation_type
+			       )                                                        AS relation_type,
+			       BOOL_OR(ee.relation_type = 'none')                       AS none_found
 			FROM   entity_edges ee
 			JOIN   entities ea ON ea.id = ee.entity_a_id
 			JOIN   entities eb ON eb.id = ee.entity_b_id
@@ -195,12 +219,16 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 			var weight int64
 			var docCount int
 			var relationType *string
-			if err := edgeRows.Scan(&source, &target, &weight, &docCount, &relationType); err != nil {
+			var isNoneFound bool
+			if err := edgeRows.Scan(&source, &target, &weight, &docCount, &relationType, &isNoneFound); err != nil {
 				return err
 			}
 			view.Edges = append(view.Edges, community.GraphEdge{Source: source, Target: target, Weight: float64(weight)})
 			edgeDocCount[pair{source, target}] = docCount
 			edgeRelationType[pair{source, target}] = relationType
+			key := community.PairKey(source, target)
+			confirmed[key] = relationType != nil
+			noneFound[key] = isNoneFound
 		}
 		return edgeRows.Err()
 	})
@@ -208,8 +236,10 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 		return nil, fmt.Errorf("community: graph view: %w", err)
 	}
 
-	weighted := community.ApplyPMIWeighting(&community.Graph{Nodes: nodesOf(view.Nodes), Edges: toWeightedEdges(view.Edges)}, freq)
-	view.Edges = fromWeightedEdges(weighted.Edges)
+	raw := &community.Graph{Nodes: nodesOf(view.Nodes), Edges: toWeightedEdges(view.Edges)}
+	weighted := community.ApplyPMIWeighting(raw, freq)
+	boosted := community.ApplyRelationBoost(weighted, raw, confirmed, noneFound)
+	view.Edges = fromWeightedEdges(boosted.Edges)
 	for i := range view.Edges {
 		p := pair{view.Edges[i].Source, view.Edges[i].Target}
 		view.Edges[i].DocumentCount = edgeDocCount[p]
