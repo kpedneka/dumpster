@@ -12,6 +12,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Waypoints,
   X,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -33,6 +34,7 @@ import { useDeleteKB } from '@/hooks/use-delete-kb'
 import { CitationMarker } from '@/components/CitationMarker'
 import { StatusRing } from '@/components/StatusRing'
 import { StageProgressLabel } from '@/components/StageChecklist'
+import { GraphPanel } from '@/components/GraphPanel'
 import { hasInFlightWork, stageProgressView } from '@/lib/status-ring'
 import { getDraftQuery, setDraftQuery } from '@/lib/search-state'
 import { fileIconSrc } from '@/lib/file-icons'
@@ -957,7 +959,7 @@ export function KBDetailPage() {
 // their own buttons here later, both building on the same Louvain
 // computation this triggers rather than duplicating it.
 type ExploreIcon = React.ComponentType<{ className?: string }>
-type ExplorePanelKind = 'communities' | 'themes'
+type ExplorePanelKind = 'communities' | 'themes' | 'graph'
 
 // ExplorePill is the always-visible trigger row under the search bar.
 // Deliberately does not run any query/mutation itself — clicking only
@@ -1052,6 +1054,7 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
   const [openPanels, setOpenPanels] = useState<Set<ExplorePanelKind>>(new Set())
   const communitiesPillRef = useRef<HTMLButtonElement>(null)
   const themesPillRef = useRef<HTMLButtonElement>(null)
+  const graphPillRef = useRef<HTMLButtonElement>(null)
 
   function togglePanel(kind: ExplorePanelKind) {
     setOpenPanels((prev) => {
@@ -1159,6 +1162,7 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
 
   const communitiesColor = 'border-communities-foreground/25 bg-communities text-communities-foreground'
   const themesColor = 'border-themes-foreground/25 bg-themes text-themes-foreground'
+  const graphColor = 'border-graph-foreground/25 bg-graph text-graph-foreground'
 
   return (
     <div className="mb-6 flex flex-col gap-3">
@@ -1178,6 +1182,14 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
           icon={Sparkles}
           label="Themes"
           colorClass={themesColor}
+        />
+        <ExplorePill
+          buttonRef={graphPillRef}
+          active={openPanels.has('graph')}
+          onClick={() => togglePanel('graph')}
+          icon={Waypoints}
+          label="Graph"
+          colorClass={graphColor}
         />
       </div>
 
@@ -1253,6 +1265,18 @@ function ExploreSection({ kbId, hasDocuments }: { kbId: string; hasDocuments: bo
               your knowledge base's biggest topics.
             </p>
           )}
+        </ExplorePanel>
+      )}
+
+      {openPanels.has('graph') && (
+        <ExplorePanel
+          icon={Waypoints}
+          title="Graph"
+          colorClass={graphColor}
+          onDismiss={() => dismissPanel('graph', graphPillRef)}
+          action={null}
+        >
+          <GraphPanel kbId={kbId} />
         </ExplorePanel>
       )}
     </div>

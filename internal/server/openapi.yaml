@@ -351,6 +351,115 @@ components:
             output and isn't persisted, so GET never includes it.
       required: [computed_at, themes]
 
+    IntrusionTestCommunity:
+      type: object
+      description: >-
+        One tested community's word/topic intrusion test outcome: a handful
+        of its real members were shown to a judge alongside one entity
+        deliberately taken from a different community (the intruder), and
+        the judge was asked to spot which one doesn't belong.
+      properties:
+        community_id:
+          type: integer
+        members:
+          type: array
+          items:
+            type: string
+        intruder_text:
+          type: string
+        judge_answer:
+          type: string
+        correct:
+          type: boolean
+      required: [community_id, members, intruder_text, judge_answer, correct]
+
+    IntrusionTestResult:
+      type: object
+      description: >-
+        A knowledge base's most recent intrusion test run -- a quantitative
+        coherence metric for its detected communities. computed_at is null
+        and communities is empty when a test has never been run, or when
+        fewer than two communities were large enough to test.
+      properties:
+        computed_at:
+          type: string
+          format: date-time
+          nullable: true
+        score:
+          type: number
+          description: Correct / tested_count, in [0, 1]. Zero when tested_count is zero.
+        tested_count:
+          type: integer
+        communities:
+          type: array
+          items:
+            $ref: "#/components/schemas/IntrusionTestCommunity"
+      required: [computed_at, score, tested_count, communities]
+
+    GraphNode:
+      type: object
+      description: >-
+        One canonical entity in a knowledge base's graph view. community_id
+        is null if community detection has never been run, or ran before
+        this entity existed.
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+        type:
+          type: string
+        community_id:
+          type: integer
+          nullable: true
+        degree:
+          type: integer
+        document_count:
+          type: integer
+          description: >-
+            Number of distinct documents contributing at least one mention of
+            this entity — a signal of cross-document overlap in a knowledge
+            base with more than one source.
+      required: [id, label, type, community_id, degree, document_count]
+
+    GraphEdge:
+      type: object
+      description: One aggregated co-occurrence edge between two canonical entities.
+      properties:
+        source:
+          type: string
+          format: uuid
+        target:
+          type: string
+          format: uuid
+        weight:
+          type: number
+        document_count:
+          type: integer
+          description: >-
+            Number of distinct documents whose chunks contributed a
+            co-occurrence to this pair.
+      required: [source, target, weight, document_count]
+
+    GraphView:
+      type: object
+      description: >-
+        A knowledge base's canonical-entity graph, shaped for display —
+        every canonical entity as a node and every aggregated co-occurrence
+        edge. Unfiltered; percentile-based server-side filtering is a later
+        refinement, not yet applied here.
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphEdge"
+      required: [nodes, edges]
+
     KBPage:
       type: object
       properties:
@@ -828,6 +937,128 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /kbs/{id}/intrusion-test:
+    get:
+      summary: Get a knowledge base's most recently run intrusion test result
+      description: >-
+        Returns a zero-value result (null computed_at, empty communities)
+        rather than a 404 when an intrusion test has never been run for
+        this knowledge base yet — that's a normal first-run state, not an
+        error.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The knowledge base's most recent intrusion test result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntrusionTestResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: >-
+        Run a word/topic intrusion test over a knowledge base's current
+        community structure
+      description: >-
+        Manually triggered: for each of up to 30 communities large enough
+        to test, mixes a few of its real top members with one entity taken
+        from a different community and asks an LLM judge to spot the
+        intruder. The fraction of communities where the judge succeeds is a
+        quantitative coherence metric for the current community structure,
+        meant for comparing before/after a pipeline change (chunking, edge
+        weighting, entity filtering) rather than eyeballing examples.
+        Sampling and intruder selection are deterministic for a given
+        community structure, so re-running this against unchanged data
+        always produces the same score. Fully replaces whatever result was
+        there before. Requires community detection to have already been run
+        at least once for this knowledge base.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The newly computed intrusion test result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntrusionTestResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: >-
+            Community detection has never been run for this knowledge base,
+            so there is no community structure to test.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/graph:
+    get:
+      summary: Get a knowledge base's canonical-entity graph, shaped for display
+      description: >-
+        Returns every canonical entity as a node (with its current
+        community_id and degree) and every aggregated co-occurrence edge.
+        Does not compute anything -- community_id reflects whatever the
+        most recent POST /kbs/{id}/communities run assigned, null if that
+        has never run.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The knowledge base's graph.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GraphView"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /kbs/{id}/inquiry:
     get:
       summary: Get the researcher's Inquiry (turn history) for a knowledge base
@@ -1124,6 +1355,59 @@ paths:
                 $ref: "#/components/schemas/Error"
         "409":
           description: Document is not in a failed state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{kbId}/documents/{docId}/retry-entity-extraction:
+    parameters:
+      - in: path
+        name: kbId
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - in: path
+        name: docId
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    post:
+      summary: Re-run just entity extraction for an already-indexed document
+      description: >-
+        Unlike POST .../retry (which requires status "failed" and re-runs
+        the whole pipeline from upload), this only requires status
+        "indexed" and re-publishes the entity-extraction stage alone —
+        chunking and embedding are untouched, and document status doesn't
+        change. Safe to call repeatedly: each run fully replaces the
+        document's previously extracted entities rather than accumulating
+        duplicates.
+      responses:
+        "200":
+          description: Entity extraction re-enqueued; document unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: >-
+            Document is not indexed yet (no chunks to extract entities
+            from), or an entity-extraction job is already active for it.
           content:
             application/json:
               schema:

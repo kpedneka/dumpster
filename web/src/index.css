@@ -45,6 +45,13 @@
   --color-communities-foreground: hsl(32 75% 28%); /* deep amber — AA on the tint */
   --color-themes: hsl(40 55% 91%);                /* soft amber tint */
   --color-themes-foreground: hsl(32 75% 28%);      /* deep amber — AA on the tint */
+  /* Graph gets its own hue (soft teal, not amber) rather than reusing
+     Communities/Themes' tint -- those two share a color deliberately
+     (same underlying Louvain computation), but Graph is a third,
+     visually distinct capability and reusing the same tint would make
+     three pills read as one. */
+  --color-graph: hsl(190 45% 90%);
+  --color-graph-foreground: hsl(192 70% 24%);      /* deep teal — AA on the tint */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -74,6 +81,8 @@
     --color-communities-foreground: hsl(40 70% 68%);
     --color-themes: hsl(38 30% 17%);
     --color-themes-foreground: hsl(40 70% 68%);
+    --color-graph: hsl(192 35% 15%);
+    --color-graph-foreground: hsl(190 60% 65%);
   }
 }
 

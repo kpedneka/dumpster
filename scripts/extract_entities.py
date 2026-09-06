@@ -93,6 +93,40 @@ def load_pipeline():
     return nlp, model
 
 
+# _NEVER_ENTITIES is a closed, deliberately narrow set of function words --
+# never anything document-dependent like a generic noun ("user", "program"),
+# since whether those are noise is context-specific and not ours to decide
+# unilaterally. Every word here is a closed-grammatical-class member that
+# can never be a legitimate person/organization/location/concept/event/
+# work_of_art/date_time mention under any of GLiNER's allowed types
+# regardless of document -- a fact about English grammar, not a judgment
+# call about this KB's content. Two subcategories, added as each was
+# observed in real data:
+#   - personal/possessive/reflexive and indefinite pronouns -- "We" tagged
+#     as two different types in different chunks produced two distinct
+#     canonical entities that both displayed as "We"; "someone" showed up
+#     the same way once the personal-pronoun-only version of this list was
+#     fixed, since indefinite pronouns are a separate closed class.
+#   - demonstrative/locative adverbs -- "here" is not a pronoun at all, so
+#     no pronoun list, however complete, was ever going to catch it; this
+#     is why the set is function words in general, not "pronouns" specifically.
+_NEVER_ENTITIES = frozenset({
+    # personal / possessive / reflexive pronouns
+    "i", "me", "my", "mine", "myself",
+    "we", "us", "our", "ours", "ourselves",
+    "you", "your", "yours", "yourself", "yourselves",
+    "he", "him", "his", "himself",
+    "she", "her", "hers", "herself",
+    "it", "its", "itself",
+    "they", "them", "their", "theirs", "themselves",
+    # indefinite pronouns
+    "someone", "anyone", "everyone", "no one", "nobody",
+    "something", "anything", "everything", "nothing",
+    # demonstrative / locative adverbs
+    "here", "there",
+})
+
+
 def extract_chunk(nlp, model, text, allowed_types, threshold=0.5):
     """Returns a list of entity dicts for one chunk's text, with start/end
     byte offsets relative to the start of text."""
@@ -103,6 +137,20 @@ def extract_chunk(nlp, model, text, allowed_types, threshold=0.5):
         sent_offset = sent.start_char
         preds = model.predict_entities(sent_text, allowed_types, threshold=threshold)
         for p in preds:
+            stripped = p["text"].strip()
+            # GLiNER's type set (allowed_types) is closed but not
+            # length-aware: on code-heavy text it sometimes tags a bare
+            # single-character identifier (e.g. a loop variable "i" or "s")
+            # as "concept" with a passing score, since the label is broad
+            # enough to be the closest available match for a token that
+            # isn't really any of the allowed types. A single character can
+            # never be a meaningful person/organization/location/concept
+            # mention on its own, so this is a safe, type-agnostic floor
+            # rather than a per-type judgment call.
+            if len(stripped) < 2:
+                continue
+            if stripped.lower() in _NEVER_ENTITIES:
+                continue
             entities.append({
                 "type": p["label"],
                 "text": p["text"],

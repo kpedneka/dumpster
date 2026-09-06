@@ -75,6 +75,93 @@ class HandleRequestTests(unittest.TestCase):
         self.assertEqual(parsed, {"entities": []})
 
 
+class ExtractChunkTests(unittest.TestCase):
+    """Covers extract_chunk's own filtering, separately from
+    _handle_request's chunk_id bookkeeping above."""
+
+    def test_drops_single_character_predictions(self):
+        # Real observed noise: GLiNER tagging bare loop-variable names ("i",
+        # "s") as "concept" on code-heavy text. See extract_chunk's comment
+        # for why a single character can never be a meaningful mention.
+        nlp, model = mock.Mock(), mock.Mock()
+        sent = mock.Mock(text="i and s are loop counters.", start_char=0)
+        nlp.return_value = mock.Mock(sents=[sent])
+        model.predict_entities.return_value = [
+            {"label": "concept", "text": "i", "start": 0, "end": 1, "score": 0.6},
+            {"label": "concept", "text": "s", "start": 6, "end": 7, "score": 0.6},
+            {"label": "concept", "text": "loop counters", "start": 12, "end": 25, "score": 0.9},
+        ]
+
+        entities = extract_entities.extract_chunk(nlp, model, sent.text, ["concept"])
+
+        self.assertEqual([e["text"] for e in entities], ["loop counters"])
+
+    def test_drops_pronoun_predictions_case_insensitively(self):
+        # Real observed noise: "We" tagged as an entity type in one chunk
+        # and a different type in another produced two distinct canonical
+        # entities that both display as "We" in the same community -- a
+        # pronoun is never a legitimate mention under any allowed type,
+        # regardless of case or which type GLiNER assigned it.
+        nlp, model = mock.Mock(), mock.Mock()
+        sent = mock.Mock(text="We analyze the dissection process.", start_char=0)
+        nlp.return_value = mock.Mock(sents=[sent])
+        model.predict_entities.return_value = [
+            {"label": "concept", "text": "We", "start": 0, "end": 2, "score": 0.6},
+            {"label": "concept", "text": "dissection", "start": 12, "end": 22, "score": 0.9},
+        ]
+
+        entities = extract_entities.extract_chunk(nlp, model, sent.text, ["concept"])
+
+        self.assertEqual([e["text"] for e in entities], ["dissection"])
+
+    def test_drops_indefinite_pronoun_predictions(self):
+        # Real observed noise: "someone" surfaced as an entity even after
+        # the personal-pronoun-only list was fixed -- indefinite pronouns
+        # are a separate closed grammatical class from personal ones.
+        nlp, model = mock.Mock(), mock.Mock()
+        sent = mock.Mock(text="Someone opened a merge request.", start_char=0)
+        nlp.return_value = mock.Mock(sents=[sent])
+        model.predict_entities.return_value = [
+            {"label": "concept", "text": "Someone", "start": 0, "end": 7, "score": 0.6},
+            {"label": "concept", "text": "merge request", "start": 17, "end": 31, "score": 0.9},
+        ]
+
+        entities = extract_entities.extract_chunk(nlp, model, sent.text, ["concept"])
+
+        self.assertEqual([e["text"] for e in entities], ["merge request"])
+
+    def test_drops_demonstrative_adverb_predictions(self):
+        # Real observed noise: "here" surfaced as an entity -- it's not a
+        # pronoun at all, confirming the filter needs to cover function
+        # words generally, not just pronouns.
+        nlp, model = mock.Mock(), mock.Mock()
+        sent = mock.Mock(text="The dissector is defined here.", start_char=0)
+        nlp.return_value = mock.Mock(sents=[sent])
+        model.predict_entities.return_value = [
+            {"label": "concept", "text": "dissector", "start": 4, "end": 13, "score": 0.9},
+            {"label": "concept", "text": "here", "start": 27, "end": 31, "score": 0.6},
+        ]
+
+        entities = extract_entities.extract_chunk(nlp, model, sent.text, ["concept"])
+
+        self.assertEqual([e["text"] for e in entities], ["dissector"])
+
+    def test_keeps_two_character_predictions(self):
+        # The floor is length, not a stopword list -- a real short entity
+        # (e.g. an abbreviation) must not be dropped just because it's
+        # short.
+        nlp, model = mock.Mock(), mock.Mock()
+        sent = mock.Mock(text="AI is discussed here.", start_char=0)
+        nlp.return_value = mock.Mock(sents=[sent])
+        model.predict_entities.return_value = [
+            {"label": "concept", "text": "AI", "start": 0, "end": 2, "score": 0.8},
+        ]
+
+        entities = extract_entities.extract_chunk(nlp, model, sent.text, ["concept"])
+
+        self.assertEqual([e["text"] for e in entities], ["AI"])
+
+
 class MainLoopTests(unittest.TestCase):
     def test_processes_multiple_requests_loading_pipeline_once(self):
         # The whole point of this card: the model load must happen once for

@@ -13,6 +13,8 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
 	inquirypg "github.com/kunalpednekar/dumpster/internal/inquiry/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/intrusion"
+	intrusionpg "github.com/kunalpednekar/dumpster/internal/intrusion/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
@@ -106,6 +108,8 @@ func main() {
 		CommunityDetectionTimeout: cfg.CommunityDetectionTimeout,
 		Themes:                    themepg.New(txRunner),
 		ThemeSummarizer:           theme.NewSummarizer(generator),
+		Intrusion:                 intrusionpg.New(txRunner),
+		IntrusionTester:           intrusion.NewTester(generator),
 		Searcher:                  searcher,
 		Inquiries:                 inquirypg.New(txRunner),
 		Sessions:                  sessionpg.New(pool),

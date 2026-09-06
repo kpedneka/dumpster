@@ -25,6 +25,13 @@ type Repository struct {
 	edges   map[kbKey][]community.WeightedEdge
 	commIDs map[uuid.UUID]int
 	results map[kbKey]community.Result
+	// labels/types back GraphView's display fields. Unset for a node means
+	// SeedGraph alone was used (no SeedNodeMeta call) -- GraphView falls
+	// back to the node's own id string / "entity" rather than an empty
+	// label, so existing SeedGraph-only tests don't need updating just
+	// because GraphView now exists.
+	labels map[uuid.UUID]string
+	types  map[uuid.UUID]string
 }
 
 // New returns an empty in-memory Repository.
@@ -34,7 +41,19 @@ func New() *Repository {
 		edges:   make(map[kbKey][]community.WeightedEdge),
 		commIDs: make(map[uuid.UUID]int),
 		results: make(map[kbKey]community.Result),
+		labels:  make(map[uuid.UUID]string),
+		types:   make(map[uuid.UUID]string),
 	}
+}
+
+// SeedNodeMeta sets the display label/type GraphView returns for id.
+// Optional -- a node with no metadata seeded falls back to its own id
+// string and "entity".
+func (r *Repository) SeedNodeMeta(id uuid.UUID, label, entityType string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.labels[id] = label
+	r.types[id] = entityType
 }
 
 // SeedGraph sets kbID's graph directly, for tests — the in-memory fake has
@@ -90,6 +109,37 @@ func (r *Repository) GetResult(_ context.Context, userID, kbID uuid.UUID) (*comm
 	}
 	cp := res
 	return &cp, nil
+}
+
+// GraphView builds a display-shaped graph from whatever was seeded via
+// SeedGraph/SeedNodeMeta and assigned via SaveResult.
+func (r *Repository) GraphView(_ context.Context, userID, kbID uuid.UUID) (*community.GraphView, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := kbKey{userID, kbID}
+
+	view := &community.GraphView{}
+	degree := make(map[uuid.UUID]int)
+	for _, e := range r.edges[key] {
+		view.Edges = append(view.Edges, community.GraphEdge{Source: e.A, Target: e.B, Weight: e.Weight})
+		degree[e.A]++
+		degree[e.B]++
+	}
+
+	for _, id := range r.nodes[key] {
+		n := community.GraphNode{ID: id, Label: r.labels[id], Type: r.types[id], Degree: degree[id]}
+		if n.Label == "" {
+			n.Label = id.String()
+		}
+		if n.Type == "" {
+			n.Type = "entity"
+		}
+		if cid, ok := r.commIDs[id]; ok {
+			n.CommunityID = &cid
+		}
+		view.Nodes = append(view.Nodes, n)
+	}
+	return view, nil
 }
 
 // CommunityID returns the community id assigned to canonical entity id by

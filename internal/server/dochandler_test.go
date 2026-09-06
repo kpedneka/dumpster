@@ -1487,6 +1487,147 @@ func TestDocRetry_DeadLetteredBackgroundJob_NotBlocked(t *testing.T) {
 	}
 }
 
+func TestDocRetryEntityExtraction(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry-entity-extraction", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
+	}
+
+	// Document status must be untouched -- this is the whole point of a
+	// narrower retry than the full pipeline one.
+	got, _ := docRepo.Get(context.TODO(), userID, doc.ID)
+	if got.Status != document.StatusIndexed {
+		t.Errorf("status: got %q, want indexed (unchanged)", got.Status)
+	}
+
+	if len(pub.EntityExtractionEvents()) != 1 {
+		t.Fatalf("EntityExtraction events: got %d, want 1", len(pub.EntityExtractionEvents()))
+	}
+	if pub.EntityExtractionEvents()[0].DocumentID != doc.ID {
+		t.Error("retry event document_id mismatch")
+	}
+	// Must not touch the full-pipeline retry path (no re-chunking/re-embedding).
+	if len(pub.Events()) != 0 {
+		t.Errorf("DocumentUploaded events: got %d, want 0", len(pub.Events()))
+	}
+}
+
+func TestDocRetryEntityExtraction_NotIndexedYet_Returns409(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusProcessing,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry-entity-extraction", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 for a not-yet-indexed document", w.Code)
+	}
+	if len(pub.EntityExtractionEvents()) != 0 {
+		t.Error("should not enqueue entity extraction before chunks exist")
+	}
+}
+
+func TestDocRetryEntityExtraction_ActiveBackgroundJob_Rejected(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+		doc.ID: {{Type: queue.JobTypeEntityExtraction, Status: "processing"}},
+	}}
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry-entity-extraction", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 — body: %s", w.Code, w.Body)
+	}
+	if len(pub.EntityExtractionEvents()) != 0 {
+		t.Error("should not enqueue while an entity-extraction job is already active for this document")
+	}
+}
+
+func TestDocRetryEntityExtraction_WrongKB(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb1, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	kb2, _ := kbRepo.Create(context.TODO(), userID, "kb2")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb1.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb2.ID.String()+"/documents/"+doc.ID.String()+"/retry-entity-extraction", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want 404 for a document under a different KB", w.Code)
+	}
+	if len(pub.EntityExtractionEvents()) != 0 {
+		t.Error("should not enqueue for a document accessed via the wrong KB")
+	}
+}
+
+func TestDocRetryEntityExtraction_TenantIsolation(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	owner := uuid.New()
+	other := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), owner, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: owner, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusIndexed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry-entity-extraction", nil, other)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status: got %d, want 404 for another tenant's document", w.Code)
+	}
+	if len(pub.EntityExtractionEvents()) != 0 {
+		t.Error("should not enqueue for another tenant's document")
+	}
+}
+
 func TestDocRetry_WrongKB(t *testing.T) {
 	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	router := NewRouter(deps)

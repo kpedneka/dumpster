@@ -13,6 +13,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/community"
 	"github.com/kunalpednekar/dumpster/internal/document"
 	"github.com/kunalpednekar/dumpster/internal/inquiry"
+	"github.com/kunalpednekar/dumpster/internal/intrusion"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
@@ -52,6 +53,13 @@ type Deps struct {
 	// POST/GET /kbs/{id}/themes are not registered.
 	Themes          theme.Repository
 	ThemeSummarizer *theme.Summarizer
+	// Intrusion and IntrusionTester are optional together; when either is
+	// nil, POST/GET /kbs/{id}/intrusion-test are not registered. Reuses
+	// Themes as its intrusion.MemberSource (the community-membership query
+	// both features need is identical) rather than taking a separate
+	// dependency for it.
+	Intrusion       intrusion.Repository
+	IntrusionTester *intrusion.Tester
 	Searcher        search.Searcher
 	// Inquiries is optional; when nil, search results are not persisted as
 	// Inquiry history (search itself still works — persistence is a
@@ -108,6 +116,9 @@ func NewRouter(deps Deps) http.Handler {
 	}
 	if deps.Themes != nil && deps.ThemeSummarizer != nil {
 		registerThemeRoutes(authed, deps.KBs, deps.Themes, deps.ThemeSummarizer)
+	}
+	if deps.Themes != nil && deps.Intrusion != nil && deps.IntrusionTester != nil {
+		registerIntrusionRoutes(authed, deps.KBs, deps.Themes, deps.Intrusion, deps.IntrusionTester)
 	}
 
 	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, deps.Stats, authed)

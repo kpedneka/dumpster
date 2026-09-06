@@ -99,6 +99,7 @@ func registerDocRoutes(
 	mux.HandleFunc("GET /kbs/{kbID}/documents/{docID}/content", h.content)
 	mux.HandleFunc("DELETE /kbs/{kbID}/documents/{docID}", h.delete)
 	mux.HandleFunc("POST /kbs/{kbID}/documents/{docID}/retry", h.retry)
+	mux.HandleFunc("POST /kbs/{kbID}/documents/{docID}/retry-entity-extraction", h.retryEntityExtraction)
 }
 
 // upload accepts a multipart/form-data file (field "file"), stores the bytes
@@ -655,6 +656,76 @@ func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// retryEntityExtraction handles POST
+// /kbs/{kbID}/documents/{docID}/retry-entity-extraction: re-publishes just
+// the entity-extraction stage for an already-indexed document, without
+// touching document status or re-running chunking/embedding.
+//
+// This exists as a distinct, narrower operation from retry (which requires
+// StatusFailed and re-runs the whole pipeline from upload): entity
+// extraction can fail or need re-running (a changed ENTITY_TYPES list, an
+// extractor code/image change under test) independent of the document's
+// own indexing having succeeded, and re-chunking/re-embedding an already-
+// correctly-indexed document to test an unrelated extraction change is
+// pure wasted latency -- observed in practice at over 2 minutes for
+// embedding alone on a modest document.
+//
+// EntityHandler's own idempotent cleanup (job.Attempts == 0: reverse this
+// document's canonical entity contribution, delete its existing entities)
+// makes this safe to call repeatedly -- each run fully replaces the last,
+// it never accumulates duplicates.
+func (h *docHandler) retryEntityExtraction(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	kbID, ok := parseUUID(w, r.PathValue("kbID"))
+	if !ok {
+		return
+	}
+
+	docID, ok := parseUUID(w, r.PathValue("docID"))
+	if !ok {
+		return
+	}
+
+	doc, err := h.docRepo.Get(r.Context(), userID, docID)
+	if err != nil {
+		writeDocError(w, err)
+		return
+	}
+
+	if doc.KBID != kbID {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+
+	if doc.Status != document.StatusIndexed {
+		writeError(w, http.StatusConflict, "only an indexed document has chunks to extract entities from")
+		return
+	}
+
+	hasActiveJob, err := h.hasActiveJobForDocument(r.Context(), userID, docID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check for an active background job")
+		return
+	}
+	if hasActiveJob {
+		writeError(w, http.StatusConflict, "document has an active background job and cannot be retried yet")
+		return
+	}
+
+	if err := h.publisher.PublishEntityExtraction(r.Context(), queue.EntityExtractionRequested{
+		DocumentID: doc.ID, UserID: userID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enqueue entity extraction")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, doc)
 }
 
 // contentTypeFor returns the MIME type for the given filename based on its

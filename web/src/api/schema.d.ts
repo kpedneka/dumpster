@@ -720,6 +720,176 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{id}/intrusion-test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a knowledge base's most recently run intrusion test result
+         * @description Returns a zero-value result (null computed_at, empty communities) rather than a 404 when an intrusion test has never been run for this knowledge base yet — that's a normal first-run state, not an error.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The knowledge base's most recent intrusion test result. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["IntrusionTestResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Run a word/topic intrusion test over a knowledge base's current community structure
+         * @description Manually triggered: for each of up to 30 communities large enough to test, mixes a few of its real top members with one entity taken from a different community and asks an LLM judge to spot the intruder. The fraction of communities where the judge succeeds is a quantitative coherence metric for the current community structure, meant for comparing before/after a pipeline change (chunking, edge weighting, entity filtering) rather than eyeballing examples. Sampling and intruder selection are deterministic for a given community structure, so re-running this against unchanged data always produces the same score. Fully replaces whatever result was there before. Requires community detection to have already been run at least once for this knowledge base.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The newly computed intrusion test result. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["IntrusionTestResult"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Community detection has never been run for this knowledge base, so there is no community structure to test. */
+                422: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/kbs/{id}/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a knowledge base's canonical-entity graph, shaped for display
+         * @description Returns every canonical entity as a node (with its current community_id and degree) and every aggregated co-occurrence edge. Does not compute anything -- community_id reflects whatever the most recent POST /kbs/{id}/communities run assigned, null if that has never run.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description The knowledge base's graph. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GraphView"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Knowledge base not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{id}/inquiry": {
         parameters: {
             query?: never;
@@ -1174,6 +1344,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/kbs/{kbId}/documents/{docId}/retry-entity-extraction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kbId: string;
+                docId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run just entity extraction for an already-indexed document
+         * @description Unlike POST .../retry (which requires status "failed" and re-runs the whole pipeline from upload), this only requires status "indexed" and re-publishes the entity-extraction stage alone — chunking and embedding are untouched, and document status doesn't change. Safe to call repeatedly: each run fully replaces the document's previously extracted entities rather than accumulating duplicates.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kbId: string;
+                    docId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Entity extraction re-enqueued; document unchanged. */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Document"];
+                    };
+                };
+                /** @description Unauthorized */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+                /** @description Document is not indexed yet (no chunks to extract entities from), or an entity-extraction job is already active for it. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/kbs/{kbId}/documents/{docId}/content": {
         parameters: {
             query?: never;
@@ -1368,6 +1610,49 @@ export interface components {
             themes: components["schemas"]["Theme"][];
             /** @description A one-line explanation of what set the returned themes apart, present only when the knowledge base has more community structure than what's shown here. Only ever populated on the response to POST — it explains that specific recompute's output and isn't persisted, so GET never includes it. */
             note?: string;
+        };
+        /** @description One tested community's word/topic intrusion test outcome: a handful of its real members were shown to a judge alongside one entity deliberately taken from a different community (the intruder), and the judge was asked to spot which one doesn't belong. */
+        IntrusionTestCommunity: {
+            community_id: number;
+            members: string[];
+            intruder_text: string;
+            judge_answer: string;
+            correct: boolean;
+        };
+        /** @description A knowledge base's most recent intrusion test run -- a quantitative coherence metric for its detected communities. computed_at is null and communities is empty when a test has never been run, or when fewer than two communities were large enough to test. */
+        IntrusionTestResult: {
+            /** Format: date-time */
+            computed_at: string | null;
+            /** @description Correct / tested_count, in [0, 1]. Zero when tested_count is zero. */
+            score: number;
+            tested_count: number;
+            communities: components["schemas"]["IntrusionTestCommunity"][];
+        };
+        /** @description One canonical entity in a knowledge base's graph view. community_id is null if community detection has never been run, or ran before this entity existed. */
+        GraphNode: {
+            /** Format: uuid */
+            id: string;
+            label: string;
+            type: string;
+            community_id: number | null;
+            degree: number;
+            /** @description Number of distinct documents contributing at least one mention of this entity — a signal of cross-document overlap in a knowledge base with more than one source. */
+            document_count: number;
+        };
+        /** @description One aggregated co-occurrence edge between two canonical entities. */
+        GraphEdge: {
+            /** Format: uuid */
+            source: string;
+            /** Format: uuid */
+            target: string;
+            weight: number;
+            /** @description Number of distinct documents whose chunks contributed a co-occurrence to this pair. */
+            document_count: number;
+        };
+        /** @description A knowledge base's canonical-entity graph, shaped for display — every canonical entity as a node and every aggregated co-occurrence edge. Unfiltered; percentile-based server-side filtering is a later refinement, not yet applied here. */
+        GraphView: {
+            nodes: components["schemas"]["GraphNode"][];
+            edges: components["schemas"]["GraphEdge"][];
         };
         KBPage: {
             items: components["schemas"]["KnowledgeBase"][];

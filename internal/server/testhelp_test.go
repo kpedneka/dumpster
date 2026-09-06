@@ -13,6 +13,8 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/document"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
 	inquirymem "github.com/kunalpednekar/dumpster/internal/inquiry/memory"
+	"github.com/kunalpednekar/dumpster/internal/intrusion"
+	intrusionmem "github.com/kunalpednekar/dumpster/internal/intrusion/memory"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	kbmem "github.com/kunalpednekar/dumpster/internal/kb/memory"
 	llmmock "github.com/kunalpednekar/dumpster/internal/llm/mock"
@@ -38,6 +40,8 @@ func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.St
 		Communities:     communitymem.New(),
 		Themes:          thememem.New(),
 		ThemeSummarizer: theme.NewSummarizer(llmmock.NewGenerator("LABEL: Test Theme\nSUMMARY: A test summary.")),
+		Intrusion:       intrusionmem.New(),
+		IntrusionTester: intrusion.NewTester(llmmock.NewGenerator("")),
 		Searcher:        searchmock.NewSearcher(search.Result{}),
 		Inquiries:       inquirymem.New(),
 		Sessions:        sessionmock.New(),
