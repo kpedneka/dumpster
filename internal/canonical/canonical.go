@@ -97,6 +97,35 @@ type Repository interface {
 
 	// ListByKB returns every canonical entity in kbID belonging to userID.
 	ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*CanonicalEntity, error)
+
+	// FuzzyCandidates returns existing canonical entities in kbID (of the
+	// same entityType, excluding excludeID) whose normalized text is a
+	// whitespace-token subset of normalizedText, or vice versa -- e.g.
+	// "kade" is a token subset of "rosalind kade". Exact matches are
+	// excluded by construction (Canonicalize already merges those); this
+	// is specifically for the case Canonicalize structurally cannot catch:
+	// a real alias with different text (a surname alone, an abbreviation
+	// already spelled out elsewhere). Candidates, not confirmed merges --
+	// see ResolveAliases for the LLM-confirm step before anything merges.
+	FuzzyCandidates(ctx context.Context, userID, kbID uuid.UUID, normalizedText string, entityType entity.Type, excludeID uuid.UUID) ([]AliasCandidate, error)
+
+	// MergeInto repoints every entity currently linked to fromID onto toID,
+	// adds fromID's MentionCount/DocumentCount onto toID, and deletes
+	// fromID. Both must belong to userID; the caller (ResolveAliases) is
+	// responsible for having already confirmed this merge is correct --
+	// this method does no judgment of its own.
+	MergeInto(ctx context.Context, userID, fromID, toID uuid.UUID) error
+}
+
+// AliasCandidate is an existing canonical entity FuzzyCandidates proposes
+// as a possible alias of another -- not yet confirmed as the same
+// real-world entity.
+type AliasCandidate struct {
+	ID             uuid.UUID
+	CanonicalText  string
+	NormalizedText string
+	MentionCount   int
+	CreatedAt      time.Time
 }
 
 // ResolveNew canonicalizes whichever of mentions are not yet linked to a
@@ -105,7 +134,11 @@ type Repository interface {
 // Already-linked mentions are skipped, which is what makes this safe to
 // call again for the same document — e.g. from a redelivered queue job —
 // without double-counting a mention that was already resolved.
-func ResolveNew(ctx context.Context, repo Repository, entities entity.Repository, userID uuid.UUID, mentions []*entity.Entity) error {
+//
+// Returns the mention-ID -> canonical-ID map Canonicalize produced (nil if
+// there was nothing pending), so a caller can feed it straight into
+// ResolveAliases without a second lookup.
+func ResolveNew(ctx context.Context, repo Repository, entities entity.Repository, userID uuid.UUID, mentions []*entity.Entity) (map[uuid.UUID]uuid.UUID, error) {
 	var pending []*entity.Entity
 	for _, m := range mentions {
 		if m.CanonicalEntityID == nil {
@@ -113,13 +146,16 @@ func ResolveNew(ctx context.Context, repo Repository, entities entity.Repository
 		}
 	}
 	if len(pending) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	resolved, err := repo.Canonicalize(ctx, pending)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return entities.BulkSetCanonicalEntityID(ctx, userID, resolved)
+	if err := entities.BulkSetCanonicalEntityID(ctx, userID, resolved); err != nil {
+		return nil, err
+	}
+	return resolved, nil
 }

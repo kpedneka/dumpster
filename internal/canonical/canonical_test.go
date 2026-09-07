@@ -247,7 +247,7 @@ func TestResolveNew_SkipsAlreadyResolvedMentions(t *testing.T) {
 	stored := all[0]
 	stored.CanonicalEntityID = nil
 
-	if err := canonical.ResolveNew(context.Background(), repo, entities, userID, []*entity.Entity{stored, m2}); err != nil {
+	if _, err := canonical.ResolveNew(context.Background(), repo, entities, userID, []*entity.Entity{stored, m2}); err != nil {
 		t.Fatal(err)
 	}
 

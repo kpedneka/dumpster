@@ -3,7 +3,9 @@ package memory
 
 import (
 	"context"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -57,6 +59,7 @@ func (r *Repository) Canonicalize(_ context.Context, mentions []*entity.Entity) 
 				CanonicalText:  m.Text,
 				NormalizedText: normalized,
 				Type:           m.Type,
+				CreatedAt:      time.Now(),
 			}
 			r.rows[ce.ID] = ce
 		}
@@ -136,6 +139,82 @@ func (r *Repository) ListByKB(_ context.Context, userID, kbID uuid.UUID) ([]*can
 		}
 	}
 	return out, nil
+}
+
+// FuzzyCandidates returns existing canonical entities of entityType in
+// kbID (excluding excludeID) whose normalized text is a whitespace-token
+// subset of normalizedText, or vice versa.
+func (r *Repository) FuzzyCandidates(_ context.Context, userID, kbID uuid.UUID, normalizedText string, entityType entity.Type, excludeID uuid.UUID) ([]canonical.AliasCandidate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	target := tokenSet(normalizedText)
+	var out []canonical.AliasCandidate
+	for _, ce := range r.rows {
+		if ce.UserID != userID || ce.KBID != kbID || ce.Type != entityType || ce.ID == excludeID {
+			continue
+		}
+		if ce.NormalizedText == normalizedText {
+			continue // exact match, not a fuzzy case
+		}
+		other := tokenSet(ce.NormalizedText)
+		if isSubset(target, other) || isSubset(other, target) {
+			out = append(out, canonical.AliasCandidate{
+				ID: ce.ID, CanonicalText: ce.CanonicalText, NormalizedText: ce.NormalizedText,
+				MentionCount: ce.MentionCount, CreatedAt: ce.CreatedAt,
+			})
+		}
+	}
+	return out, nil
+}
+
+func tokenSet(s string) map[string]bool {
+	set := make(map[string]bool)
+	for _, tok := range strings.Fields(s) {
+		set[tok] = true
+	}
+	return set
+}
+
+func isSubset(a, b map[string]bool) bool {
+	for tok := range a {
+		if !b[tok] {
+			return false
+		}
+	}
+	return true
+}
+
+// MergeInto repoints fromID's mentions onto toID, adds its stats onto
+// toID, and deletes fromID.
+func (r *Repository) MergeInto(_ context.Context, userID, fromID, toID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	from, ok := r.rows[fromID]
+	if !ok || from.UserID != userID {
+		return canonical.ErrNotFound
+	}
+	to, ok := r.rows[toID]
+	if !ok || to.UserID != userID {
+		return canonical.ErrNotFound
+	}
+
+	to.MentionCount += from.MentionCount
+	to.DocumentCount += from.DocumentCount
+
+	for key, contributions := range r.docContribution {
+		if key.userID != userID {
+			continue
+		}
+		if cnt, ok := contributions[fromID]; ok {
+			contributions[toID] += cnt
+			delete(contributions, fromID)
+		}
+	}
+
+	delete(r.rows, fromID)
+	return nil
 }
 
 var _ canonical.Repository = (*Repository)(nil)
