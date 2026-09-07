@@ -22,8 +22,6 @@ import (
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/relation"
-	relationpg "github.com/kunalpednekar/dumpster/internal/relation/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	queryrouter "github.com/kunalpednekar/dumpster/internal/router"
@@ -112,15 +110,19 @@ func main() {
 		ThemeSummarizer:           theme.NewSummarizer(generator),
 		Intrusion:                 intrusionpg.New(txRunner),
 		IntrusionTester:           intrusion.NewTester(generator),
-		Relations:                 relationpg.New(txRunner),
-		RelationExtractor:         relation.NewExtractor(generator),
-		Searcher:                  searcher,
-		Inquiries:                 inquirypg.New(txRunner),
-		Sessions:                  sessionpg.New(pool),
-		Stats:                     statsRepo,
-		Instruments:               instruments,
-		SPADir:                    "web/dist",
-		CookieSecure:              cfg.CookieSecure,
+		// Relations/RelationExtractor deliberately left nil: POST
+		// /kbs/{id}/relations is unreachable (registerRelationRoutes only
+		// registers when both are set — see server.go) until relation
+		// extraction has its own before/after quality measurement and a
+		// decided place in the pipeline, tracked as a future idea rather
+		// than active work. The feature itself is untouched, just unwired.
+		Searcher:     searcher,
+		Inquiries:    inquirypg.New(txRunner),
+		Sessions:     sessionpg.New(pool),
+		Stats:        statsRepo,
+		Instruments:  instruments,
+		SPADir:       "web/dist",
+		CookieSecure: cfg.CookieSecure,
 	}
 
 	router := server.NewRouter(deps)
