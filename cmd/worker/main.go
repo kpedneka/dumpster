@@ -13,15 +13,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kunalpednekar/dumpster/internal/account"
 	"github.com/kunalpednekar/dumpster/internal/awsbatch"
+	"github.com/kunalpednekar/dumpster/internal/canonical"
 	canonicalpg "github.com/kunalpednekar/dumpster/internal/canonical/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	chunkpg "github.com/kunalpednekar/dumpster/internal/chunk/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
+	"github.com/kunalpednekar/dumpster/internal/crosslink"
+	crosslinkpg "github.com/kunalpednekar/dumpster/internal/crosslink/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	entityawsbatch "github.com/kunalpednekar/dumpster/internal/entity/awsbatch"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	llmawsbatch "github.com/kunalpednekar/dumpster/internal/llm/awsbatch"
 	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
@@ -153,7 +157,24 @@ func main() {
 		WithBatchSize(cfg.EntityExtractionBatchSize).
 		WithHeartbeat(q)
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
-	canonicalizationHandler := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo)
+
+	// Alias merging and cross-chunk linking now run automatically after
+	// every document, instead of requiring cmd/aliasresolve/cmd/crosslink
+	// to be run by hand -- both validated (graphrecall 0.75 -> 0.875)
+	// before this wiring landed. Both still call Anthropic directly here,
+	// same as the cmd/ tools always did; self-hosting either on GPU Batch
+	// compute is separate, deferred work (see the confirm-step hosting
+	// design and the "Fold cross-chunk linking + alias merging into
+	// automatic ingestion" dev board card) -- this is a contained swap
+	// behind the same llm.Generator interface whenever that happens, not
+	// a reason to hold off on shipping the wiring now.
+	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	aliasJudge := &canonical.LLMAliasJudge{Generator: generator}
+	crosslinkRepo := crosslinkpg.New(txRunner)
+	crosslinkExtractor := crosslink.NewExtractor(generator)
+	canonicalizationHandler := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo).
+		WithAliasJudge(aliasJudge).
+		WithCrossLink(crosslinkRepo, crosslinkExtractor, 0)
 
 	w := worker.New(q, docHandler, worker.Config{Instruments: instruments, Concurrency: cfg.WorkerConcurrency})
 	w.RegisterHandler(queue.JobTypeRegionClassification, regionHandler)
