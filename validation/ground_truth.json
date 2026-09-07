@@ -1,0 +1,233 @@
+{
+  "corpus_version": "1.0",
+  "design_notes": [
+    "All entities, people, organizations, and inventions in this corpus are fictional. This is deliberate: a judge LLM scoring multi-hop answers must not be able to fall back on real-world pretrained knowledge to 'pass' a question it never actually retrieved the right chunks for. Any question in this file should be unanswerable by an LLM that has not been given the relevant document text.",
+    "Seven topics, each self-contained except where a cross_document_pair explicitly links two documents within the same topic. No entity or fact intentionally spans two different topics — cross-topic connections found by the pipeline are false positives, not missed recall.",
+    "distractor_sport is a control topic: structurally similar to the others (two documents, a founding figure, an organization) but with zero intended links to any other topic. Its purpose is to catch false cross-topic linking once cross-chunk linking work begins, and to give the intrusion test a genuinely unrelated source of intruder entities.",
+    "difficulty levels on cross_document_pairs and multi_hop_questions: 'easy' = bridged by a literally-repeated entity name, should already be reachable via existing canonicalization + 2-hop graph traversal; 'medium' = bridged by an abbreviation/acronym introduced in-document; 'hard' = bridged only by a partial name (e.g. surname-only reference), requires the canonicalization fix (tiered fuzzy-match + LLM-confirm) before any graph traversal can help; 'hard_chain_depth' = a genuine relationship chain (3+ hops) between distinct, unambiguously-identified entities that TraversalLeg's hardcoded 2-hop limit cannot reach today -- no identity/alias question involved at all, which is what distinguishes this from 'hard': this is the target difficulty for Batch B's cross-chunk linking, not Batch C's canonicalization fix; 'stretch' = no shared entity name exists at all, connection requires matching semantic/descriptive content, not entity identity — on reflection this is actually a harder version of the identity question (is entity X the same real-world thing as entity Y, just established by description instead of a shared name), not a distinct-entity relationship question, so it is NOT a valid Batch B target either — it documents an outer boundary past both Batch B and Batch C, not a near-term pass target for either; 'easy_via_shared_context' = reachable today, but only because the two documents share an unrelated entity (e.g. a place name), not because the tested identity/alias actually resolves — a pair with this label does NOT validate or invalidate the canonicalization fix and should not be used to judge it.",
+    "Two seeding-mechanics lessons learned the hard way, both load-bearing for how graph-recall pairs must be designed: (1) graphrag's AggregationLeg/TraversalLeg seed via `LOWER(query) LIKE '%' || normalized_text || '%'` -- a LONG seed query will always substring-match any SHORTER canonical entity text contained within it (e.g. a full-name seed like 'Piotr Bellamy' always matches a bare 'Bellamy' canonical entity, regardless of whether canonicalization actually unified their identities), but a SHORT seed can never match a longer one. A pair meant to test alias/partial-name resolution must seed from the SHORT form to be valid -- seeding from the long form silently bypasses the very gap it's meant to test. (2) Co-occurrence is chunk-granular, not sentence-granular: for a short, single-chunk document, every entity in it co-occurs with every other entity in it. Two documents that share ANY other entity (most commonly a place name, from both documents describing the same setting) can bridge via that unrelated entity through TraversalLeg's 2-hop expansion, independent of whatever identity question a pair is trying to isolate. A pair meant to cleanly test one specific gap needs two documents that share literally nothing else -- see the sculpture topic, added for exactly this reason after architecture_2 turned out to be contaminated by the shared 'Corvenna' setting."
+  ],
+  "topics": [
+    {
+      "id": "maritime",
+      "documents": ["maritime/01_biography.txt", "maritime/02_product_history.txt", "maritime/03_influence_note.txt"],
+      "expected_community": "should cluster together, separate from all other topics"
+    },
+    {
+      "id": "botany",
+      "documents": ["botany/01_expedition_journal.txt", "botany/02_institute_history.txt"],
+      "expected_community": "should cluster together, separate from all other topics"
+    },
+    {
+      "id": "spice_trade",
+      "documents": ["spice_trade/01_merchant_chronicle.txt", "spice_trade/02_guild_records.txt"],
+      "expected_community": "should cluster together, separate from all other topics"
+    },
+    {
+      "id": "architecture",
+      "documents": ["architecture/01_city_planning_history.txt", "architecture/02_transit_retrospective.txt"],
+      "expected_community": "should cluster together, separate from all other topics"
+    },
+    {
+      "id": "music",
+      "documents": ["music/01_luthier_biography.txt", "music/02_instrument_legacy.txt"],
+      "expected_community": "should cluster together, separate from all other topics"
+    },
+    {
+      "id": "distractor_sport",
+      "documents": ["distractor_sport/01_origins.txt", "distractor_sport/02_modern_era.txt"],
+      "expected_community": "control group: should cluster together and share zero edges/relationships with any other topic"
+    },
+    {
+      "id": "sculpture",
+      "documents": ["sculpture/01_profile.txt", "sculpture/02_retrospective_note.txt"],
+      "expected_community": "deliberately minimal (too few entities to reliably form its own community) -- this topic exists solely to isolate the alias-resolution test in sculpture_1, not to participate meaningfully in intrusion-test community sampling",
+      "note": "documents are intentionally sparse and share no entity except the tested identity's two textual forms -- no place name, no date, no other noun repeated between them. This is what a genuinely isolated alias-resolution test requires; see design_notes for why architecture_2 couldn't be that test."
+    }
+  ],
+  "entities": [
+    {"id": "voss", "canonical_name": "Elena Voss", "type": "PERSON", "topic": "maritime", "docs": ["maritime/01_biography.txt"]},
+    {"id": "voss_gimbal", "canonical_name": "Voss Gimbal", "type": "PRODUCT", "topic": "maritime", "docs": ["maritime/01_biography.txt", "maritime/02_product_history.txt"], "note": "literal bridge entity between the two maritime documents"},
+    {"id": "meridian", "canonical_name": "Meridian Instrument Co.", "type": "ORG", "topic": "maritime", "docs": ["maritime/02_product_history.txt"]},
+    {"id": "steadfast_mount", "canonical_name": "Steadfast Compass Mount", "type": "PRODUCT", "topic": "maritime", "docs": ["maritime/02_product_history.txt", "maritime/03_influence_note.txt"], "note": "literal bridge entity between doc 2 and doc 3, added for maritime_2"},
+    {"id": "harbor_beacon", "canonical_name": "Harbor Beacon Leveler", "type": "PRODUCT", "topic": "maritime", "docs": ["maritime/03_influence_note.txt"], "note": "a distinct product, not an alias of anything -- exists specifically to test relationship-chain depth, not identity resolution"},
+
+    {"id": "solis", "canonical_name": "Amara Solis", "type": "PERSON", "topic": "botany", "docs": ["botany/01_expedition_journal.txt"]},
+    {"id": "orchid", "canonical_name": "Novaflora Ridge Orchid", "type": "SPECIES", "topic": "botany", "docs": ["botany/01_expedition_journal.txt"]},
+    {"id": "cbi", "canonical_name": "Continental Botanical Institute", "type": "ORG", "topic": "botany", "docs": ["botany/01_expedition_journal.txt", "botany/02_institute_history.txt"], "aliases_in_text": ["CBI"], "note": "literal bridge entity; also carries an in-document abbreviation (CBI) used only in doc 2"},
+    {"id": "solis_ferrand", "canonical_name": "Solis-Ferrand Institute", "type": "ORG", "topic": "botany", "docs": ["botany/02_institute_history.txt"], "note": "CBI's renamed identity after a later merger"},
+
+    {"id": "talia_renn", "canonical_name": "Talia Renn", "type": "PERSON", "topic": "spice_trade", "docs": ["spice_trade/01_merchant_chronicle.txt"]},
+    {"id": "wren_renn", "canonical_name": "Wren Renn", "type": "PERSON", "topic": "spice_trade", "docs": ["spice_trade/02_guild_records.txt"], "note": "deliberately unrelated person sharing a surname with talia_renn -- must NOT be merged with her"},
+    {"id": "aktg", "canonical_name": "The Ashwick Kestrel Traders Guild", "type": "ORG", "topic": "spice_trade", "docs": ["spice_trade/01_merchant_chronicle.txt", "spice_trade/02_guild_records.txt"], "aliases_in_text": ["AKTG"], "note": "literal bridge entity (full name appears once in doc 2 before switching to the AKTG abbreviation)"},
+
+    {"id": "bellamy", "canonical_name": "Piotr Bellamy", "type": "PERSON", "topic": "architecture", "docs": ["architecture/01_city_planning_history.txt"], "partial_reference_in_text": {"doc": "architecture/02_transit_retrospective.txt", "surface_form": "Bellamy"}},
+    {"id": "bellamy_span", "canonical_name": "Bellamy Span", "type": "INFRASTRUCTURE", "topic": "architecture", "docs": ["architecture/01_city_planning_history.txt", "architecture/02_transit_retrospective.txt"], "note": "literal bridge entity"},
+    {"id": "funicular", "canonical_name": "Corvenna Funicular", "type": "INFRASTRUCTURE", "topic": "architecture", "docs": ["architecture/02_transit_retrospective.txt"], "note": "attributed only to surname 'Bellamy' in-text, never 'Piotr Bellamy'"},
+
+    {"id": "thackeray", "canonical_name": "Ines Thackeray", "type": "PERSON", "topic": "music", "docs": ["music/01_luthier_biography.txt"]},
+    {"id": "thackeray_resonator", "canonical_name": "Thackeray Resonator", "type": "INSTRUMENT", "topic": "music", "docs": ["music/01_luthier_biography.txt"]},
+    {"id": "aurelia", "canonical_name": "Aurelia Harp-Guitar", "type": "INSTRUMENT", "topic": "music", "docs": ["music/02_instrument_legacy.txt"], "note": "no literal or aliased textual link to thackeray_resonator anywhere -- connection is descriptive/semantic only"},
+
+    {"id": "okafor", "canonical_name": "Denys Okafor", "type": "PERSON", "topic": "distractor_sport", "docs": ["distractor_sport/01_origins.txt"]},
+    {"id": "quoribal", "canonical_name": "Quoribal", "type": "GAME", "topic": "distractor_sport", "docs": ["distractor_sport/01_origins.txt", "distractor_sport/02_modern_era.txt"]},
+    {"id": "quoribal_federation", "canonical_name": "Quoribal Federation", "type": "ORG", "topic": "distractor_sport", "docs": ["distractor_sport/02_modern_era.txt"]},
+
+    {"id": "kade_full", "canonical_name": "Rosalind Kade", "type": "PERSON", "topic": "sculpture", "docs": ["sculpture/01_profile.txt"], "note": "full-name form, appears only in doc 1"},
+    {"id": "kade_short", "canonical_name": "Kade", "type": "PERSON", "topic": "sculpture", "docs": ["sculpture/02_retrospective_note.txt"], "note": "surname-only form of the same real-world person as kade_full, appears only in doc 2 -- the two are never in the same document, and no other entity is shared between the two docs, so this pair isolates alias resolution with nothing else able to bridge them"},
+    {"id": "hollow_verge", "canonical_name": "Hollow Verge", "type": "WORK_OF_ART", "topic": "sculpture", "docs": ["sculpture/01_profile.txt"]}
+  ],
+  "cross_document_pairs": [
+    {
+      "id": "maritime_1",
+      "entity_a": "voss",
+      "entity_b": "steadfast_mount",
+      "bridge_entity": "voss_gimbal",
+      "difficulty": "easy",
+      "expected_fact": "Elena Voss invented the Voss Gimbal in 1887; Meridian Instrument Co. acquired it in 1889 and renamed it the Steadfast Compass Mount in 1904.",
+      "hop_count": 2
+    },
+    {
+      "id": "maritime_2",
+      "entity_a": "voss",
+      "entity_b": "harbor_beacon",
+      "bridge_entity": "steadfast_mount",
+      "difficulty": "hard_chain_depth",
+      "expected_fact": "Elena Voss's Voss Gimbal (doc 1) was acquired and renamed the Steadfast Compass Mount (doc 2), whose self-leveling principle was later adapted into the Harbor Beacon Leveler (doc 3) -- a genuine three-hop chain: Voss -> Voss Gimbal -> Steadfast Compass Mount -> Harbor Beacon Leveler.",
+      "hop_count": 3,
+      "note": "the actual Batch B target, added because sculpture_1 turned out to test identity resolution (Batch C's job) rather than relationship-chain depth. Seeding from 'Elena Voss': AggregationLeg only reaches doc 1 itself (Voss's own chunk); TraversalLeg's hardcoded 2-hop expansion (seed -> hop1 -> hop1_expanded -> hop2) reaches doc 2 via the Voss Gimbal bridge but stops there -- it never takes a third hop from Steadfast Compass Mount to doc 3. No alias or identity ambiguity is involved anywhere in this chain (Harbor Beacon Leveler is a genuinely distinct product), so a pass here can only come from actually closing the chain-depth gap, not from canonicalization."
+    },
+    {
+      "id": "botany_1",
+      "entity_a": "orchid",
+      "entity_b": "solis_ferrand",
+      "bridge_entity": "cbi",
+      "difficulty": "easy",
+      "expected_fact": "The Continental Botanical Institute funded the expedition that discovered the Novaflora Ridge Orchid; the Institute was later renamed the Solis-Ferrand Institute after a merger.",
+      "hop_count": 2
+    },
+    {
+      "id": "spice_trade_1",
+      "entity_a": "talia_renn",
+      "entity_b": "aktg",
+      "bridge_entity": null,
+      "difficulty": "easy",
+      "expected_fact": "Talia Renn founded The Ashwick Kestrel Traders Guild (AKTG); it was eventually dissolved after a change in tariff law.",
+      "hop_count": 1,
+      "note": "entity_a directly founds entity_b -- tests whether extraction correctly picks up the guild's one full-name mention in doc 2 despite abbreviated use elsewhere"
+    },
+    {
+      "id": "architecture_1",
+      "entity_a": "bellamy",
+      "entity_b": "bellamy_span",
+      "bridge_entity": null,
+      "difficulty": "easy",
+      "expected_fact": "Piotr Bellamy designed the Bellamy Span.",
+      "hop_count": 1
+    },
+    {
+      "id": "architecture_2",
+      "entity_a": "bellamy",
+      "entity_b": "funicular",
+      "bridge_entity": null,
+      "difficulty": "easy_via_shared_context",
+      "requires_alias_resolution": true,
+      "expected_fact": "Piotr Bellamy also designed the Corvenna Funicular, referenced in doc 2 only by the surname 'Bellamy'.",
+      "hop_count": 1,
+      "note": "NOT a valid test of alias resolution, despite looking like one -- kept for honesty about what actually happens in a realistic KB, not as a pass/fail target. Two independent leaks make this pair reach doc 2 regardless of whether 'Bellamy' ever resolves to 'Piotr Bellamy': (1) seeding from entity_a's full canonical name ('Piotr Bellamy') always substring-matches the bare 'Bellamy' canonical entity via graphrag's LIKE-based seed matching, and (2) both documents repeatedly mention 'Corvenna' as their shared setting, which alone provides a 2-hop TraversalLeg bridge since co-occurrence is chunk-granular. See sculpture_1 for the actual, isolated test of this gap."
+    },
+    {
+      "id": "sculpture_1",
+      "entity_a": "kade_short",
+      "entity_b": "hollow_verge",
+      "bridge_entity": null,
+      "difficulty": "hard",
+      "requires_alias_resolution": true,
+      "expected_fact": "Kade, referenced by surname only in doc 2, is the same Rosalind Kade who created Hollow Verge in doc 1.",
+      "hop_count": 1,
+      "note": "the real test architecture_2 was meant to be. Seeds from the SHORT form ('Kade') specifically because a short seed can never substring-match a longer canonical text -- graphrag's LIKE-based seeding cannot silently bypass this one, unlike architecture_2. The two documents also share no other entity (no place, no date, nothing) so there's no unrelated bridge either. Expected to fail until the canonicalization fix (Batch C) ships; a pass today would indicate a bug, not progress."
+    },
+    {
+      "id": "music_1",
+      "entity_a": "thackeray_resonator",
+      "entity_b": "aurelia",
+      "bridge_entity": null,
+      "difficulty": "stretch",
+      "requires_semantic_inference": true,
+      "expected_fact": "The Aurelia Harp-Guitar is the modern name for Ines Thackeray's Thackeray Resonator, identifiable only by matching physical description (twelve-string, box-bodied, layered internal baffle system), never by a shared name.",
+      "hop_count": null,
+      "note": "no shared entity name exists anywhere between the two documents. This case cannot be closed by a bridge-entity-based cross-chunk linking pass -- it marks the outer boundary of that approach, not a target for Batch B to pass."
+    }
+  ],
+  "multi_hop_questions": [
+    {
+      "id": "q_maritime",
+      "question": "What is the modern name of the compass device invented by Elena Voss?",
+      "expected_answer": "The Steadfast Compass Mount (originally called the Voss Gimbal).",
+      "required_documents": ["maritime/01_biography.txt", "maritime/02_product_history.txt"],
+      "pair_id": "maritime_1"
+    },
+    {
+      "id": "q_maritime_influence",
+      "question": "What later invention was influenced by the design of the Steadfast Compass Mount?",
+      "expected_answer": "The Harbor Beacon Leveler, which adapted the compass mount's weighted-ring self-leveling principle to stabilize a rotating lighthouse lens.",
+      "required_documents": ["maritime/01_biography.txt", "maritime/02_product_history.txt", "maritime/03_influence_note.txt"],
+      "pair_id": "maritime_2",
+      "note": "the Batch B target question -- expected to fail on retrieval today via the graph legs specifically (see maritime_2's note), though hybrid vector/keyword search may still find doc 3 independently, same caveat as every other pair in this fixture"
+    },
+    {
+      "id": "q_botany",
+      "question": "Which institute funded the discovery of the Novaflora Ridge Orchid, and what is it called today?",
+      "expected_answer": "The Continental Botanical Institute (CBI), which later merged with the Ferrand Herbarium and is now called the Solis-Ferrand Institute.",
+      "required_documents": ["botany/01_expedition_journal.txt", "botany/02_institute_history.txt"],
+      "pair_id": "botany_1"
+    },
+    {
+      "id": "q_spice_trade",
+      "question": "What happened to the trading organization founded by Talia Renn?",
+      "expected_answer": "The Ashwick Kestrel Traders Guild (AKTG) was eventually dissolved after a change in tariff law made its shared-warehouse arrangement impractical.",
+      "required_documents": ["spice_trade/01_merchant_chronicle.txt", "spice_trade/02_guild_records.txt"],
+      "pair_id": "spice_trade_1"
+    },
+    {
+      "id": "q_architecture",
+      "question": "Besides the Bellamy Span, what other structure did its designer build in Corvenna?",
+      "expected_answer": "The Corvenna Funicular, an incline railway connecting the Verrow district to downtown.",
+      "required_documents": ["architecture/01_city_planning_history.txt", "architecture/02_transit_retrospective.txt"],
+      "pair_id": "architecture_2",
+      "note": "not a reliable alias-resolution signal -- likely to pass regardless of canonicalization, via the shared 'Corvenna' setting and full-name seed substring-matching. See architecture_2's note. Use q_sculpture to judge the canonicalization fix instead."
+    },
+    {
+      "id": "q_sculpture",
+      "question": "What is Kade's best-known work?",
+      "expected_answer": "Hollow Verge, a bronze sculpture by Rosalind Kade.",
+      "required_documents": ["sculpture/01_profile.txt", "sculpture/02_retrospective_note.txt"],
+      "pair_id": "sculpture_1",
+      "note": "expected to fail until the canonicalization partial-name fix ships, since 'Kade' (doc 2) never resolves to 'Rosalind Kade' (doc 1) today, and unlike architecture_2 there's no unrelated shared entity to leak a false pass"
+    },
+    {
+      "id": "q_music",
+      "question": "Who originally created the instrument now known as the Aurelia Harp-Guitar?",
+      "expected_answer": "Ines Thackeray, who built it under the name the Thackeray Resonator.",
+      "required_documents": ["music/01_luthier_biography.txt", "music/02_instrument_legacy.txt"],
+      "pair_id": "music_1",
+      "note": "stretch case -- expected to still fail after Batch B's bridge-entity-based linking pass; useful as a ceiling marker, not a near-term pass target"
+    },
+    {
+      "id": "q_distractor",
+      "question": "Who wrote the founding document of Quoribal, and when was its governing federation established?",
+      "expected_answer": "Denys Okafor wrote the founding pamphlet; the Quoribal Federation was established afterward, when representatives from several coastal cities met to standardize the sport's rules.",
+      "required_documents": ["distractor_sport/01_origins.txt", "distractor_sport/02_modern_era.txt"],
+      "pair_id": null,
+      "note": "same-topic control question. Also a precision check: retrieved context for this question should never include entities from any other topic -- if it does, that's evidence of false cross-topic linking introduced by later graph changes, not a recall win."
+    }
+  ],
+  "canonicalization_test_cases": [
+    {"text_a": "Continental Botanical Institute", "text_b": "CBI", "type": "ORG", "should_merge": true, "reason": "explicit in-document abbreviation of the full name"},
+    {"text_a": "The Ashwick Kestrel Traders Guild", "text_b": "AKTG", "type": "ORG", "should_merge": true, "reason": "explicit in-document abbreviation of the full name"},
+    {"text_a": "Piotr Bellamy", "text_b": "Bellamy", "type": "PERSON", "should_merge": true, "reason": "surname-only reference to the same person established elsewhere in the same document set; fails under today's exact-normalized-text-match canonicalization"},
+    {"text_a": "Rosalind Kade", "text_b": "Kade", "type": "PERSON", "should_merge": true, "reason": "same surname-only pattern as Piotr Bellamy/Bellamy, but in a topic with no other shared entity -- use this pair (via sculpture_1) to validate the canonicalization fix's effect on graph-recall, not architecture_2"},
+    {"text_a": "Talia Renn", "text_b": "Wren Renn", "type": "PERSON", "should_merge": false, "reason": "different people who happen to share a surname; a naive substring/token-subset fuzzy matcher could wrongly propose merging them -- the LLM-confirm step must reject this candidate"},
+    {"text_a": "Ines Thackeray", "text_b": "Thackeray Resonator", "type": "mixed (PERSON vs INSTRUMENT)", "should_merge": false, "reason": "shares a surname-derived token but is a different entity type entirely; must never merge across types"}
+  ]
+}

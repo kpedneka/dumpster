@@ -11,7 +11,7 @@ import (
 // IdleTimeout is the period of inactivity after which a session is hard-deleted.
 // Exported so other packages (e.g. the in-app banner endpoint) can compute the
 // same expiry boundary the sweep uses, rather than duplicating the value.
-const IdleTimeout = 2 * time.Hour
+const IdleTimeout = 6 * time.Hour
 
 // HardCap is the maximum session lifetime, anchored at CreatedAt, regardless
 // of activity. Exported for the same reason as IdleTimeout.
