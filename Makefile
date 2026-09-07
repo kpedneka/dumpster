@@ -6,7 +6,7 @@ COVERAGE_THRESHOLD := 80
 # excluded from the unit-test coverage gate. They are exercised separately
 # by integration tests that run against live infrastructure.
 # This list must stay in sync with .github/workflows/ci.yml.
-UNIT_COVERPKG := ./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/manifest/layout,./internal/llm,./internal/llm/mock,./internal/llm/inference,./internal/llm/anthropic,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/entity/awsbatch,./internal/awsbatch/mock,./internal/canonical,./internal/canonical/memory,./internal/canonicalize,./internal/inquiry,./internal/inquiry/memory,./internal/reembed,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock,./internal/stats,./internal/stats/memory,./internal/community,./internal/community/memory,./internal/theme,./internal/theme/memory,./internal/intrusion,./internal/intrusion/memory
+UNIT_COVERPKG := ./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/manifest/layout,./internal/llm,./internal/llm/mock,./internal/llm/inference,./internal/llm/anthropic,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/entity/awsbatch,./internal/awsbatch/mock,./internal/canonical,./internal/canonical/memory,./internal/canonicalize,./internal/inquiry,./internal/inquiry/memory,./internal/reembed,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock,./internal/stats,./internal/stats/memory,./internal/community,./internal/community/memory,./internal/theme,./internal/theme/memory,./internal/intrusion,./internal/intrusion/memory,./internal/relation,./internal/relation/memory,./internal/graphrecall,./internal/evalcorpus,./internal/multihopqa,./internal/crosslink,./internal/crosslink/memory
 
 # UNIT_TESTPKG: test packages that exercise UNIT_COVERPKG (excludes pgstore and other infra).
 # manifest/layout and llm/inference are HTTP-client adapters tested with
@@ -30,7 +30,10 @@ UNIT_TESTPKG := ./internal/auth ./internal/account ./internal/config ./internal/
                 ./internal/ratelimit ./internal/ratelimit/memory \
                 ./internal/stats ./internal/stats/memory \
                 ./internal/community ./internal/community/memory ./internal/theme ./internal/theme/memory \
-                ./internal/intrusion ./internal/intrusion/memory
+                ./internal/intrusion ./internal/intrusion/memory \
+                ./internal/relation ./internal/relation/memory \
+                ./internal/graphrecall ./internal/evalcorpus ./internal/multihopqa \
+                ./internal/crosslink ./internal/crosslink/memory
 
 build:
 	go build ./cmd/... ./internal/...

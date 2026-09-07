@@ -98,11 +98,12 @@ LIMIT  $4`
 }
 
 // TraversalLeg returns up to k chunks reachable via two-hop traversal from
-// mentions of a canonical entity whose normalized text appears in query. It
-// follows seed → hop-1 neighbors → hop-1's *other* mentions of the same
-// canonical identity (possibly in other chunks/documents entirely) → their
-// co-occurring chunks, excluding chunks already returned by the aggregation
-// leg (seed co-occurrence chunks).
+// mentions of a canonical entity whose normalized text appears in query,
+// plus any chunk reachable via a confirmed internal/crosslink relationship
+// from the seed. It follows seed → hop-1 neighbors → hop-1's *other*
+// mentions of the same canonical identity (possibly in other
+// chunks/documents entirely) → their co-occurring chunks, excluding chunks
+// already returned by the aggregation leg (seed co-occurrence chunks).
 //
 // The canonical expansion between hop-1 and hop-2 is the fix for this leg's
 // previous behavior: entity_edges is chunk-scoped, and entity mentions are
@@ -119,6 +120,15 @@ LIMIT  $4`
 // expansion for that specific mention on this call; the hybrid legs still
 // cover the document in the meantime, and a re-evaluate picks up the graph
 // boost once canonicalization catches up.
+//
+// cross_linked_chunk_ids is the reason this leg can reach further than two
+// hops at all: internal/crosslink pre-computes relationships between
+// canonical entities connected by chains longer than this query's own
+// two-hop reach can traverse live, storing them as flat
+// cross_chunk_edges rows keyed on the canonical identity pair (not any one
+// chunk, since the relationship doesn't belong to just one side). Once
+// stored, reaching the other side is a single lookup here, not another
+// live traversal -- the expensive chain-finding already happened offline.
 func (s *Store) TraversalLeg(ctx context.Context, kbID uuid.UUID, query string, k int) ([]retrieval.ScoredChunk, error) {
 	userID, ok := auth.UserIDFromContext(ctx)
 	if !ok {
@@ -176,10 +186,35 @@ hop2_chunk_ids AS (
     WHERE  ee2.kb_id   = $1
       AND  ee2.user_id = $2
       AND  ee2.chunk_id NOT IN (SELECT chunk_id FROM seed_chunk_ids)
+),
+cross_linked AS (
+    SELECT DISTINCT
+        CASE WHEN cce.canonical_entity_a_id IN (SELECT id FROM seed_canonicals)
+             THEN cce.canonical_entity_b_id
+             ELSE cce.canonical_entity_a_id
+        END AS other_canonical_id
+    FROM   cross_chunk_edges cce
+    WHERE  cce.kb_id   = $1
+      AND  cce.user_id = $2
+      AND  cce.relation_type <> 'none'
+      AND  (cce.canonical_entity_a_id IN (SELECT id FROM seed_canonicals)
+             OR cce.canonical_entity_b_id IN (SELECT id FROM seed_canonicals))
+),
+cross_linked_chunk_ids AS (
+    SELECT DISTINCT em.chunk_id
+    FROM   entities em
+    JOIN   cross_linked cl ON em.canonical_entity_id = cl.other_canonical_id
+    WHERE  em.kb_id = $1 AND em.user_id = $2
+      AND  em.chunk_id NOT IN (SELECT chunk_id FROM seed_chunk_ids)
+),
+reachable_chunk_ids AS (
+    SELECT chunk_id FROM hop2_chunk_ids
+    UNION
+    SELECT chunk_id FROM cross_linked_chunk_ids
 )
 SELECT DISTINCT c.id, c.document_id, c.kb_id, c.user_id,
                 c.ordinal, c.text, c.token_count, c.char_start, c.char_end
-FROM   hop2_chunk_ids h2
+FROM   reachable_chunk_ids h2
 JOIN   chunks c ON c.id = h2.chunk_id
 LIMIT  $4`
 

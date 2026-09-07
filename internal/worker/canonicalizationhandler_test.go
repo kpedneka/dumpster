@@ -8,8 +8,11 @@ import (
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	canonicalmem "github.com/kunalpednekar/dumpster/internal/canonical/memory"
+	"github.com/kunalpednekar/dumpster/internal/crosslink"
+	crosslinkmem "github.com/kunalpednekar/dumpster/internal/crosslink/memory"
 	docmem "github.com/kunalpednekar/dumpster/internal/document/memory"
 	entitymem "github.com/kunalpednekar/dumpster/internal/entity/memory"
+	llmmock "github.com/kunalpednekar/dumpster/internal/llm/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
@@ -115,6 +118,87 @@ func TestCanonicalizationHandler_OnFailed_DoesNotErrorOrPanic(t *testing.T) {
 
 	job := &queue.Job{ID: uuid.New(), Type: queue.JobTypeCanonicalization, DocumentID: uuid.New(), UserID: uuid.New()}
 	h.OnFailed(context.Background(), job) // must not panic
+}
+
+func TestCanonicalizationHandler_Handle_CrossLinkConfirmsCandidate(t *testing.T) {
+	docs := docmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	crosslinkRepo := crosslinkmem.New()
+
+	job, userID := seedEdgeJob(t, docs, entities, 1, 1)
+	ctx := auth.WithUserID(context.Background(), userID)
+	doc, err := docs.Get(ctx, userID, job.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entityAID, entityBID := uuid.New(), uuid.New()
+	crosslinkRepo.SeedCandidates(userID, doc.KBID, []crosslink.Candidate{
+		{
+			EntityAID: entityAID, EntityAText: "Rosalind Kade", ChunkAID: uuid.New(), ChunkAText: "Rosalind Kade led the expedition.",
+			EntityBID: entityBID, EntityBText: "the Harbor Beacon Leveler", ChunkBID: uuid.New(), ChunkBText: "The Harbor Beacon Leveler was her final instrument.",
+		},
+	})
+	extractor := crosslink.NewExtractor(llmmock.NewGenerator("CANDIDATE: 1\nRELATION: designed"))
+
+	h := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo).
+		WithCrossLink(crosslinkRepo, extractor, 0)
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	rel, ok := crosslinkRepo.Resolved(userID, entityAID, entityBID)
+	if !ok {
+		t.Fatal("expected the seeded candidate to be resolved")
+	}
+	if rel != "designed" {
+		t.Errorf("RelationType: got %q, want %q", rel, "designed")
+	}
+}
+
+func TestCanonicalizationHandler_Handle_CrossLinkZeroCandidates_NoOp(t *testing.T) {
+	docs := docmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	crosslinkRepo := crosslinkmem.New()
+
+	job, userID := seedEdgeJob(t, docs, entities, 1, 1)
+	ctx := auth.WithUserID(context.Background(), userID)
+
+	extractor := crosslink.NewExtractor(llmmock.NewGenerator("should never be called"))
+	h := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo).
+		WithCrossLink(crosslinkRepo, extractor, 0)
+
+	if err := h.Handle(ctx, job); err != nil {
+		t.Fatalf("Handle with no candidates: %v", err)
+	}
+}
+
+func TestCanonicalizationHandler_Handle_CrossLinkExtractError_Propagates(t *testing.T) {
+	docs := docmem.New()
+	entities := entitymem.New()
+	canonicalRepo := canonicalmem.New()
+	crosslinkRepo := crosslinkmem.New()
+
+	job, userID := seedEdgeJob(t, docs, entities, 1, 1)
+	ctx := auth.WithUserID(context.Background(), userID)
+	doc, err := docs.Get(ctx, userID, job.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crosslinkRepo.SeedCandidates(userID, doc.KBID, []crosslink.Candidate{
+		{EntityAID: uuid.New(), EntityAText: "A", ChunkAID: uuid.New(), ChunkAText: "a",
+			EntityBID: uuid.New(), EntityBText: "B", ChunkBID: uuid.New(), ChunkBText: "b"},
+	})
+	extractor := crosslink.NewExtractor(llmmock.NewErrorGenerator("generator unavailable"))
+
+	h := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo).
+		WithCrossLink(crosslinkRepo, extractor, 0)
+	if err := h.Handle(ctx, job); err == nil {
+		t.Fatal("expected an error when the extractor's generator fails")
+	}
 }
 
 func TestCanonicalizationHandler_ImplementsHandler(t *testing.T) {

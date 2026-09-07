@@ -195,4 +195,73 @@ func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*canoni
 	return results, nil
 }
 
+// FuzzyCandidates returns existing canonical entities of entityType in
+// kbID (excluding excludeID) whose normalized text is a whitespace-token
+// subset of normalizedText, or vice versa -- e.g. "kade" is a token
+// subset of "rosalind kade". Postgres array containment (<@) does the
+// subset check both directions; string_to_array splits each normalized
+// text on whitespace the same way canonical.Normalize collapsed it.
+func (s *Store) FuzzyCandidates(ctx context.Context, userID, kbID uuid.UUID, normalizedText string, entityType entity.Type, excludeID uuid.UUID) ([]canonical.AliasCandidate, error) {
+	var result []canonical.AliasCandidate
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, canonical_text, normalized_text, mention_count, created_at
+			FROM   canonical_entities
+			WHERE  kb_id = $1 AND user_id = $2 AND entity_type = $3 AND id <> $4
+			  AND  normalized_text <> $5
+			  AND  (
+			         string_to_array($5, ' ') <@ string_to_array(normalized_text, ' ')
+			      OR string_to_array(normalized_text, ' ') <@ string_to_array($5, ' ')
+			      )`,
+			kbID, userID, string(entityType), excludeID, normalizedText,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c canonical.AliasCandidate
+			if err := rows.Scan(&c.ID, &c.CanonicalText, &c.NormalizedText, &c.MentionCount, &c.CreatedAt); err != nil {
+				return err
+			}
+			result = append(result, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("canonical: fuzzy candidates: %w", err)
+	}
+	return result, nil
+}
+
+// MergeInto repoints every entity currently linked to fromID onto toID,
+// adds fromID's stats onto toID, and deletes fromID.
+func (s *Store) MergeInto(ctx context.Context, userID, fromID, toID uuid.UUID) error {
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE entities SET canonical_entity_id = $1 WHERE user_id = $2 AND canonical_entity_id = $3`,
+			toID, userID, fromID,
+		); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE canonical_entities ce
+			 SET    mention_count  = ce.mention_count + moved.mention_count,
+			        document_count = ce.document_count + moved.document_count,
+			        updated_at     = now()
+			 FROM   (SELECT mention_count, document_count FROM canonical_entities WHERE id = $1 AND user_id = $2) moved
+			 WHERE  ce.id = $3 AND ce.user_id = $2`,
+			fromID, userID, toID,
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM canonical_entities WHERE id = $1 AND user_id = $2`, fromID, userID)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("canonical: merge %s into %s: %w", fromID, toID, err)
+	}
+	return nil
+}
+
 var _ canonical.Repository = (*Store)(nil)

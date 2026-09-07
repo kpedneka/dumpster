@@ -19,6 +19,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/ratelimit"
+	"github.com/kunalpednekar/dumpster/internal/relation"
 	"github.com/kunalpednekar/dumpster/internal/search"
 	"github.com/kunalpednekar/dumpster/internal/session"
 	"github.com/kunalpednekar/dumpster/internal/stats"
@@ -60,7 +61,14 @@ type Deps struct {
 	// dependency for it.
 	Intrusion       intrusion.Repository
 	IntrusionTester *intrusion.Tester
-	Searcher        search.Searcher
+	// Relations and RelationExtractor are optional together; when either
+	// is nil, POST /kbs/{id}/relations is not registered.
+	Relations         relation.Repository
+	RelationExtractor *relation.Extractor
+	// MaxRelationChunksPerRun bounds POST /kbs/{id}/relations; 0 defaults
+	// (see relationhandler.go's defaultMaxRelationChunksPerRun).
+	MaxRelationChunksPerRun int
+	Searcher                search.Searcher
 	// Inquiries is optional; when nil, search results are not persisted as
 	// Inquiry history (search itself still works — persistence is a
 	// convenience layered on top, not a dependency search needs).
@@ -119,6 +127,9 @@ func NewRouter(deps Deps) http.Handler {
 	}
 	if deps.Themes != nil && deps.Intrusion != nil && deps.IntrusionTester != nil {
 		registerIntrusionRoutes(authed, deps.KBs, deps.Themes, deps.Intrusion, deps.IntrusionTester)
+	}
+	if deps.Relations != nil && deps.RelationExtractor != nil {
+		registerRelationRoutes(authed, deps.KBs, deps.Relations, deps.RelationExtractor, deps.MaxRelationChunksPerRun)
 	}
 
 	handler := auth.Middleware(deps.Sessions, deps.CookieSecure, deps.Stats, authed)

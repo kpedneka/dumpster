@@ -110,13 +110,19 @@ func main() {
 		ThemeSummarizer:           theme.NewSummarizer(generator),
 		Intrusion:                 intrusionpg.New(txRunner),
 		IntrusionTester:           intrusion.NewTester(generator),
-		Searcher:                  searcher,
-		Inquiries:                 inquirypg.New(txRunner),
-		Sessions:                  sessionpg.New(pool),
-		Stats:                     statsRepo,
-		Instruments:               instruments,
-		SPADir:                    "web/dist",
-		CookieSecure:              cfg.CookieSecure,
+		// Relations/RelationExtractor deliberately left nil: POST
+		// /kbs/{id}/relations is unreachable (registerRelationRoutes only
+		// registers when both are set — see server.go) until relation
+		// extraction has its own before/after quality measurement and a
+		// decided place in the pipeline, tracked as a future idea rather
+		// than active work. The feature itself is untouched, just unwired.
+		Searcher:     searcher,
+		Inquiries:    inquirypg.New(txRunner),
+		Sessions:     sessionpg.New(pool),
+		Stats:        statsRepo,
+		Instruments:  instruments,
+		SPADir:       "web/dist",
+		CookieSecure: cfg.CookieSecure,
 	}
 
 	router := server.NewRouter(deps)

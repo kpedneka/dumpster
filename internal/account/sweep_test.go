@@ -87,8 +87,8 @@ func TestSweep_hardCapExpiry_deletesEvenIfRecentlyActive(t *testing.T) {
 func TestSweep_idleExpiry_deletesIfInactive(t *testing.T) {
 	sessions := sessionmock.New()
 	sess := seedWith(t, sessions,
-		fixedNow.Add(-1*time.Hour),          // well within HardCap
-		fixedNow.Add(-account.IdleTimeout),  // exactly at idle boundary
+		fixedNow.Add(-1*time.Hour),         // well within HardCap
+		fixedNow.Add(-account.IdleTimeout), // exactly at idle boundary
 		nil,
 	)
 	deleter := accountmock.NewDeleter()
@@ -112,7 +112,7 @@ func TestSweep_touch_resetsIdleClock(t *testing.T) {
 	sessions := sessionmock.New()
 	sess := seedWith(t, sessions,
 		fixedNow.Add(-1*time.Hour),
-		fixedNow.Add(-(account.IdleTimeout-time.Minute)), // 1 min before idle expiry
+		fixedNow.Add(-(account.IdleTimeout - time.Minute)), // 1 min before idle expiry
 		nil,
 	)
 	deleter := accountmock.NewDeleter()
@@ -135,8 +135,8 @@ func TestSweep_touch_resetsIdleClock(t *testing.T) {
 func TestSweep_warning_nearHardCap(t *testing.T) {
 	sessions := sessionmock.New()
 	sess := seedWith(t, sessions,
-		fixedNow.Add(-(account.HardCap-10*time.Minute)), // 10 min from hard cap
-		fixedNow.Add(-1*time.Minute),                    // recently active
+		fixedNow.Add(-(account.HardCap - 10*time.Minute)), // 10 min from hard cap
+		fixedNow.Add(-1*time.Minute),                      // recently active
 		nil,
 	)
 	deleter := accountmock.NewDeleter()
@@ -164,7 +164,7 @@ func TestSweep_warning_nearIdleTimeout(t *testing.T) {
 	sessions := sessionmock.New()
 	sess := seedWith(t, sessions,
 		fixedNow.Add(-1*time.Hour),                            // well within HardCap
-		fixedNow.Add(-(account.IdleTimeout-10*time.Minute)),   // 10 min from idle expiry
+		fixedNow.Add(-(account.IdleTimeout - 10*time.Minute)), // 10 min from idle expiry
 		nil,
 	)
 	deleter := accountmock.NewDeleter()
@@ -189,7 +189,7 @@ func TestSweep_warning_idempotency(t *testing.T) {
 	warnedAt := fixedNow.Add(-5 * time.Minute)
 	sessions := sessionmock.New()
 	sess := seedWith(t, sessions,
-		fixedNow.Add(-(account.HardCap-10*time.Minute)),
+		fixedNow.Add(-(account.HardCap - 10*time.Minute)),
 		fixedNow.Add(-1*time.Minute),
 		&warnedAt,
 	)
@@ -244,7 +244,7 @@ func TestSweep_bothClocks_deletesOnce(t *testing.T) {
 func TestSweep_warningIdempotency_acrossRuns(t *testing.T) {
 	sessions := sessionmock.New()
 	sess := seedWith(t, sessions,
-		fixedNow.Add(-(account.HardCap-10*time.Minute)),
+		fixedNow.Add(-(account.HardCap - 10*time.Minute)),
 		fixedNow.Add(-1*time.Minute),
 		nil,
 	)
@@ -279,8 +279,8 @@ func TestSweep_warningIdempotency_acrossRuns(t *testing.T) {
 func TestSweep_mixedBatch(t *testing.T) {
 	sessions := sessionmock.New()
 	_ = seedWith(t, sessions, fixedNow.Add(-1*time.Hour), fixedNow.Add(-30*time.Minute), nil) // fresh
-	_ = seedWith(t, sessions,                                                                   // near hard cap → warn
-		fixedNow.Add(-(account.HardCap-10*time.Minute)),
+	_ = seedWith(t, sessions,                                                                 // near hard cap → warn
+		fixedNow.Add(-(account.HardCap - 10*time.Minute)),
 		fixedNow.Add(-1*time.Minute),
 		nil,
 	)

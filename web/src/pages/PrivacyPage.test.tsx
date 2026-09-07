@@ -22,7 +22,7 @@ describe('PrivacyPage', () => {
 
   it('states the exact retention durations from the sweep constants', () => {
     renderPrivacyPage()
-    expect(screen.getByText(/2 hours/i)).toBeInTheDocument()
+    expect(screen.getByText(/6 hours/i)).toBeInTheDocument()
     expect(screen.getByText(/24 hours/i)).toBeInTheDocument()
   })
 

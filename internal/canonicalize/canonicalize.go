@@ -107,7 +107,7 @@ func (b *Backfill) backfillKB(ctx context.Context, userID, kbID uuid.UUID, resul
 			continue
 		}
 
-		if err := canonical.ResolveNew(ctx, b.canonical, b.entities, userID, mentions); err != nil {
+		if _, err := canonical.ResolveNew(ctx, b.canonical, b.entities, userID, mentions); err != nil {
 			result.Errors = append(result.Errors, fmt.Errorf("resolve canonical entities for document %s: %w", d.ID, err))
 			continue
 		}

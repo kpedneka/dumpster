@@ -23,7 +23,13 @@ type GraphNode = {
   degree: number
   document_count: number
 }
-type GraphEdge = { source: string; target: string; weight: number; document_count: number }
+type GraphEdge = {
+  source: string
+  target: string
+  weight: number
+  document_count: number
+  relation_type: string | null
+}
 
 // SHAPE_BY_TYPE gives entity_type its own visual channel, independent of
 // the community-driven fill color -- color already encodes "which
@@ -188,6 +194,12 @@ export function GraphPanel({ kbId }: { kbId: string }) {
           target: e.target,
           weight: e.weight,
           documentCount: e.document_count,
+          // Only ever a real relationship label ("founded", "works at") or
+          // absent -- relation.NoneRelation ("no relationship found") is
+          // filtered out server-side before this ever reaches the graph
+          // response, so there's nothing here worth distinguishing from
+          // "not yet reviewed."
+          relationType: e.relation_type,
         },
       })
     }
@@ -293,7 +305,24 @@ export function GraphPanel({ kbId }: { kbId: string }) {
         },
         {
           selector: 'edge.revealed',
-          style: { content: 'data(weight)', 'font-size': 8, color: '#64748b', 'text-background-color': '#fff', 'text-background-opacity': 0.8 },
+          style: {
+            // A real relationship label ("founded", "works at") is what
+            // this whole graph was missing -- show it when
+            // internal/relation has actually reviewed this pair. Falls
+            // back to the raw weight for the (likely majority, until a KB
+            // has been run through relation extraction) edges that
+            // haven't been reviewed yet.
+            // Cytoscape's type defs constrain every 'content' mapper to
+            // NodeSingular regardless of selector -- .data() exists on both
+            // node and edge singulars at runtime, so this is safe despite
+            // the annotation mismatch an explicit EdgeSingular type would
+            // otherwise hit.
+            content: (ele) => (ele.data('relationType') as string | null) ?? String(ele.data('weight')),
+            'font-size': 8,
+            color: '#64748b',
+            'text-background-color': '#fff',
+            'text-background-opacity': 0.8,
+          },
         },
         {
           selector: '.dimmed',

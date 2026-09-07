@@ -51,9 +51,11 @@ func NewDocumentHandler(
 	}
 }
 
-// WithEntityExtractionPublisher wires publisher into h so that, after a
-// document is successfully indexed, a distinct entity-extraction job is
-// queued for it behind the existing queue/job-stage seam. This keeps entity
+// WithEntityExtractionPublisher wires publisher into h so that a distinct
+// entity-extraction job can be queued for a document behind the existing
+// queue/job-stage seam. Queued from inside process(), right after chunks
+// are persisted and before the embed call — see process()'s doc comment
+// for why — not after the document reaches Indexed. This keeps entity
 // extraction inline in the ingestion flow without coupling DocumentHandler
 // to how extraction itself works.
 func (h *DocumentHandler) WithEntityExtractionPublisher(publisher queue.Publisher) *DocumentHandler {

@@ -194,7 +194,10 @@ func (h *communityHandler) graph(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for i, e := range view.Edges {
-		resp.Edges[i] = graphEdgeResponse{Source: e.Source, Target: e.Target, Weight: e.Weight, DocumentCount: e.DocumentCount}
+		resp.Edges[i] = graphEdgeResponse{
+			Source: e.Source, Target: e.Target, Weight: e.Weight,
+			DocumentCount: e.DocumentCount, RelationType: e.RelationType,
+		}
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -325,6 +328,7 @@ type graphEdgeResponse struct {
 	Target        uuid.UUID `json:"target"`
 	Weight        float64   `json:"weight"`
 	DocumentCount int       `json:"document_count"`
+	RelationType  *string   `json:"relation_type"`
 }
 
 type graphViewResponse struct {

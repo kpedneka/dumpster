@@ -396,6 +396,25 @@ components:
             $ref: "#/components/schemas/IntrusionTestCommunity"
       required: [computed_at, score, tested_count, communities]
 
+    RelationExtractionResult:
+      type: object
+      description: >-
+        Summary of one relation-extraction run: how many not-yet-checked
+        co-occurrence edges were reviewed, and how many of those the model
+        found an actual relationship for versus none. pairs_reviewed can
+        exceed relations_found + none_count if the model's response didn't
+        address every pair -- those are simply left for a later run.
+      properties:
+        chunks_reviewed:
+          type: integer
+        pairs_reviewed:
+          type: integer
+        relations_found:
+          type: integer
+        none_count:
+          type: integer
+      required: [chunks_reviewed, pairs_reviewed, relations_found, none_count]
+
     GraphNode:
       type: object
       description: >-
@@ -440,7 +459,15 @@ components:
           description: >-
             Number of distinct documents whose chunks contributed a
             co-occurrence to this pair.
-      required: [source, target, weight, document_count]
+        relation_type:
+          type: string
+          nullable: true
+          description: >-
+            The actual relationship found between these two entities (e.g.
+            "founded", "works at"), null if relation extraction hasn't
+            reviewed this pair yet or found no clear relationship in the
+            source text.
+      required: [source, target, weight, document_count, relation_type]
 
     GraphView:
       type: object
@@ -1018,6 +1045,48 @@ paths:
           description: >-
             Community detection has never been run for this knowledge base,
             so there is no community structure to test.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /kbs/{id}/relations:
+    post:
+      summary: >-
+        Review a bounded batch of not-yet-checked co-occurrence edges for
+        an actual relationship
+      description: >-
+        For up to a small, fixed number of chunks that still have a
+        co-occurrence edge with no relation type, asks an LLM whether the
+        source text actually supports a specific relationship for each
+        candidate pair (e.g. "founded", "works at") -- and if not, marks
+        it reviewed with no relationship found, so it isn't asked about
+        again. Incremental and idempotent: reviewing a knowledge base in
+        full is a matter of calling this endpoint repeatedly, not raising
+        any limit. Returns a zero-value summary (not an error) once every
+        pair has already been reviewed, or if none exist yet.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Summary of this run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelationExtractionResult"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Knowledge base not found
           content:
             application/json:
               schema:

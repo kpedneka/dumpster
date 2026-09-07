@@ -103,14 +103,14 @@ func countRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID uui
 }
 
 // insertExpiredSession plants a session row with created_at far enough in the
-// past to exceed both HardCap (24 h) and IdleTimeout (2 h), so that a Sweep
+// past to exceed both HardCap (24 h) and IdleTimeout (6 h), so that a Sweep
 // run will unconditionally schedule it for deletion.
 func insertExpiredSession(t *testing.T, ctx context.Context, pool *pgxpool.Pool) *session.Session {
 	t.Helper()
 	var sess session.Session
 	err := pool.QueryRow(ctx,
 		`INSERT INTO sessions (created_at, last_active_at)
-		 VALUES (NOW() - INTERVAL '25 hours', NOW() - INTERVAL '3 hours')
+		 VALUES (NOW() - INTERVAL '25 hours', NOW() - INTERVAL '7 hours')
 		 RETURNING id, created_at, last_active_at, warned_at`,
 	).Scan(&sess.ID, &sess.CreatedAt, &sess.LastActiveAt, &sess.WarnedAt)
 	if err != nil {

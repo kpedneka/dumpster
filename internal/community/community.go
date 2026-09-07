@@ -71,6 +71,13 @@ type GraphEdge struct {
 	// mention together read very differently from two entities that
 	// multiple independent sources both connect.
 	DocumentCount int
+	// RelationType is the actual relationship internal/relation's LLM pass
+	// found between these two entities (e.g. "founded", "works at"), nil
+	// if extraction hasn't reviewed this pair yet or found no clear
+	// relationship (see relation.NoneRelation). The one thing this whole
+	// package's edges lacked until now: a real answer to "what connects
+	// these two," not just "how often do they co-occur."
+	RelationType *string
 }
 
 // GraphView is a KB's canonical-entity graph shaped for display: every

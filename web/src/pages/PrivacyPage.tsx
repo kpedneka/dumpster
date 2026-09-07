@@ -50,7 +50,7 @@ export function PrivacyPage() {
       <section className="mb-8">
         <h2 className="mb-2 font-display text-lg font-semibold tracking-tight">How long it's kept</h2>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          A session and everything in it is deleted after 2 hours of inactivity, or 24 hours after
+          A session and everything in it is deleted after 6 hours of inactivity, or 24 hours after
           it was created, whichever comes first — regardless of activity.
         </p>
       </section>
