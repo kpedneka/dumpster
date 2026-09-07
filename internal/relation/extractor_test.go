@@ -53,10 +53,10 @@ func pair(a, b string) EdgePair {
 }
 
 func TestExtract_MapsAnswersBackToOriginalPairs(t *testing.T) {
-	c1p1 := pair("Gerald Combs", "Wireshark")
-	c1p2 := pair("Wireshark", "Npcap")
+	c1p1 := pair("Naomi Reyes", "Thistlewood")
+	c1p2 := pair("Thistlewood", "Larkspire")
 	chunks := []ChunkCandidates{
-		{ChunkID: uuid.New(), Text: "Gerald Combs founded Wireshark, which bundles Npcap.", Pairs: []EdgePair{c1p1, c1p2}},
+		{ChunkID: uuid.New(), Text: "Naomi Reyes founded Thistlewood, which bundles Larkspire.", Pairs: []EdgePair{c1p1, c1p2}},
 	}
 	gen := llmmock.NewGenerator("CHUNK: 1\nPAIR: 1\nRELATION: founded\nCHUNK: 1\nPAIR: 2\nRELATION: NONE\n")
 	e := NewExtractor(gen)

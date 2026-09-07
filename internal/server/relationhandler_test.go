@@ -21,8 +21,8 @@ func seedRelationCandidates(t *testing.T, deps Deps, userID, kbID uuid.UUID) (ch
 	repo.SeedCandidates(userID, kbID, []relation.ChunkCandidates{
 		{
 			ChunkID: chunkID,
-			Text:    "Gerald Combs founded Wireshark.",
-			Pairs:   []relation.EdgePair{{EntityAID: entityA, TextA: "Gerald Combs", EntityBID: entityB, TextB: "Wireshark"}},
+			Text:    "Naomi Reyes founded Thistlewood.",
+			Pairs:   []relation.EdgePair{{EntityAID: entityA, TextA: "Naomi Reyes", EntityBID: entityB, TextB: "Thistlewood"}},
 		},
 	})
 	return chunkID, entityA, entityB

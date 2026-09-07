@@ -566,7 +566,7 @@ func TestEntityHandler_Handle_DecrementsCanonicalStatsBeforeReplacingEntities(t 
 	// Simulate the (normally async) canonicalization job stage having run
 	// for this document.
 	mentions, _ := entities.ListByDocument(ctx, userID, job.DocumentID)
-	if err := canonical.ResolveNew(ctx, canonicalRepo, entities, userID, mentions); err != nil {
+	if _, err := canonical.ResolveNew(ctx, canonicalRepo, entities, userID, mentions); err != nil {
 		t.Fatal(err)
 	}
 	afterFirst, _ := entities.ListByDocument(ctx, userID, job.DocumentID)

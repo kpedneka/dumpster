@@ -88,8 +88,8 @@ func TestApplyRelationBoost_DoesNotMutateInputs(t *testing.T) {
 // this file exists to prevent: a pair confirmed by internal/relation but
 // entirely missing from weighted (PMI dropped it, e.g. a single-occurrence
 // pair below minCoOccurrenceForPMI) must still make it into the graph
-// Louvain sees, since a real fact stated once ("Gerald Combs founded
-// Wireshark") is common and is exactly the case PMI's statistical floor
+// Louvain sees, since a real fact stated once ("Naomi Reyes founded
+// Thistlewood") is common and is exactly the case PMI's statistical floor
 // isn't equipped to trust on co-occurrence count alone.
 func TestApplyRelationBoost_RescuesConfirmedEdgePMIDropped(t *testing.T) {
 	a, b, c, d := uuid.New(), uuid.New(), uuid.New(), uuid.New()

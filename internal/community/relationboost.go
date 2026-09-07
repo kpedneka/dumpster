@@ -32,7 +32,7 @@ const (
 	// co-occurred once, below minCoOccurrenceForPMI's floor). This matters
 	// in practice, not just in theory: internal/relation only ever reviews
 	// pairs that already have a raw co-occurrence edge, and a real fact
-	// stated exactly once ("Gerald Combs founded Wireshark") is common and
+	// stated exactly once ("Naomi Reyes founded Thistlewood") is common and
 	// is exactly the kind of clean, single-mention relationship PMI's
 	// statistical floor is least equipped to trust -- confirming it
 	// through the actual source text is categorically stronger evidence

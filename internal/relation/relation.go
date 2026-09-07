@@ -73,7 +73,7 @@ type Repository interface {
 	// distrusts. Real data proved that reasoning doesn't transfer: PMI is
 	// judging statistical surprise in aggregate co-occurrence counts across
 	// a whole KB; this reads the actual source text once, so a relationship
-	// stated exactly once ("Gerald Combs founded Wireshark") is often the
+	// stated exactly once ("Naomi Reyes founded Thistlewood") is often the
 	// *cleanest* case, not noise -- and entity_edges.co_occurrence_count is
 	// per-chunk besides, so ordinary prose (a pair rarely repeating within
 	// one chunk) sits at 1 almost everywhere regardless of how significant
