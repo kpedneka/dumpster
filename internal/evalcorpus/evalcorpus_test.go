@@ -46,7 +46,7 @@ func TestIngestFile_CreatesDocumentUploadsObjectAndPublishes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("object not stored at %q: %v", doc.S3Key, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	got, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("reading stored object: %v", err)
