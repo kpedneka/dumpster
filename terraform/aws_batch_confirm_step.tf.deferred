@@ -1,15 +1,24 @@
 # DEFERRED -- not active. Renamed off the .tf extension on purpose so
-# Terraform ignores this file entirely; nothing here runs until it's
-# renamed back. Content is otherwise unchanged from when it was written
-# and validated (terraform validate passed; `terraform plan` was not
-# completed -- see the "Terraform for confirm-step Batch job
-# infrastructure" dev board card). Parked here deliberately: this is
+# Terraform/OpenTofu ignores this file entirely; nothing here runs until
+# it's renamed back. Content is otherwise unchanged from when it was
+# written and validated (validate passed under Terraform at the time;
+# `plan` was not completed -- see the "Terraform for confirm-step Batch
+# job infrastructure" dev board card). Parked here deliberately: this is
 # being folded into the ECS migration's infrastructure-as-code work
 # instead of applied standalone now, alongside a staging-environment
 # design (spin up, test, tear down, then deploy) that should shape how
 # this and the ECS resources get structured together. Rename back to
-# aws_batch_confirm_step.tf and re-run `terraform init`/`plan` when that
-# work starts.
+# aws_batch_confirm_step.tf and re-run `tofu init`/`plan` when that work
+# starts.
+#
+# Tooling note: this project switched from Terraform to OpenTofu after
+# this file was written and validated (see the "Terraform for ECS
+# services" dev board card for the full reasoning -- BSL doesn't
+# restrict our actual use, but switching now while little infrastructure
+# code exists costs nothing). No content here needed to change for that
+# switch -- OpenTofu reads the same HCL, same .tf files, same provider
+# ecosystem. Re-validate with `tofu validate` when this is reactivated,
+# not `terraform validate`.
 #
 # AWS resources for the confirm-step models (cross-chunk linking + alias
 # merging), the third automatic ingestion step being folded in alongside
@@ -48,11 +57,12 @@
 #
 # Apply only after review, against the production AWS account:
 #   cd terraform
-#   terraform init
-#   terraform plan  -var="job_queue_arn=<existing dumpster-batch-gpu-pilot queue ARN>"
-#   terraform apply -var="job_queue_arn=<existing dumpster-batch-gpu-pilot queue ARN>"
+#   tofu init
+#   tofu plan  -var="job_queue_arn=<existing dumpster-batch-gpu-pilot queue ARN>"
+#   tofu apply -var="job_queue_arn=<existing dumpster-batch-gpu-pilot queue ARN>"
 #
-# Requires the AWS Terraform provider ~> 5.0:
+# Requires the AWS provider ~> 5.0 (OpenTofu uses the same
+# registry/provider ecosystem as Terraform):
 #   https://registry.terraform.io/providers/hashicorp/aws/latest/docs
 
 variable "aws_region" {

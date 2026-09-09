@@ -55,6 +55,35 @@ jobs:
         with:
           version: v2.11.3
 
+  terraform-fmt-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.6"
+
+      - name: Format check
+        run: tofu fmt -check -recursive
+
+      # Provider download only (-backend=false: no remote backend is
+      # configured, and none is needed just to validate) -- no AWS or
+      # Cloudflare credentials involved. This catches syntax and internal
+      # consistency errors only; it does not create any infrastructure
+      # and does not catch the class of bug that only shows up against
+      # real AWS (see the ECS migration dev board's card #1 notes for
+      # several real examples an AMI/interface/architecture mismatch
+      # that no static check would catch).
+      - name: Init
+        run: tofu init -backend=false
+
+      - name: Validate
+        run: tofu validate
+
   web-build-test-lint:
     runs-on: ubuntu-latest
     defaults:

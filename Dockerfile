@@ -9,6 +9,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go build -o /bin/api ./cmd/api
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /bin/cleanup ./cmd/cleanup
 
 # web-builder compiles the React SPA so the api binary can serve it.
 # Uses node:22-slim (Debian/glibc) rather than Alpine: esbuild (used by Vite)
@@ -20,20 +22,31 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npm run build
 
-# runtime is cmd/api + cmd/worker's production image: just the Go binaries
-# and the built SPA. No Python here — entity extraction, PDF region
-# classification, and embeddings all go out over HTTP to the inference
-# image below instead of running as a subprocess embedded in this process
-# (the pattern this replaced; see the System Architecture page's Inference
-# Service sub-page for the full history and why it changed).
+# runtime is cmd/api + cmd/worker + cmd/cleanup's production image: just
+# the Go binaries and the built SPA. No Python here — entity extraction,
+# PDF region classification, and embeddings all go out over HTTP to the
+# inference image below instead of running as a subprocess embedded in
+# this process (the pattern this replaced; see the System Architecture
+# page's Inference Service sub-page for the full history and why it
+# changed).
+#
+# cmd/cleanup added to this same image (not its own) so ECS can run it as
+# a scheduled RunTask against this one image with its command overridden
+# to /bin/cleanup, rather than needing a separate build/push/ECR-repo
+# pipeline for a small, occasionally-run utility -- the AWS infra plan's
+# "reuse the existing image" call, just via a distinct binary in the same
+# image rather than a --mode flag on an existing one, since cmd/cleanup
+# was already its own main package by the time this got built.
 #
 # WORKDIR /app ensures the Go API resolves "web/dist" relative to /app.
-# Fly.io [processes] commands (/bin/api, /bin/worker) inherit this workdir.
+# Fly.io [processes] commands (/bin/api, /bin/worker) inherit this
+# workdir; ECS's cleanup RunTask overrides command to ["/bin/cleanup"].
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
-COPY --from=builder /bin/api    /bin/api
-COPY --from=builder /bin/worker /bin/worker
+COPY --from=builder /bin/api     /bin/api
+COPY --from=builder /bin/worker  /bin/worker
+COPY --from=builder /bin/cleanup /bin/cleanup
 COPY --from=web-builder /app/web/dist /app/web/dist
 
 # inference is the standalone, always-on ML inference service: entity
