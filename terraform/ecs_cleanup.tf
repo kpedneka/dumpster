@@ -32,7 +32,7 @@ resource "aws_ecs_task_definition" "cleanup" {
       essential   = true
       environment = concat(local.shared_environment, [])
       secrets = concat(local.shared_secrets, [
-        { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.runtime["database-url"].arn },
+        { name = "DATABASE_URL", valueFrom = data.aws_secretsmanager_secret.runtime["database-url"].arn },
       ])
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "cleanup" })

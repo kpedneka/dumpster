@@ -21,8 +21,8 @@ locals {
     { name = "S3_USE_PATH_STYLE", value = "true" },
   ]
   shared_secrets = [
-    { name = "S3_ACCESS_KEY", valueFrom = aws_secretsmanager_secret.runtime["s3-access-key"].arn },
-    { name = "S3_SECRET_KEY", valueFrom = aws_secretsmanager_secret.runtime["s3-secret-key"].arn },
+    { name = "S3_ACCESS_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["s3-access-key"].arn },
+    { name = "S3_SECRET_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["s3-secret-key"].arn },
   ]
 
   common_log_config = {
@@ -74,18 +74,64 @@ resource "aws_ecs_task_definition" "api" {
       environment = concat(local.shared_environment, [
         { name = "HTTP_PORT", value = "8080" },
         { name = "ANTHROPIC_MODEL", value = var.anthropic_model },
-        { name = "INFERENCE_SERVICE_URL", value = "http://inference:8000" },
+        # localhost, not the Service Connect DNS name -- the query
+        # embedder now talks to the sidecar container below, in this
+        # same task, not the standalone inference service. No Go code
+        # change needed for this: internal/llm/inference's HTTP client
+        # is baseURL-agnostic, this is purely a config value. Region
+        # classification (cmd/worker's separate INFERENCE_SERVICE_URL,
+        # see ecs_worker.tf) is unaffected -- it still calls the
+        # standalone service, unchanged, until that's folded into the
+        # AWS Batch embed job in a separate, later card.
+        { name = "INFERENCE_SERVICE_URL", value = "http://localhost:8000" },
         { name = "COOKIE_SECURE", value = "true" },
         { name = "MAX_DOCUMENTS_PER_SESSION", value = tostring(var.max_documents_per_session) },
         { name = "RATE_LIMIT_REQUESTS", value = tostring(var.rate_limit_requests) },
         { name = "MAX_COMMUNITY_GRAPH_ENTITIES", value = "5000" },
       ])
       secrets = concat(local.shared_secrets, [
-        { name = "DATABASE_URL_POOLED", valueFrom = aws_secretsmanager_secret.runtime["database-url-pooled"].arn },
-        { name = "ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.runtime["anthropic-api-key"].arn },
+        { name = "DATABASE_URL_POOLED", valueFrom = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn },
+        { name = "ANTHROPIC_API_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["anthropic-api-key"].arn },
       ])
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "api" })
+      })
+    },
+    {
+      # The query-embedding sidecar -- see scripts/embed_service.py and
+      # Dockerfile.batch-embed-job's `sidecar` target. A second, real
+      # ECS-managed container in api's own task (Fargate's awsvpc mode
+      # gives every container in one task definition a shared network
+      # namespace, so "localhost" above genuinely reaches this one, no
+      # Service Connect needed for it) -- explicitly not the old
+      # per-Go-process subprocess pattern this project already retired
+      # once (see the "Eliminate the standalone inference service" dev
+      # board card): a real container with its own health check, not a
+      # subprocess with no timeout.
+      #
+      # essential = true, deliberately: if this container dies, api
+      # genuinely can't serve search (every query needs an embedding),
+      # so the whole task should be considered failed and restarted by
+      # ECS rather than silently degrading with the api container still
+      # accepting traffic it can't actually fulfill.
+      name      = "embed-sidecar"
+      image     = "${aws_ecr_repository.embed_sidecar.repository_url}:${var.image_tag}"
+      essential = true
+      portMappings = [
+        { containerPort = 8000, name = "embed-sidecar" }
+      ]
+      # No curl in this image (kept minimal on purpose -- see the
+      # Dockerfile) -- a plain Python one-liner instead of adding a
+      # dependency just for the health check.
+      healthCheck = {
+        command     = ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\" || exit 1"]
+        interval    = 15
+        timeout     = 5
+        retries     = 3
+        startPeriod = 30
+      }
+      logConfiguration = merge(local.common_log_config, {
+        options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "embed-sidecar" })
       })
     }
   ])
@@ -119,14 +165,14 @@ resource "aws_ecs_service" "api" {
 
 variable "api_cpu" {
   type        = string
-  description = "Fargate vCPU units (1024 = 1 vCPU). 512 = 0.5 vCPU, matching the cost estimate sized to fit a future embedding sidecar (not built in this card's scope yet)."
-  default     = "512"
+  description = "Fargate vCPU units (1024 = 1 vCPU) for the whole task -- shared across the api and embed-sidecar containers, not per-container. Not yet real-world sized against actual sidecar CPU usage under load (the standalone inference service it's descended from ran regions+embeddings combined at 1024 -- dropping regions should need meaningfully less, but that's not measured yet); revisit once staging has real query traffic to profile against."
+  default     = "1024"
 }
 
 variable "api_memory" {
   type        = string
-  description = "Fargate memory (MiB). 1024 matches the same cost estimate."
-  default     = "1024"
+  description = "Fargate memory (MiB) for the whole task -- shared across the api and embed-sidecar containers, not per-container. Bumped from the pre-sidecar 1024 default: the standalone inference service alone (embeddings + region classification) measured ~866MB used on Fly; the sidecar drops region classification's memory (pdfplumber/pymupdf, plus its isolated-subprocess ceiling) but this number isn't independently measured yet either -- same caveat as api_cpu."
+  default     = "2048"
 }
 
 variable "r2_endpoint" {

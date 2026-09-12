@@ -6,15 +6,34 @@
 # container start without ever being baked into an image or committed
 # anywhere.
 #
-# Deliberately creates only the secret *containers* here, not their
-# values -- no secret_version resource, on purpose. Real values (the
-# actual Anthropic key, DB passwords, R2 keys) never belong in a .tf file
-# or Terraform state in plain text. Populate each one by hand once,
-# after apply:
-#   aws secretsmanager put-secret-value --secret-id dumpster/production/database-url --secret-string '...'
-# (etc. for each secret below, substituting "staging" for the other
-# environment). Tasks referencing an unpopulated secret will fail to
-# start until this is done -- expected, not a bug.
+# Looked up by name (data source), not created/managed by this config --
+# deliberately, not an oversight. Secrets have a genuinely different
+# lifecycle than the ephemeral compute the rest of this directory manages:
+# staging in particular gets destroyed and recreated routinely (see the
+# ECS Migration dev board's staging runbook), and when these were
+# `resource` blocks, every `tofu destroy` deleted the real secret values
+# right along with the compute -- forcing all 7 to be re-entered by hand
+# on every single cycle. A real, repeatedly-hit friction point, not a
+# hypothetical one. As a data source, `tofu destroy` has no ability to
+# touch these at all: destroy the whole environment as many times as you
+# want, the values persist in Secrets Manager the entire time. This is a
+# real safety improvement for production too, not just staging
+# convenience -- a production `tofu destroy` (which should never happen,
+# but "should never happen" isn't the same guarantee as "structurally
+# can't") now literally cannot delete production's real credentials,
+# regardless of any recovery-window setting.
+#
+# The tradeoff: each of the 7 secrets needs a real, one-time bootstrap
+# per environment BEFORE the first `tofu apply` against that environment
+# -- before, not after, unlike the old resource-managed version:
+#   for name in database-url database-url-pooled anthropic-api-key \
+#       s3-access-key s3-secret-key r2-scratch-access-key r2-scratch-secret-key; do
+#     aws secretsmanager create-secret --name "dumpster/staging/$name"
+#     aws secretsmanager put-secret-value --secret-id "dumpster/staging/$name" --secret-string '...'
+#   done
+# (substitute "production" and real values as appropriate). Never needed
+# again after that, regardless of how many times the environment itself
+# gets destroyed and recreated -- the whole point of this change.
 #
 # Each secret's real AWS name is namespaced dumpster/<environment>/<name>
 # (see ecs_environment.tf's var.environment) -- staging and production
@@ -46,21 +65,12 @@ locals {
   ]
 }
 
-resource "aws_secretsmanager_secret" "runtime" {
+data "aws_secretsmanager_secret" "runtime" {
   for_each = toset(local.secret_names)
   name     = "dumpster/${var.environment}/${each.value}"
-
-  # Staging gets destroyed and recreated repeatedly by design (the whole
-  # point of an ephemeral spin-up/test/tear-down environment) -- AWS's
-  # default 30-day recovery window would block re-creating a
-  # same-named secret for up to 30 days after a `tofu destroy`, since
-  # the old one is still soft-deleted and reserving the name. Production
-  # keeps the real default (immediate force-deletion of a live secret
-  # should never be one command away).
-  recovery_window_in_days = var.environment == "staging" ? 0 : 30
 }
 
 output "secret_arns" {
-  value       = { for name, secret in aws_secretsmanager_secret.runtime : name => secret.arn }
+  value       = { for name, secret in data.aws_secretsmanager_secret.runtime : name => secret.arn }
   description = "Reference these in each task definition's secrets block, e.g. secret_arns[\"database-url\"]."
 }

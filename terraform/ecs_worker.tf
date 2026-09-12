@@ -41,10 +41,10 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "R2_SCRATCH_USE_PATH_STYLE", value = "false" },
       ])
       secrets = concat(local.shared_secrets, [
-        { name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.runtime["database-url"].arn },
-        { name = "ANTHROPIC_API_KEY", valueFrom = aws_secretsmanager_secret.runtime["anthropic-api-key"].arn },
-        { name = "R2_SCRATCH_ACCESS_KEY", valueFrom = aws_secretsmanager_secret.runtime["r2-scratch-access-key"].arn },
-        { name = "R2_SCRATCH_SECRET_KEY", valueFrom = aws_secretsmanager_secret.runtime["r2-scratch-secret-key"].arn },
+        { name = "DATABASE_URL", valueFrom = data.aws_secretsmanager_secret.runtime["database-url"].arn },
+        { name = "ANTHROPIC_API_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["anthropic-api-key"].arn },
+        { name = "R2_SCRATCH_ACCESS_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["r2-scratch-access-key"].arn },
+        { name = "R2_SCRATCH_SECRET_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["r2-scratch-secret-key"].arn },
       ])
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "worker" })

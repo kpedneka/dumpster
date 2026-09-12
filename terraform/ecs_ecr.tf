@@ -26,3 +26,26 @@ output "ecr_repository_url" {
   value       = aws_ecr_repository.runtime.repository_url
   description = "Push the built runtime image here, tagged by commit SHA, as part of the CD pipeline (see the staging/CD design card)."
 }
+
+# The query-embedding sidecar's image (Dockerfile.batch-embed-job's
+# `sidecar` target -- see ecs_api.tf). A separate repo from `runtime`,
+# not a repurposing of ecs_inference.tf's `inference` repo: the
+# standalone inference service is still live and still needed for
+# cmd/worker's /regions calls until a separate, later card folds region
+# classification into the AWS Batch embed job -- this repo exists
+# alongside it, not instead of it, for now.
+resource "aws_ecr_repository" "embed_sidecar" {
+  name                 = "${local.name_prefix}-embed-sidecar"
+  image_tag_mutability = "IMMUTABLE"
+
+  force_delete = var.environment == "staging"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+}
+
+output "embed_sidecar_repository_url" {
+  value       = aws_ecr_repository.embed_sidecar.repository_url
+  description = "Push the sidecar image here (docker build -f Dockerfile.batch-embed-job --target sidecar ...), tagged by commit SHA."
+}

@@ -1,17 +1,33 @@
 # syntax=docker/dockerfile:1
 #
-# AWS Batch job image for CPU-only local embedding (see
-# scripts/batch_embed_job.py for the job logic and why this exists as a
-# Batch job rather than a call to the always-on Fly inference service --
+# Shared base for the two things that need CPU-only local embedding and
+# nothing else (no fastapi/pdfplumber/pymupdf weight): the AWS Batch
+# ingestion job (batch-job target) and the api sidecar (sidecar target,
+# see terraform/ecs_api.tf) that replaced the /embeddings half of the
+# standalone inference service. Separate from the root Dockerfile's
+# `inference` target for the same reason in both cases: that image bundles
+# fastapi/uvicorn/pymupdf/pdfplumber for the always-on HTTP service
+# (regions + query-time embeddings), most of which neither of these needs.
+#
+# batch-job: see scripts/batch_embed_job.py for the job logic and why this
+# exists as a Batch job rather than a call to an always-on service --
 # short version: Fly's shared-cpu tier throttles CPU-bound work severely
 # once burst balance empties, turning a 47.5s embedding call into 13-16+
-# minutes; Fargate's dedicated vCPU allocation has no such throttling).
+# minutes; Fargate's dedicated vCPU allocation has no such throttling.
 #
-# Separate from the root Dockerfile: that image's `inference` target
-# bundles fastapi/uvicorn/pymupdf/pdfplumber for the always-on HTTP
-# service (regions + query-time embeddings), none of which this
-# ingestion-only batch job needs. Pushed to ECR, not deployed to Fly.
-FROM python:3.11-slim
+# sidecar: see scripts/embed_service.py. Runs as a second container
+# inside cmd/api's own ECS task, reached over localhost -- deliberately
+# built from this same minimal base rather than the full `inference`
+# image, so duplicating it per api replica (a real, named tradeoff -- see
+# the Cost Comparison page) doesn't also duplicate PDF-parsing weight no
+# query ever touches.
+#
+# Two leaf stages now, not one -- `docker build` with no --target used to
+# default to this file's only (implicit last) stage; that default now
+# lands on `sidecar`, so anything building the batch-job image must pass
+# --target batch-job explicitly. Neither is meant to be built without an
+# explicit --target going forward.
+FROM python:3.11-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -26,13 +42,22 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir torch 
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "sentence-transformers>=3.2,<4"
 
 # Baking the weights in and forcing offline mode avoids a live HuggingFace
-# Hub round trip on every job invocation -- every Batch job is a fresh
-# container, so this cost would otherwise be paid per document instead of
-# once at image build time.
+# Hub round trip on every job invocation/task start -- every Batch job is
+# a fresh container, and the sidecar's whole point is being cheap to run
+# N times over, so this cost would otherwise be paid per document or per
+# api replica instead of once at image build time.
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-small-en-v1.5')"
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 
-COPY scripts/embeddings.py scripts/batch_embed_job.py /app/
+COPY scripts/embeddings.py /app/
 
+FROM base AS batch-job
+COPY scripts/batch_embed_job.py /app/
 CMD ["python", "batch_embed_job.py"]
+
+FROM base AS sidecar
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "fastapi>=0.115,<1" "uvicorn>=0.32,<1"
+COPY scripts/embed_service.py /app/
+EXPOSE 8000
+CMD ["uvicorn", "embed_service:app", "--host", "0.0.0.0", "--port", "8000"]
