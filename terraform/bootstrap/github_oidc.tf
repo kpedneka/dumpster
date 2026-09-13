@@ -130,9 +130,27 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "acm:DescribeCertificate",
       "acm:ListCertificates",
       "acm:GetCertificate",
+      # data.aws_acm_certificate (ecs_alb.tf) reads a certificate's tags
+      # as part of its normal lookup, not just its metadata -- missing
+      # this was a real gap the deploy role's first actual `tofu plan`
+      # run surfaced (AccessDenied on ListTagsForCertificate), not
+      # something caught by validation ahead of time.
+      "acm:ListTagsForCertificate",
       "sts:GetCallerIdentity",
     ]
     resources = ["*"]
+  }
+
+  # data.aws_ssm_parameter.al2023_arm64 (ecs_networking.tf) resolves the
+  # NAT instance's AMI ID via AWS's own public parameter path -- owned by
+  # Amazon, not this account (no account ID in the ARN), so this is a
+  # read against a public, shared resource, not a scoping gap in this
+  # project's own naming convention. Also only surfaced by a real first
+  # `tofu plan` run against the deploy role, not anticipated ahead of time.
+  statement {
+    sid       = "SSMPublicParameters"
+    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
+    resources = ["arn:aws:ssm:${var.aws_region}::parameter/aws/service/ami-amazon-linux-latest/*"]
   }
 
   statement {
@@ -189,6 +207,10 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     actions = [
       "secretsmanager:DescribeSecret",
       "secretsmanager:ListSecrets",
+      # data.aws_secretsmanager_secret's normal read includes the
+      # secret's resource policy, not just its metadata -- same "only
+      # found by a real plan run" story as the two grants above.
+      "secretsmanager:GetResourcePolicy",
     ]
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:dumpster/*"]
   }
