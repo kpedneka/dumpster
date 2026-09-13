@@ -1,6 +1,6 @@
 // Package awsbatch implements worker.LayoutExtractor by submitting an AWS
 // Batch job for PDF region extraction, instead of a synchronous HTTP call
-// to the always-on Fly inference service's /regions endpoint.
+// to the always-on inference service's /regions endpoint.
 //
 // Unlike ingestion-time embedding's move to Batch (see
 // internal/llm/awsbatch), this isn't chasing a throttling bug -- region

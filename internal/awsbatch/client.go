@@ -26,9 +26,8 @@ type realClient struct {
 }
 
 // NewClient builds a Client using the standard AWS credential chain (env
-// vars, shared config, or an instance/task role — whichever the deployment
-// environment provides; see the Fly worker's AWS credential setup for
-// which one applies there).
+// vars for local dev, or the ECS task role in every real deployment —
+// whichever the deployment environment provides).
 func NewClient(ctx context.Context, region string) (Client, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {

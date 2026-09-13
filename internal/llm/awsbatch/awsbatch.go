@@ -1,8 +1,8 @@
 // Package awsbatch implements llm.Embedder by submitting an AWS Batch job
 // for CPU-only local embedding, for ingestion-time text only (chunks,
-// passages) -- query-time search embedding stays on the always-on Fly
-// inference service via internal/llm/inference.NewQueryEmbedder, since a
-// per-request Fargate cold start would be unacceptable for a live search.
+// passages) -- query-time search embedding stays on the always-on inference
+// service via internal/llm/inference.NewQueryEmbedder, since a per-request
+// Fargate cold start would be unacceptable for a live search.
 //
 // Moved off the HTTP-based internal/llm/inference.NewDocumentEmbedder
 // after measuring it directly against Fly's shared-cpu tier: a 47.5s

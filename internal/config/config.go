@@ -154,11 +154,11 @@ type Config struct {
 	BatchPresignTTL time.Duration
 
 	// CookieSecure controls the Secure attribute on the session cookie.
-	// Must stay true wherever the API is reached over TLS (e.g. behind
-	// Fly.io's TLS termination in production/staging). Set COOKIE_SECURE=false
-	// only for local development, where the Vite dev server proxies to a
-	// plain-http backend and browsers silently drop Secure cookies sent
-	// over http.
+	// Must stay true wherever the API is reached over TLS (e.g. behind the
+	// AWS load balancer's TLS termination in production/staging). Set
+	// COOKIE_SECURE=false only for local development, where the Vite dev
+	// server proxies to a plain-http backend and browsers silently drop
+	// Secure cookies sent over http.
 	CookieSecure bool
 
 	// Guardrails — per-session upload limits and IP rate limiting.
@@ -207,8 +207,11 @@ type Config struct {
 	// query) against this ceiling runs before the graph is ever built, so a
 	// pathological KB never gets far enough to risk the API process's
 	// memory. Defaults to 5000 — generous for any realistic KB under the
-	// current 20-document/32MB-each upload limits, small enough to keep
-	// worst-case memory and runtime bounded on the API's 256MB Fly VM.
+	// current 20-document/32MB-each upload limits, originally sized to keep
+	// worst-case memory and runtime bounded on the old 256MB Fly VM; not
+	// re-validated against the API task's current 2048MB Fargate
+	// allocation (terraform/ecs_api.tf's api_memory), so this ceiling is
+	// likely more conservative than it needs to be today.
 	MaxCommunityGraphEntities int
 	// CommunityDetectionTimeout bounds one POST /kbs/{id}/communities call.
 	// Backstop, not the primary guard — internal/community.Louvain polls
