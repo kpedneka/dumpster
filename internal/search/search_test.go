@@ -3,6 +3,7 @@ package search_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/auth"
 	"github.com/kunalpednekar/dumpster/internal/chunk"
 	"github.com/kunalpednekar/dumpster/internal/graphrag/memory"
+	"github.com/kunalpednekar/dumpster/internal/llm"
 	"github.com/kunalpednekar/dumpster/internal/llm/mock"
 	"github.com/kunalpednekar/dumpster/internal/retrieval"
 	"github.com/kunalpednekar/dumpster/internal/router"
@@ -117,6 +119,34 @@ func TestAnswerer_GeneratorError(t *testing.T) {
 	_, err := a.Answer(authedCtx(), uuid.New(), "query", chunks)
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+// TestAnswerer_ProviderQuotaExceeded_ReturnsGracefulMessageNotError verifies
+// the one case that must NOT behave like TestAnswerer_GeneratorError above:
+// a spend-limit denial (e.g. production's Bedrock budget action) should
+// degrade to a clear, user-facing message with a nil error, not propagate
+// as a raw failure the caller has to translate itself.
+func TestAnswerer_ProviderQuotaExceeded_ReturnsGracefulMessageNotError(t *testing.T) {
+	chunks := []retrieval.ScoredChunk{
+		makeChunk(uuid.New(), "some text", 0, 9),
+	}
+	gen := &mock.Generator{
+		GenerateStreamCachedFn: func(context.Context, string, string, func(string)) (string, error) {
+			return "", fmt.Errorf("bedrock: converse: %w", llm.ErrProviderQuotaExceeded)
+		},
+	}
+	a := search.NewAnswerer(gen)
+
+	result, err := a.Answer(authedCtx(), uuid.New(), "query", chunks)
+	if err != nil {
+		t.Fatalf("expected no error (graceful degradation), got: %v", err)
+	}
+	if result.Summary == "" {
+		t.Error("expected a non-empty graceful message, got empty Summary")
+	}
+	if len(result.Citations) != 0 {
+		t.Errorf("expected no citations on a quota-exceeded response, got %+v", result.Citations)
 	}
 }
 
@@ -637,6 +667,35 @@ func TestService_Search_RouterError(t *testing.T) {
 	_, err := svc.Search(authedCtx(), uuid.New(), "query")
 	if err == nil {
 		t.Fatal("expected error from router, got nil")
+	}
+}
+
+// TestService_Search_RouterQuotaExceeded_FallsBackToNormal verifies the one
+// router failure mode that must NOT behave like TestService_Search_RouterError
+// above: a spend-limit denial falls back to router.Normal (the same default
+// Route itself already uses for an unrecognized classification) instead of
+// failing the whole search -- otherwise the user would never reach
+// answerer.go's own graceful degradation, just a raw error at the routing
+// step instead. Proven by configuring the router to *claim* Aggregation
+// (so the test would fail if that were used) and wiring the graph
+// retriever's aggregation leg to error if it's ever actually reached --
+// a successful search here is only possible if the fallback to Normal
+// (which skips the graph leg entirely) really happened.
+func TestService_Search_RouterQuotaExceeded_FallsBackToNormal(t *testing.T) {
+	ret := &stubRetriever{chunks: []retrieval.ScoredChunk{makeChunk(uuid.New(), "hybrid text", 0, 11)}}
+	rt := routermock.New(router.Aggregation)
+	rt.Err = fmt.Errorf("router: generate: %w", llm.ErrProviderQuotaExceeded)
+	gr := memory.New()
+	gr.AggregationErr = errors.New("should never be reached -- fallback should skip the graph leg entirely")
+	gen := mock.NewGenerator("An answer [1].\nCITATIONS: 1")
+	svc := search.New(ret, search.NewAnswerer(gen), search.WithRouter(rt), search.WithGraphRetriever(gr))
+
+	result, err := svc.Search(authedCtx(), uuid.New(), "query")
+	if err != nil {
+		t.Fatalf("expected the search to succeed via Normal fallback, got error: %v", err)
+	}
+	if result.Summary == "" {
+		t.Error("expected a real answer from the fallback Normal path, got empty Summary")
 	}
 }
 

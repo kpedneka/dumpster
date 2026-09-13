@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,6 +14,14 @@ import (
 
 // notFoundSummary is returned verbatim when retrieval yields no relevant chunks.
 const notFoundSummary = "I could not find relevant information to answer this question."
+
+// quotaExceededSummary is returned verbatim when the underlying Generator
+// reports llm.ErrProviderQuotaExceeded -- e.g. production's Bedrock spend
+// budget has denied further calls for the month (see the "Bedrock spend
+// budget and graceful degradation" dev board card). A real, expected
+// operating state for a demo-scale deployment with a hard cost cap, not
+// an error condition worth a 500 or a raw AWS error message.
+const quotaExceededSummary = "This app's monthly usage limit has been reached. Search will be available again next month -- thanks for your patience."
 
 // LLMAnswerer implements Answerer using a language model Generator.
 // It builds a prompt that numbers each source chunk, instructs the model to
@@ -66,6 +75,15 @@ func (a *LLMAnswerer) AnswerStream(ctx context.Context, _ uuid.UUID, query strin
 		}
 	})
 	if err != nil {
+		if errors.Is(err, llm.ErrProviderQuotaExceeded) {
+			// A spend-limit denial happens at the provider's authorization
+			// step, before any request is processed -- no deltas have been
+			// emitted yet at this point, so returning a plain Result here
+			// (rather than an error) is exactly as safe as the empty-chunks
+			// guardrail above: the caller sees a normal, if short, answer,
+			// not a raw AWS error or a generic 500.
+			return Result{Summary: quotaExceededSummary}, nil
+		}
 		return Result{}, fmt.Errorf("search: generate: %w", err)
 	}
 	if safe := filter.Flush(); safe != "" {

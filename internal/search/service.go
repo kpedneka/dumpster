@@ -2,10 +2,12 @@ package search
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/graphrag"
+	"github.com/kunalpednekar/dumpster/internal/llm"
 	"github.com/kunalpednekar/dumpster/internal/retrieval"
 	"github.com/kunalpednekar/dumpster/internal/router"
 )
@@ -81,9 +83,21 @@ func (s *Service) Search(ctx context.Context, kbID uuid.UUID, query string) (Res
 func (s *Service) SearchStream(ctx context.Context, kbID uuid.UUID, query string, onEvent func(StreamEvent)) (Result, error) {
 	qt := router.Normal
 	if s.router != nil {
-		var err error
-		qt, err = s.router.Route(ctx, query)
-		if err != nil {
+		routed, err := s.router.Route(ctx, query)
+		switch {
+		case err == nil:
+			qt = routed
+		case errors.Is(err, llm.ErrProviderQuotaExceeded):
+			// Same provider, same exhausted quota the answer-generation
+			// call below is about to hit too -- failing the whole search
+			// here would mean the user never reaches answerer.go's own
+			// graceful "monthly limit reached" message at all, just a raw
+			// error at the routing step instead. Falling back to Normal
+			// (the same default Route itself already uses for an
+			// unrecognized classification) lets the search continue
+			// through to that message instead of stopping early.
+			qt = router.Normal
+		default:
 			return Result{}, fmt.Errorf("search: route: %w", err)
 		}
 	}
