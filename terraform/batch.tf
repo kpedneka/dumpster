@@ -12,16 +12,26 @@
 # Scope expanded from a real conversation on this card, not "import as-is":
 # job queues and compute environments were shared across environments
 # before this (the GPU one literally named "...-gpu-pilot", no longer
-# accurate -- it's real production infrastructure now). Both are split
-# per-environment here, matching every other account/region- or VPC-scoped
-# resource in this config (local.name_prefix, ecs_environment.tf). Job
-# *definitions* are the one piece NOT renamed or split: AWS Batch job
-# queue/compute-environment names are immutable once created (forcing this
-# rename to mean "create new, cut over, decommission old" rather than a
-# relabel), but job definitions support new revisions under the same name
-# and carry no idle cost of their own -- there's nothing to rename, and
-# no reason to duplicate the same image+resource template per environment
-# when both environments' queues can submit against the one definition.
+# accurate -- it's real production infrastructure now). Split per-
+# environment here, matching every other account/region- or VPC-scoped
+# resource in this config (local.name_prefix, ecs_environment.tf).
+#
+# Job definitions were *also* kept shared, not split, in this card's
+# first version -- reasoned at the time as "no reason to duplicate the
+# same image+resource template per environment." That reasoning held
+# only as long as a human was the one running `tofu destroy` against
+# staging and would naturally notice touching something shared. It
+# stopped holding the moment the "design the staging spin-up/test/
+# tear-down workflow" card's CI automation could destroy staging
+# unattended, on every labeled PR -- confirmed for real, not
+# hypothetically: an early, broken run of that workflow (before it had a
+# shared state backend at all) deregistered these three job definitions
+# as a side effect of a failed destroy, taking real staging ingestion
+# down until they were re-registered by hand. Environment-scoped here
+# now for exactly the same reason the queues/CEs already are: no shared
+# resource this config manages should be reachable by an automated,
+# unattended destroy of just one environment. Costs nothing ongoing --
+# job definitions are metadata, not running compute.
 
 # --- Shared networking / IAM lookups ---
 #
@@ -79,35 +89,20 @@ data "aws_iam_role" "ecs_task_execution_default" {
   name = "ecsTaskExecutionRole"
 }
 
-# --- Job definitions: imported as-is, not renamed (see header) ---
+# --- Job definitions: now environment-scoped (see header) ---
 #
-# Revision :2, not :1 -- a real incident during the staging CI workflow's
-# first attempts (PR #94, card #12): a broken run's `tofu destroy` step
-# operated against a blank, unshared local state (this whole config had
-# no remote backend yet -- see backend.tf's header) and, while it failed
-# to delete the ECS cluster itself (blocked by still-active real
-# services it didn't know about), successfully deregistered these three
-# job definitions along the way -- deregister-job-definition permanently
-# retires that revision (AWS Batch job definitions can't be deleted or
-# reactivated, only superseded), so :1 is INACTIVE forever now. Fixed by
-# re-registering identical specs by hand (real revision :2, ACTIVE) and
-# repointing these import blocks at it. Declarative import blocks are a
-# one-time bootstrap, not an ongoing pin: once a resource address is
-# already tracked in state, OpenTofu skips its import block entirely --
-# so after the next successful apply, these three blocks become
-# permanently inert, and any *future* destroy/recreate cycle (the normal,
-# intended lifecycle for ephemeral staging) goes through Terraform's own
-# create/destroy, no hardcoded revision number involved at all. This
-# fragility was specific to the one-time historical import, not a
-# standing design problem.
-
-import {
-  to = aws_batch_job_definition.entity_extraction
-  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-entity-extraction:2"
-}
+# No import blocks here any more -- the historical, one-time import of
+# the original shared dumpster-entity-extraction/dumpster-embedding-
+# jobdef/dumpster-region-extraction (revision :2, after the incident the
+# header describes) is done; these are brand new, per-environment-named
+# resources with no prior real object to import from. The old shared
+# names are left orphaned in AWS (INACTIVE-able via a future manual
+# cleanup, not urgent -- job definitions cost nothing idle), not deleted
+# by this change: nothing currently depends on them once the worker's
+# env vars below repoint at the new per-environment ones.
 
 resource "aws_batch_job_definition" "entity_extraction" {
-  name = "dumpster-entity-extraction"
+  name = "${local.name_prefix}-entity-extraction"
   type = "container"
 
   container_properties = jsonencode({
@@ -128,13 +123,8 @@ resource "aws_batch_job_definition" "entity_extraction" {
   }
 }
 
-import {
-  to = aws_batch_job_definition.embedding
-  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-embedding-jobdef:2"
-}
-
 resource "aws_batch_job_definition" "embedding" {
-  name                  = "dumpster-embedding-jobdef"
+  name                  = "${local.name_prefix}-embedding"
   type                  = "container"
   platform_capabilities = ["FARGATE"]
 
@@ -154,13 +144,8 @@ resource "aws_batch_job_definition" "embedding" {
   })
 }
 
-import {
-  to = aws_batch_job_definition.region_extraction
-  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-region-extraction:2"
-}
-
 resource "aws_batch_job_definition" "region_extraction" {
-  name                  = "dumpster-region-extraction"
+  name                  = "${local.name_prefix}-region-extraction"
   type                  = "container"
   platform_capabilities = ["FARGATE"]
 
