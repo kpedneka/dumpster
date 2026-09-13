@@ -30,3 +30,4 @@
 
 - `make run` (full stack), `make test`, `make lint`, `make migrate`.
 - CI runs build + test + lint + coverage gate on every push; a red pipeline blocks merge.
+- A PR gets a real ephemeral AWS staging environment + smoke tests only when it carries the `deploy-staging` label — adding the label is what starts real billing for that PR's review, so add it deliberately, not by default. Staging is torn down after the run regardless of pass/fail.
