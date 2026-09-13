@@ -51,7 +51,7 @@ func mustPool(t *testing.T) *pgxpool.Pool {
 
 func mustS3(t *testing.T) *s3store.Store {
 	t.Helper()
-	return s3store.New(s3store.Config{
+	store, err := s3store.New(context.Background(), s3store.Config{
 		Endpoint:     getEnvOr("S3_ENDPOINT", "http://localhost:9000"),
 		Region:       getEnvOr("S3_REGION", "us-east-1"),
 		Bucket:       getEnvOr("S3_BUCKET", "dumpster"),
@@ -59,6 +59,10 @@ func mustS3(t *testing.T) *s3store.Store {
 		SecretKey:    getEnvOr("S3_SECRET_KEY", "minioadmin"),
 		UsePathStyle: true,
 	})
+	if err != nil {
+		t.Fatalf("s3store.New: %v", err)
+	}
+	return store
 }
 
 func getEnvOr(key, fallback string) string {

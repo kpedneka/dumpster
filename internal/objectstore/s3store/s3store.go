@@ -1,5 +1,9 @@
-// Package s3store provides an ObjectStore backed by any S3-compatible API
-// (MinIO locally, Cloudflare R2 in the cloud). Switch providers via config.
+// Package s3store provides an ObjectStore backed by any S3-compatible API:
+// local MinIO or Cloudflare R2 (both need static credentials, since neither
+// participates in AWS IAM) as well as real AWS S3 in staging/production
+// (which instead resolves credentials via the standard AWS credential chain
+// — an ECS task role, in this project's deployments). Switch providers via
+// config.
 package s3store
 
 import (
@@ -9,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
@@ -23,27 +28,49 @@ type Store struct {
 
 // Config holds the endpoint-configurable S3 connection details.
 type Config struct {
-	Endpoint     string // full URL, e.g. "http://localhost:9000"
-	Region       string // "auto" for R2, "us-east-1" for MinIO
-	Bucket       string
+	// Endpoint overrides the S3 API's base URL, e.g. "http://localhost:9000"
+	// for MinIO or "https://<account-id>.r2.cloudflarestorage.com" for R2.
+	// Leave empty for real AWS S3 -- the SDK resolves the correct regional
+	// endpoint on its own from Region.
+	Endpoint string
+	Region   string // "auto" for R2, a real AWS region (e.g. "us-east-1") for S3
+	Bucket   string
+	// AccessKey and SecretKey are required for any endpoint outside AWS IAM
+	// (MinIO, R2). Leave both empty for real AWS S3 to resolve credentials
+	// via the standard AWS credential chain instead -- the same chain
+	// internal/awsbatch.NewClient uses, so an ECS task role works here too.
 	AccessKey    string
 	SecretKey    string
-	UsePathStyle bool // required for MinIO
+	UsePathStyle bool // required for MinIO; must be false for real AWS S3
 }
 
-func New(cfg Config) *Store {
-	creds := credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")
-	client := s3.New(s3.Options{
+func New(ctx context.Context, cfg Config) (*Store, error) {
+	var creds aws.CredentialsProvider
+	if cfg.AccessKey != "" || cfg.SecretKey != "" {
+		creds = credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")
+	} else {
+		awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
+		if err != nil {
+			return nil, fmt.Errorf("s3store: load default AWS config: %w", err)
+		}
+		creds = awsCfg.Credentials
+	}
+
+	opts := s3.Options{
 		Region:       cfg.Region,
 		Credentials:  creds,
-		BaseEndpoint: aws.String(cfg.Endpoint),
 		UsePathStyle: cfg.UsePathStyle,
-	})
+	}
+	if cfg.Endpoint != "" {
+		opts.BaseEndpoint = aws.String(cfg.Endpoint)
+	}
+
+	client := s3.New(opts)
 	return &Store{
 		client:  client,
 		presign: s3.NewPresignClient(client),
 		bucket:  cfg.Bucket,
-	}
+	}, nil
 }
 
 func (s *Store) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {

@@ -33,7 +33,7 @@ func main() {
 
 	txRunner := rls.New(pool)
 
-	obj := s3store.New(s3store.Config{
+	obj, err := s3store.New(ctx, s3store.Config{
 		Endpoint:     cfg.S3Endpoint,
 		Region:       cfg.S3Region,
 		Bucket:       cfg.S3Bucket,
@@ -41,6 +41,10 @@ func main() {
 		SecretKey:    cfg.S3SecretKey,
 		UsePathStyle: cfg.S3UsePathStyle,
 	})
+	if err != nil {
+		logger.Error("object store setup failed", "err", err)
+		os.Exit(1)
+	}
 
 	sessions := sessionpg.New(pool)
 	deleter := account.New(sessions, obj, docpg.New(txRunner))

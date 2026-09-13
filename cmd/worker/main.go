@@ -75,7 +75,7 @@ func main() {
 	// TxRunner rather than the RLS-aware one everything else here does.
 	statsRepo := statspg.New(db.NewTxRunner(pool))
 
-	obj := s3store.New(s3store.Config{
+	obj, err := s3store.New(ctx, s3store.Config{
 		Endpoint:     cfg.S3Endpoint,
 		Region:       cfg.S3Region,
 		Bucket:       cfg.S3Bucket,
@@ -83,20 +83,28 @@ func main() {
 		SecretKey:    cfg.S3SecretKey,
 		UsePathStyle: cfg.S3UsePathStyle,
 	})
+	if err != nil {
+		logger.Error("object store setup failed", "err", err)
+		os.Exit(1)
+	}
 	// Separate bucket for AWS Batch jobs' transient input/output handoff
 	// (entity extraction, embedding) -- never real user documents. Kept
 	// apart from obj above deliberately: scratch objects don't need (and
 	// shouldn't get) real documents' durability/retention contract, and a
 	// dedicated bucket makes its size alone a useful at-a-glance signal
 	// for whether Batch scratch cleanup is actually working.
-	scratchObj := s3store.New(s3store.Config{
-		Endpoint:     cfg.R2ScratchEndpoint,
-		Region:       cfg.R2ScratchRegion,
-		Bucket:       cfg.R2ScratchBucket,
-		AccessKey:    cfg.R2ScratchAccessKey,
-		SecretKey:    cfg.R2ScratchSecretKey,
-		UsePathStyle: cfg.R2ScratchUsePathStyle,
+	scratchObj, err := s3store.New(ctx, s3store.Config{
+		Endpoint:     cfg.S3ScratchEndpoint,
+		Region:       cfg.S3ScratchRegion,
+		Bucket:       cfg.S3ScratchBucket,
+		AccessKey:    cfg.S3ScratchAccessKey,
+		SecretKey:    cfg.S3ScratchSecretKey,
+		UsePathStyle: cfg.S3ScratchUsePathStyle,
 	})
+	if err != nil {
+		logger.Error("scratch object store setup failed", "err", err)
+		os.Exit(1)
+	}
 
 	q := qpg.New(pool)
 	docs := docpg.New(txRunner)
@@ -113,8 +121,8 @@ func main() {
 		logger.Error("embedder setup failed", "err", "EMBED_BATCH_JOB_QUEUE and EMBED_BATCH_JOB_DEFINITION are required")
 		os.Exit(1)
 	}
-	if cfg.R2ScratchEndpoint == "" || cfg.R2ScratchBucket == "" || cfg.R2ScratchAccessKey == "" || cfg.R2ScratchSecretKey == "" {
-		logger.Error("scratch object store setup failed", "err", "R2_SCRATCH_ENDPOINT, R2_SCRATCH_BUCKET, R2_SCRATCH_ACCESS_KEY, and R2_SCRATCH_SECRET_KEY are required")
+	if cfg.S3ScratchBucket == "" {
+		logger.Error("scratch object store setup failed", "err", "S3_SCRATCH_BUCKET is required")
 		os.Exit(1)
 	}
 	if cfg.RegionsBatchJobQueue == "" || cfg.RegionsBatchJobDefinition == "" {
