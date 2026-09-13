@@ -70,9 +70,14 @@ for i in $(seq 1 "$NUM_CLIENTS"); do
   DOC_ID=$(echo "$DOC" | jq -r '.id')
   [[ "$DOC_ID" != "null" && -n "$DOC_ID" ]] || fail "client $i: upload failed: $DOC"
 
+  # 3s x 60 = 180s, not the 60s this started with: a real run measured a
+  # genuinely successful index taking ~69s once the worker had any real
+  # backlog to work through (retries from an earlier failed attempt, or
+  # just N clients provisioning concurrently) -- 60s was tuned against an
+  # idle worker with no contention, not a realistic one.
   INDEXED=false
   STATUS="unknown"
-  for _ in $(seq 1 30); do
+  for _ in $(seq 1 60); do
     STATUS=$(curl "${CURL_OPTS[@]}" -b "$COOKIE_JAR" \
       "$BASE_URL/kbs/$KB_ID/documents/$DOC_ID" | jq -r '.status')
     if [[ "$STATUS" == "indexed" ]]; then
@@ -80,9 +85,9 @@ for i in $(seq 1 "$NUM_CLIENTS"); do
       break
     fi
     [[ "$STATUS" == "failed" ]] && fail "client $i: document processing failed"
-    sleep 2
+    sleep 3
   done
-  $INDEXED || fail "client $i: document not indexed within 60s (last status: $STATUS)"
+  $INDEXED || fail "client $i: document not indexed within 180s (last status: $STATUS)"
 
   printf 'session_id=%s\t%s\n' "$SESSION_ID" "$KB_ID"
   rm -f "$COOKIE_JAR"
