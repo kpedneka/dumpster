@@ -174,12 +174,41 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     actions = [
       "logs:CreateLogGroup",
       "logs:DeleteLogGroup",
-      "logs:DescribeLogGroups",
       "logs:PutRetentionPolicy",
       "logs:TagResource",
       "logs:ListTagsForResource",
     ]
     resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/dumpster-*"]
+  }
+
+  # DescribeLogGroups is a list-style call (optionally filtered by name
+  # prefix), not a lookup against one resource's ARN -- AWS doesn't
+  # accept it scoped to a specific log-group ARN the way the create/
+  # delete/tag actions above are (found by a real plan run refreshing
+  # this resource's state, not anticipated ahead of time -- same story
+  # as the SQS statement below).
+  statement {
+    sid       = "LogsDescribe"
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
+  }
+
+  # Missed entirely in the original policy -- ecs_cleanup.tf's
+  # aws_sqs_queue.cleanup_dlq has no service statement at all until this,
+  # caught only by a real plan run trying to refresh it.
+  statement {
+    sid = "SQS"
+    actions = [
+      "sqs:CreateQueue",
+      "sqs:DeleteQueue",
+      "sqs:GetQueueAttributes",
+      "sqs:GetQueueUrl",
+      "sqs:SetQueueAttributes",
+      "sqs:TagQueue",
+      "sqs:UntagQueue",
+      "sqs:ListQueueTags",
+    ]
+    resources = ["arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dumpster-*"]
   }
 
   statement {
