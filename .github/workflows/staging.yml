@@ -113,9 +113,30 @@ jobs:
       # hit (a human naturally waits and re-checks by hand). Waited for
       # explicitly here so the smoke test below doesn't race a still-
       # starting deployment.
+      # `aws ecs wait services-stable`'s own timeout is fixed (15s delay x
+      # 40 attempts = 10 minutes) and not configurable via a CLI flag --
+      # found too short by a real run (PR #94): on a fresh apply, the NAT
+      # instance is a brand-new EC2 instance that takes a couple of
+      # minutes to finish booting and configuring its NAT routing before
+      # api/worker's private-subnet tasks can reach Secrets Manager
+      # (no VPC endpoint for it, unlike S3) at all -- the first task
+      # placement attempts fail with a connection timeout, ECS retries
+      # with backoff, and the whole cycle can eat nearly the entire
+      # default 10-minute window before actually stabilizing on its own.
+      # Looped instead of widened via a single wait call: three attempts
+      # gives ~30 minutes of total runway while still failing loudly if
+      # something is genuinely broken, not just slow to boot once.
       - name: Wait for ECS services to stabilize
         run: |
-          aws ecs wait services-stable --cluster dumpster-staging --services api worker
+          for i in 1 2 3; do
+            if aws ecs wait services-stable --cluster dumpster-staging --services api worker; then
+              echo "services stable"
+              exit 0
+            fi
+            echo "attempt $i: not stable within this wait window, retrying..."
+          done
+          echo "::error::ECS services never reached steady state"
+          exit 1
 
       - name: Smoke test
         working-directory: terraform
