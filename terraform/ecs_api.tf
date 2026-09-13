@@ -6,11 +6,23 @@
 # only by container command -- confirmed against the actual Dockerfile,
 # not assumed. Env vars/secrets below are grounded in internal/config's
 # real fields, not guessed: object storage points at real AWS S3
-# (s3_storage.tf, IAM-role auth, no static key) -- Neon and Anthropic direct
-# are still in place; Aurora/Bedrock migrations are separate, later cards
-# that will update these the same way.
+# (s3_storage.tf, IAM-role auth, no static key) -- Neon direct is still in
+# place (Aurora migration is separate, later work); Anthropic direct is
+# now production-scoped only to staging -- see local.llm_provider below.
 
 locals {
+  # Production launches on Bedrock, not direct Anthropic, from day one --
+  # not a preference, a real cost incident: a load-testing burst against
+  # staging burned real non-refundable Anthropic credit in under an hour
+  # with no spend controls in between the app and the bill at all. Bedrock
+  # bills through AWS instead, authenticated via this task's own IAM role,
+  # no API key in the request path. Staging keeps direct Anthropic for now
+  # (cheaper to iterate against while its own remaining credit lasts --
+  # see the "DNS and TLS cutover plan" dev board card's notes) -- not a
+  # permanent split, just not worth re-plumbing both environments at once
+  # under real time pressure to ship the cutover itself.
+  llm_provider = var.environment == "production" ? "bedrock" : "anthropic"
+
   # Env vars/secrets every one of the three commands needs, regardless of
   # which binary runs -- object storage and AWS region are read by all
   # three (cleanup deletes real documents from S3 on account expiry).
@@ -28,6 +40,8 @@ locals {
     { name = "S3_REGION", value = var.aws_region },
     { name = "S3_BUCKET", value = aws_s3_bucket.documents.bucket },
     { name = "S3_USE_PATH_STYLE", value = "false" },
+    { name = "LLM_PROVIDER", value = local.llm_provider },
+    { name = "BEDROCK_MODEL_ID", value = var.bedrock_model_id },
   ]
   shared_secrets = []
 
@@ -192,8 +206,14 @@ variable "api_memory" {
 
 variable "anthropic_model" {
   type        = string
-  description = "Claude model ID, still called directly against the Anthropic API (not Bedrock yet -- see the 'Migrate LLM provider' card)."
+  description = "Claude model ID for staging, still called directly against the Anthropic API -- production uses Bedrock instead, see local.llm_provider and var.bedrock_model_id."
   default     = "claude-sonnet-4-6"
+}
+
+variable "bedrock_model_id" {
+  type        = string
+  description = "Bedrock model ID or inference profile ID/ARN production's api/worker/cleanup invoke via AWS Bedrock's Converse API. Not the bare model name the direct Anthropic API uses -- Claude Sonnet 5 specifically rejects on-demand invocation by model ID and requires an inference profile (confirmed for real against this account: `aws bedrock-runtime converse --model-id anthropic.claude-sonnet-5` fails with ValidationException; the US cross-region inference profile below is what actually works). Read by every environment's task definitions (harmless when local.llm_provider is \"anthropic\" -- just an unused env var), not only production's, so flipping LLM_PROVIDER back to \"anthropic\" during a Bedrock outage never needs a redeploy to add a missing value."
+  default     = "us.anthropic.claude-sonnet-5"
 }
 
 variable "max_documents_per_session" {

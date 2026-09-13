@@ -25,8 +25,10 @@ import (
 	entityawsbatch "github.com/kunalpednekar/dumpster/internal/entity/awsbatch"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/llm"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	llmawsbatch "github.com/kunalpednekar/dumpster/internal/llm/awsbatch"
+	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	regionsawsbatch "github.com/kunalpednekar/dumpster/internal/manifest/awsbatch"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
@@ -201,7 +203,18 @@ func main() {
 	// automatic ingestion" dev board card) -- this is a contained swap
 	// behind the same llm.Generator interface whenever that happens, not
 	// a reason to hold off on shipping the wiring now.
-	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	var generator llm.Generator
+	switch cfg.LLMProvider {
+	case "bedrock":
+		var err error
+		generator, err = bedrock.New(context.Background(), cfg.AWSRegion, cfg.BedrockModelID)
+		if err != nil {
+			logger.Error("bedrock generator setup failed", "err", err)
+			os.Exit(1)
+		}
+	default:
+		generator = anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	}
 	aliasJudge := &canonical.LLMAliasJudge{Generator: generator}
 	crosslinkRepo := crosslinkpg.New(txRunner)
 	crosslinkExtractor := crosslink.NewExtractor(generator)

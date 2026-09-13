@@ -109,6 +109,44 @@ resource "aws_iam_role_policy" "ecs_task_logs_read" {
   policy = data.aws_iam_policy_document.ecs_task_logs_read.json
 }
 
+# internal/llm/bedrock calls Bedrock's Converse API when LLM_PROVIDER is
+# "bedrock" (production; see ecs_api.tf's local.llm_provider) -- granted to
+# every environment's task role regardless, same reasoning var.
+# bedrock_model_id's description gives for reading the env var everywhere:
+# flipping providers during an outage shouldn't also need an IAM change.
+#
+# Two resource ARNs, not one: Claude Sonnet 5 requires invoking through a
+# cross-region inference profile rather than the bare model directly
+# (confirmed for real, not assumed -- see var.bedrock_model_id's
+# description), and Bedrock's IAM model for inference profiles requires
+# permission on both the profile itself *and* the underlying foundation
+# model(s) it can route a request to, since the profile has no compute of
+# its own -- it just directs the same InvokeModel/Converse call to
+# whichever regional model instance is available. The foundation-model ARN
+# has no account segment (Anthropic's Bedrock-hosted models are AWS-owned,
+# not something this account created) and a wildcard region, matching that
+# it can route to any US region, not just this one.
+data "aws_iam_policy_document" "ecs_task_bedrock" {
+  statement {
+    actions = [
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+      "bedrock:Converse",
+      "bedrock:ConverseStream",
+    ]
+    resources = [
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}",
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_bedrock" {
+  name   = "${local.name_prefix}-ecs-task-bedrock"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ecs_task_bedrock.json
+}
+
 variable "aws_region" {
   type        = string
   description = "AWS region this account's resources run in"
