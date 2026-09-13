@@ -80,10 +80,30 @@ data "aws_iam_role" "ecs_task_execution_default" {
 }
 
 # --- Job definitions: imported as-is, not renamed (see header) ---
+#
+# Revision :2, not :1 -- a real incident during the staging CI workflow's
+# first attempts (PR #94, card #12): a broken run's `tofu destroy` step
+# operated against a blank, unshared local state (this whole config had
+# no remote backend yet -- see backend.tf's header) and, while it failed
+# to delete the ECS cluster itself (blocked by still-active real
+# services it didn't know about), successfully deregistered these three
+# job definitions along the way -- deregister-job-definition permanently
+# retires that revision (AWS Batch job definitions can't be deleted or
+# reactivated, only superseded), so :1 is INACTIVE forever now. Fixed by
+# re-registering identical specs by hand (real revision :2, ACTIVE) and
+# repointing these import blocks at it. Declarative import blocks are a
+# one-time bootstrap, not an ongoing pin: once a resource address is
+# already tracked in state, OpenTofu skips its import block entirely --
+# so after the next successful apply, these three blocks become
+# permanently inert, and any *future* destroy/recreate cycle (the normal,
+# intended lifecycle for ephemeral staging) goes through Terraform's own
+# create/destroy, no hardcoded revision number involved at all. This
+# fragility was specific to the one-time historical import, not a
+# standing design problem.
 
 import {
   to = aws_batch_job_definition.entity_extraction
-  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-entity-extraction:1"
+  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-entity-extraction:2"
 }
 
 resource "aws_batch_job_definition" "entity_extraction" {
@@ -110,7 +130,7 @@ resource "aws_batch_job_definition" "entity_extraction" {
 
 import {
   to = aws_batch_job_definition.embedding
-  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-embedding-jobdef:1"
+  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-embedding-jobdef:2"
 }
 
 resource "aws_batch_job_definition" "embedding" {
@@ -136,7 +156,7 @@ resource "aws_batch_job_definition" "embedding" {
 
 import {
   to = aws_batch_job_definition.region_extraction
-  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-region-extraction:1"
+  id = "arn:aws:batch:us-east-1:973010535819:job-definition/dumpster-region-extraction:2"
 }
 
 resource "aws_batch_job_definition" "region_extraction" {
