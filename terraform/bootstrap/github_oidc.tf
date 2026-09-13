@@ -153,10 +153,16 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["arn:aws:ssm:${var.aws_region}::parameter/aws/service/ami-amazon-linux-latest/*"]
   }
 
+  # CloudWatch alarm ARNs use a colon before the alarm name (alarm:name),
+  # not a slash the way S3/IAM/ECR resource paths do -- this statement's
+  # resources pattern originally used the wrong separator (alarm/dumpster-*),
+  # so it silently matched nothing at all until a real plan run's state
+  # refresh (cloudwatch:ListTagsForResource) surfaced it as an
+  # AccessDenied, not caught by validation or review.
   statement {
     sid       = "CloudWatch"
     actions   = ["cloudwatch:*"]
-    resources = ["arn:aws:cloudwatch:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alarm/dumpster-*"]
+    resources = ["arn:aws:cloudwatch:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alarm:dumpster-*"]
   }
 
   # cloudwatch:PutMetricData/ListMetrics/GetMetricData and friends have no
@@ -175,8 +181,16 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "logs:CreateLogGroup",
       "logs:DeleteLogGroup",
       "logs:PutRetentionPolicy",
+      # Both tag API generations granted -- the provider version pinned
+      # here isn't confirmed to use one over the other, and getting this
+      # wrong the same way the CloudWatch alarm ARN separator was wrong
+      # costs another full CI round trip to discover.
       "logs:TagResource",
+      "logs:UntagResource",
       "logs:ListTagsForResource",
+      "logs:TagLogGroup",
+      "logs:UntagLogGroup",
+      "logs:ListTagsLogGroup",
     ]
     resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/dumpster-*"]
   }
@@ -268,6 +282,15 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "iam:PassRole",
       "iam:GetInstanceProfile",
       "iam:GetOpenIDConnectProvider",
+      "iam:UntagRole",
+      # aws_iam_instance_profile.nat_ssm's own lifecycle (ecs_networking.tf)
+      # -- missed in the original policy alongside GetInstanceProfile,
+      # which only covers reading one, not managing it.
+      "iam:CreateInstanceProfile",
+      "iam:DeleteInstanceProfile",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:TagInstanceProfile",
     ]
     resources = [
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/dumpster-*",
