@@ -75,6 +75,24 @@ type Config struct {
 	// LLM
 	AnthropicAPIKey string
 	AnthropicModel  string
+	// LLMProvider selects which llm.Generator implementation cmd/api and
+	// cmd/worker construct: "anthropic" (default, direct Anthropic API,
+	// billed against AnthropicAPIKey's account) or "bedrock" (AWS Bedrock's
+	// Converse API, billed through AWS, authenticated via the ECS task
+	// role -- no API key at all). Production launches on Bedrock from day
+	// one; staging keeps using Anthropic direct -- see the "DNS and TLS
+	// cutover plan" dev board card for why direct Anthropic billing was a
+	// real, immediate cost risk this app hit for real (a load-testing
+	// burst burned real non-refundable credit in under an hour) that
+	// Bedrock sidesteps entirely for production traffic.
+	LLMProvider string
+	// BedrockModelID is a Bedrock model ID or inference profile ID/ARN,
+	// only read when LLMProvider is "bedrock". Not the bare model name the
+	// direct Anthropic API uses -- some models, including Claude Sonnet 5,
+	// reject on-demand invocation by model ID and require an inference
+	// profile instead (confirmed for real against this account before
+	// picking the default below, not assumed from documentation).
+	BedrockModelID string
 	// Entity extraction
 	// EntityTypes is the closed-but-broad, domain-agnostic set of entity
 	// types the extractor is allowed to emit. It is config, not code: add
@@ -255,6 +273,8 @@ func Load() *Config {
 		S3ScratchUsePathStyle: getEnv("S3_SCRATCH_USE_PATH_STYLE", "false") == "true",
 		AnthropicAPIKey:       getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:        getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+		LLMProvider:           getEnv("LLM_PROVIDER", "anthropic"),
+		BedrockModelID:        getEnv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5"),
 
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
