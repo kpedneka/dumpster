@@ -137,6 +137,23 @@ resource "aws_ecs_task_definition" "api" {
       name      = "embed-sidecar"
       image     = "${data.aws_ecr_repository.embed_sidecar.repository_url}:${var.image_tag}"
       essential = true
+      # Caps PyTorch's (and the underlying BLAS library's) CPU thread count
+      # -- ported from the old fly.inference.toml, where the identical
+      # setting was load-bearing: measured directly, an unset default let
+      # PyTorch autodetect the *host's* logical CPU count rather than this
+      # container's real allocation, and the resulting over-threading
+      # turned a 47s embedding call into 13m18s under throttling (see
+      # internal/llm/awsbatch's package doc for the full story). Set to
+      # "1", not Fly's "2": that value matched shared-cpu-2x's 2 dedicated
+      # vCPUs for this process alone, but api_cpu below is 1024 units (1
+      # vCPU) shared across BOTH containers in this task -- "1" is the
+      # correct translation of the same fix to this task's actual
+      # allocation, not a guess. Revisit if api_cpu is ever raised.
+      environment = [
+        { name = "OMP_NUM_THREADS", value = "1" },
+        { name = "MKL_NUM_THREADS", value = "1" },
+        { name = "OPENBLAS_NUM_THREADS", value = "1" },
+      ]
       portMappings = [
         { containerPort = 8000, name = "embed-sidecar" }
       ]
