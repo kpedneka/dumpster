@@ -45,9 +45,22 @@ func (a *LLMAnswerer) AnswerStream(ctx context.Context, _ uuid.UUID, query strin
 		return Result{Summary: notFoundSummary}, nil
 	}
 
-	prompt := buildPrompt(query, chunks)
+	// Split at the chunks/question boundary, not built as one string --
+	// the source-chunk block is the expensive part of this prompt and, for
+	// nearby queries against the same knowledge base, is often identical or
+	// near-identical call to call (same top-k retrieval), while the
+	// question is what genuinely varies. GenerateStreamCached marks the
+	// prefix as reusable so a repeat call sharing it verbatim is billed at
+	// a fraction of normal input-token price for that portion, instead of
+	// paying full price to resend the same chunk text on every query. Real
+	// motivation, not speculative: a sustained burst of load-test queries
+	// against a small, fixed set of knowledge bases burned ~3M tokens
+	// (~$12) in under an hour with no caching at all -- exactly the
+	// repeated-prefix shape this is meant to catch.
+	prefix := buildCacheablePrefix(chunks)
+	suffix := buildDynamicSuffix(query)
 	filter := &footerFilter{}
-	resp, err := a.gen.GenerateStream(ctx, prompt, func(delta string) {
+	resp, err := a.gen.GenerateStreamCached(ctx, prefix, suffix, func(delta string) {
 		if safe := filter.Write(delta); safe != "" {
 			onDelta(safe)
 		}
@@ -62,8 +75,14 @@ func (a *LLMAnswerer) AnswerStream(ctx context.Context, _ uuid.UUID, query strin
 	return parseResponse(resp, chunks), nil
 }
 
-// buildPrompt constructs the grounding prompt, numbering each chunk [1..N].
-func buildPrompt(query string, chunks []retrieval.ScoredChunk) string {
+// buildCacheablePrefix constructs the part of the grounding prompt that's
+// stable across nearby queries against the same chunks -- the instructions
+// and the numbered [1..N] source chunks themselves, the bulk of this
+// prompt's token cost. Concatenated with buildDynamicSuffix's output, this
+// produces the exact same text the single-string prompt used to be; the
+// split exists only so GenerateStreamCached knows where the reusable part
+// ends, not to change what the model is asked.
+func buildCacheablePrefix(chunks []retrieval.ScoredChunk) string {
 	var sb strings.Builder
 	sb.WriteString("You are a knowledge-base assistant. Answer the question using ONLY the source chunks below.\n")
 	sb.WriteString("Cite your sources with [N] where N is the chunk number, but group citations at the end of each paragraph, bullet point, or section rather than after every individual sentence — place every chunk number that supports that whole block of text together at its very end, not scattered one after each sentence.\n")
@@ -74,6 +93,18 @@ func buildPrompt(query string, chunks []retrieval.ScoredChunk) string {
 		fmt.Fprintf(&sb, "[%d] (document:%s chars:%d-%d)\n%s\n\n",
 			i+1, sc.DocumentID, sc.CharStart, sc.CharEnd, sc.Text)
 	}
+	return sb.String()
+}
+
+// buildDynamicSuffix constructs the part of the grounding prompt that
+// genuinely varies per call -- the question itself -- plus the trailing
+// citation-format instruction, kept immediately adjacent to the question
+// exactly as it was in the original single-string prompt rather than moved
+// into the cacheable prefix: instructions placed right before the actual
+// task tend to be followed more reliably, and this instruction is small
+// enough that caching it specifically wouldn't matter anyway.
+func buildDynamicSuffix(query string) string {
+	var sb strings.Builder
 	fmt.Fprintf(&sb, "Question: %s\n\n", query)
 	sb.WriteString("Write your answer using [N] citations, then on a new line write \"CITATIONS: \" followed by a comma-separated list of the chunk numbers you relied on.\n")
 	return sb.String()

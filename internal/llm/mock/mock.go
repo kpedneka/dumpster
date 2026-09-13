@@ -36,6 +36,12 @@ type Generator struct {
 	// GenerateFn and delivering its result as a single delta). Set this in
 	// tests that need to exercise multi-delta streaming behavior.
 	GenerateStreamFn func(ctx context.Context, prompt string, onDelta func(string)) (string, error)
+	// GenerateStreamCachedFn overrides GenerateStreamCached's default
+	// behavior (concatenating cacheablePrefix+dynamicSuffix and delegating
+	// to GenerateStream, exactly what a caching-unaware provider would
+	// produce). Set this in tests that need to assert on how a caller split
+	// its prompt into cached/uncached parts.
+	GenerateStreamCachedFn func(ctx context.Context, cacheablePrefix, dynamicSuffix string, onDelta func(string)) (string, error)
 }
 
 func NewGenerator(response string) *Generator {
@@ -70,4 +76,15 @@ func (m *Generator) GenerateStream(ctx context.Context, prompt string, onDelta f
 	}
 	onDelta(text)
 	return text, nil
+}
+
+// GenerateStreamCached delegates to GenerateStreamCachedFn if set, otherwise
+// falls back to GenerateStream against the concatenated prefix+suffix -- a
+// mock has no real cache to benefit from, so this reproduces exactly what a
+// caller would see from a provider with caching disabled.
+func (m *Generator) GenerateStreamCached(ctx context.Context, cacheablePrefix, dynamicSuffix string, onDelta func(string)) (string, error) {
+	if m.GenerateStreamCachedFn != nil {
+		return m.GenerateStreamCachedFn(ctx, cacheablePrefix, dynamicSuffix, onDelta)
+	}
+	return m.GenerateStream(ctx, cacheablePrefix+dynamicSuffix, onDelta)
 }

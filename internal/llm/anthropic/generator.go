@@ -77,3 +77,51 @@ func (g *Generator) GenerateStream(ctx context.Context, prompt string, onDelta f
 	}
 	return full.String(), nil
 }
+
+// GenerateStreamCached behaves like GenerateStream, but sends cacheablePrefix
+// and dynamicSuffix as two separate content blocks in the same user message,
+// with a cache_control breakpoint on the first. Anthropic caches everything
+// up to and including a marked block, so a repeat call whose prefix matches
+// this one byte-for-byte gets that portion billed as a cache read (a
+// fraction of normal input pricing) instead of full price -- the same
+// message shape a single-string call would produce, just split so the
+// provider knows where the stable, worth-reusing part ends.
+func (g *Generator) GenerateStreamCached(ctx context.Context, cacheablePrefix, dynamicSuffix string, onDelta func(string)) (string, error) {
+	cached := anthropic.TextBlockParam{
+		Text:         cacheablePrefix,
+		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+	}
+	stream := g.client.Messages.NewStreaming(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(g.model),
+		MaxTokens: 4096,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(
+				anthropic.ContentBlockParamUnion{OfText: &cached},
+				anthropic.NewTextBlock(dynamicSuffix),
+			),
+		},
+	})
+	defer func() { _ = stream.Close() }()
+
+	var full strings.Builder
+	for stream.Next() {
+		event := stream.Current()
+		blockDelta, ok := event.AsAny().(anthropic.ContentBlockDeltaEvent)
+		if !ok {
+			continue
+		}
+		textDelta, ok := blockDelta.Delta.AsAny().(anthropic.TextDelta)
+		if !ok || textDelta.Text == "" {
+			continue
+		}
+		full.WriteString(textDelta.Text)
+		onDelta(textDelta.Text)
+	}
+	if err := stream.Err(); err != nil {
+		return "", fmt.Errorf("anthropic: generate stream cached: %w", err)
+	}
+	if full.Len() == 0 {
+		return "", fmt.Errorf("anthropic: empty response")
+	}
+	return full.String(), nil
+}

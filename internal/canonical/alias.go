@@ -8,16 +8,32 @@ import (
 	"github.com/google/uuid"
 )
 
-// AliasJudge decides whether two entity mentions with different text refer
-// to the same real-world entity, given their shared entity type. Judges
-// from the two texts and type alone, not surrounding chunk context --
+// AliasJudge decides which, if any, of several candidate entity mentions
+// refer to the same real-world entity as textA, given their shared entity
+// type. Judges from text and type alone, not surrounding chunk context --
 // FuzzyCandidates' token-subset matching already only proposes candidates
 // with a real textual relationship (one's words are a subset of the
 // other's), so this is a sanity check on a name-shaped signal, not
 // open-ended disambiguation. A future version could add chunk context if
 // empirical false positives show it's needed.
+//
+// Batched (one call per canonical entity's whole candidate set), not one
+// call per pair -- a real, measured problem, not a speculative one: the
+// original one-pair-per-call design meant a KB-wide ResolveAllAliases sweep
+// issued one real LLM call per (canonical entity, fuzzy candidate) pair,
+// scaling as their product. For a KB with hundreds of canonical entities
+// and even a handful of fuzzy candidates each, that's easily hundreds to
+// thousands of small API calls in a single run -- exactly the shape that
+// burns real cost fast, unlike relation.Extractor and crosslink.Extractor,
+// which already batched their own LLM-as-judge calls from the start.
 type AliasJudge interface {
-	SameEntity(ctx context.Context, entityType, textA, textB string) (bool, error)
+	// SameEntityBatch judges every candidate against textA in one call,
+	// returning one bool per candidate in the same order given -- true
+	// where the model judged that candidate the same real-world entity as
+	// textA, false otherwise (including for a candidate its response never
+	// addressed, the same "don't guess" fallback the original single-pair
+	// judge used).
+	SameEntityBatch(ctx context.Context, entityType, textA string, candidates []string) ([]bool, error)
 }
 
 // ResolveAliases runs after ResolveNew's exact-match resolution: for each
@@ -87,13 +103,21 @@ func resolveAliasesFor(ctx context.Context, repo Repository, userID, kbID uuid.U
 		if err != nil {
 			return fmt.Errorf("canonical: resolve aliases: fuzzy candidates for %s: %w", ce.ID, err)
 		}
+		if len(candidates) == 0 {
+			continue
+		}
 
-		for _, cand := range candidates {
-			same, err := judge.SameEntity(ctx, string(ce.Type), ce.NormalizedText, cand.NormalizedText)
-			if err != nil {
-				return fmt.Errorf("canonical: resolve aliases: judge: %w", err)
-			}
-			if !same {
+		candTexts := make([]string, len(candidates))
+		for i, cand := range candidates {
+			candTexts[i] = cand.NormalizedText
+		}
+		verdicts, err := judge.SameEntityBatch(ctx, string(ce.Type), ce.NormalizedText, candTexts)
+		if err != nil {
+			return fmt.Errorf("canonical: resolve aliases: judge: %w", err)
+		}
+
+		for i, cand := range candidates {
+			if i >= len(verdicts) || !verdicts[i] {
 				continue
 			}
 

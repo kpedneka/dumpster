@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -93,6 +94,78 @@ func TestGenerateStream_NonOKStatus_ReturnsError(t *testing.T) {
 	_, err := g.GenerateStream(context.Background(), "prompt", func(string) {})
 	if err == nil {
 		t.Fatal("expected error for a non-200 response")
+	}
+}
+
+func TestGenerateStreamCached_DeliversTextDeltasAndReturnsFullText(t *testing.T) {
+	g := fakeGenerator(textDeltaStream("Cached ", "answer."))
+
+	var deltas []string
+	full, err := g.GenerateStreamCached(context.Background(), "cacheable prefix", "dynamic suffix", func(d string) { deltas = append(deltas, d) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full != "Cached answer." {
+		t.Errorf("full = %q, want %q", full, "Cached answer.")
+	}
+	if len(deltas) != 2 || deltas[0] != "Cached " || deltas[1] != "answer." {
+		t.Errorf("deltas = %+v, want [\"Cached \" \"answer.\"]", deltas)
+	}
+}
+
+// TestGenerateStreamCached_MarksOnlyThePrefixAsCacheable is the test that
+// actually matters for this method's whole reason to exist: not that
+// streaming works (GenerateStream's tests already cover that identically),
+// but that the request Anthropic receives puts cache_control on the prefix
+// block and not the suffix -- a caller relying on this to bring down real
+// dollar cost needs the wire format to be right, not just the plumbing.
+func TestGenerateStreamCached_MarksOnlyThePrefixAsCacheable(t *testing.T) {
+	var capturedBody []byte
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		capturedBody, _ = io.ReadAll(req.Body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(textDeltaStream("ok"))),
+			Request:    req,
+		}, nil
+	})
+	g := New("test-key", "claude-test", option.WithHTTPClient(&http.Client{Transport: transport}))
+
+	_, err := g.GenerateStreamCached(context.Background(), "the cacheable prefix", "the dynamic suffix", func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var body struct {
+		Messages []struct {
+			Content []struct {
+				Text         string `json:"text"`
+				CacheControl *struct {
+					Type string `json:"type"`
+				} `json:"cache_control"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v (body: %s)", err, capturedBody)
+	}
+	if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 {
+		t.Fatalf("request shape = %+v, want exactly 1 message with 2 content blocks", body)
+	}
+
+	prefixBlock, suffixBlock := body.Messages[0].Content[0], body.Messages[0].Content[1]
+	if prefixBlock.Text != "the cacheable prefix" {
+		t.Errorf("prefix block text = %q, want %q", prefixBlock.Text, "the cacheable prefix")
+	}
+	if prefixBlock.CacheControl == nil || prefixBlock.CacheControl.Type != "ephemeral" {
+		t.Errorf("prefix block cache_control = %+v, want {Type: ephemeral}", prefixBlock.CacheControl)
+	}
+	if suffixBlock.Text != "the dynamic suffix" {
+		t.Errorf("suffix block text = %q, want %q", suffixBlock.Text, "the dynamic suffix")
+	}
+	if suffixBlock.CacheControl != nil {
+		t.Errorf("suffix block cache_control = %+v, want nil (not cached)", suffixBlock.CacheControl)
 	}
 }
 
