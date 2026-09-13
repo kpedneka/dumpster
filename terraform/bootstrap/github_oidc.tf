@@ -299,14 +299,22 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     ]
   }
 
-  # IAM roles this deploy role must be able to *read* but never modify --
-  # the account's default ecsTaskExecutionRole (batch.tf's Fargate job
-  # definitions reference it) and the Batch service-linked role, neither
-  # of which follows the dumpster-* naming convention and neither of
-  # which this Terraform config ever creates or changes.
+  # IAM roles this deploy role must be able to *read and pass* but never
+  # modify -- the account's default ecsTaskExecutionRole (batch.tf's
+  # Fargate job definitions reference it as their executionRoleArn) and
+  # the Batch service-linked role (batch.tf's compute environments pass
+  # it as their service_role), neither of which follows the dumpster-*
+  # naming convention and neither of which this Terraform config ever
+  # creates or changes. PassRole is what was actually missing here --
+  # GetRole alone covers reading a role's own definition, not handing it
+  # to another AWS service on this role's behalf, which is what
+  # RegisterJobDefinition/CreateComputeEnvironment need to do with these
+  # two roles specifically (found by a real apply attempt, not
+  # anticipated -- the dumpster-* PassRole grant on IAMScoped above only
+  # ever covered roles this config itself manages).
   statement {
     sid     = "IAMReadOnlyExternal"
-    actions = ["iam:GetRole"]
+    actions = ["iam:GetRole", "iam:PassRole"]
     resources = [
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ecsTaskExecutionRole",
       "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch",
