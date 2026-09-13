@@ -156,6 +156,13 @@ type Config struct {
 	// SweepInterval is how often the always-on worker runs the session sweep.
 	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
 	SweepInterval time.Duration
+	// QueueMetricsPublishInterval is how often cmd/worker publishes queue
+	// backlog depth to CloudWatch (internal/queuemetrics) for the worker's
+	// queue-depth ECS auto-scaling policy. A much shorter cadence than
+	// SweepInterval on purpose: CloudWatch evaluates standard-resolution
+	// alarms roughly once a minute, so a slower publish cadence would make
+	// the scaling signal lag real backlog changes. Defaults to 60s.
+	QueueMetricsPublishInterval time.Duration
 	// WorkerConcurrency is how many jobs the worker processes at once.
 	// Defaults to 5. Safe to run above 1 now that entity extraction and
 	// region classification call the inference service over HTTP instead of
@@ -264,12 +271,13 @@ func Load() *Config {
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 
-		MaxDocumentsPerSession: getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
-		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
-		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
-		SweepInterval:          getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
-		JobStaleTimeout:        getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
-		WorkerConcurrency:      getEnvInt("WORKER_CONCURRENCY", 5),
+		MaxDocumentsPerSession:      getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
+		RateLimitRequests:           getEnvInt("RATE_LIMIT_REQUESTS", 100),
+		RateLimitWindow:             getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
+		SweepInterval:               getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
+		QueueMetricsPublishInterval: getEnvDuration("QUEUE_METRICS_PUBLISH_INTERVAL", 60*time.Second),
+		JobStaleTimeout:             getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
+		WorkerConcurrency:           getEnvInt("WORKER_CONCURRENCY", 5),
 
 		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
 		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),

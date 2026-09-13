@@ -201,3 +201,19 @@ type JobStatusReader interface {
 	// to exist is not the same question as which one is the bottleneck.
 	ActiveJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID][]JobStatus, error)
 }
+
+// PendingCounter reports queue backlog depth, grouped by job type -- the
+// signal internal/queuemetrics publishes to CloudWatch for the worker's
+// queue-depth-based ECS auto-scaling policy (see the "Design a
+// queue-depth-based autoscaling signal for the worker" dev board card).
+// Deliberately not folded into JobStatusReader: that interface answers
+// "what's happening for these specific documents," a per-tenant, per-request
+// question; this answers "how backlogged is the queue overall," a
+// cross-tenant, periodic-polling question with a different caller and a
+// different cadence.
+type PendingCounter interface {
+	// CountPending returns the number of jobs in status "pending", grouped
+	// by JobType. A job type with zero pending jobs is simply absent from
+	// the map, not present with a zero value.
+	CountPending(ctx context.Context) (map[JobType]int, error)
+}

@@ -78,6 +78,13 @@ resource "aws_ecs_service" "worker" {
   # service over it (for /regions), and that call moved to an AWS Batch
   # job submission instead -- see internal/manifest/awsbatch. Nothing
   # left in this cluster needs internal service discovery.
+
+  # Application Auto Scaling (ecs_worker_autoscaling.tf) owns desired_count
+  # once this service exists -- same reasoning as aws_ecs_service.api in
+  # ecs_api.tf.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
 }
 
 variable "worker_cpu" {

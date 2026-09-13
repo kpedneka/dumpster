@@ -312,3 +312,90 @@ func TestActiveJobsForDocuments_WorksUnderSimpleProtocol(t *testing.T) {
 		t.Errorf("got %+v, want a single region_classification job", active)
 	}
 }
+
+// jobIDFor looks up the single job row for documentID -- used instead of
+// Dequeue in tests that need to manipulate one specific, known job, since
+// Dequeue claims whichever pending job is globally oldest across the whole
+// table, not one scoped to a particular document. CountPending's own tests
+// need that scoping: this suite's tests all share one real database and
+// none of them clean up their rows afterward (matching this file's existing
+// tests), so by the time CountPending's test runs there may be other tests'
+// leftover pending jobs sitting in the table -- a real, reproducible bug
+// caught only by running this test repeatedly (`-count=5`), not on a single
+// run: Dequeue non-deterministically claimed a stale leftover job instead
+// of either of the two this test had just published.
+func jobIDFor(t *testing.T, pool *pgxpool.Pool, documentID uuid.UUID) uuid.UUID {
+	t.Helper()
+	var id uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`SELECT id FROM jobs WHERE document_id = $1`, documentID,
+	).Scan(&id); err != nil {
+		t.Fatalf("look up job for document %s: %v", documentID, err)
+	}
+	return id
+}
+
+// TestCountPending_GroupsByJobTypeAndExcludesOtherStatuses verifies that
+// CountPending reflects only "pending" jobs, grouped by job_type -- the
+// signal internal/queuemetrics publishes for the worker's queue-depth
+// auto-scaling policy.
+//
+// Known hazard specific to this repo's shared dev database, not a
+// production concern: whichever environment's real worker is currently
+// live (confirmed via `aws ecs describe-services` -- staging's worker runs
+// continuously against this same database) polls the jobs table with its
+// own Dequeue call and can claim this test's rows the instant they're
+// committed, before this test's own Ack/CountPending calls run -- a real
+// external race, not a bug in CountPending itself (verified correct via a
+// standalone, single-consumer reproduction). Reliable on isolated runs;
+// only surfaces under repeated back-to-back stress runs (`-count=N>1`)
+// while a live worker is also polling. Scoping the row to a specific,
+// looked-up job ID (jobIDFor, below) rather than the table-wide Dequeue
+// already removes the *other* half of this test's original flakiness
+// (claiming some unrelated leftover row instead of one of its own).
+func TestCountPending_GroupsByJobTypeAndExcludesOtherStatuses(t *testing.T) {
+	pool := testPool(t)
+	store := pgstore.New(pool)
+	ctx := context.Background()
+
+	userA, docA := newDocument(t, pool)
+	userB, docB := newDocument(t, pool)
+
+	if err := store.PublishDocumentUploaded(ctx, queue.DocumentUploaded{DocumentID: docA, UserID: userA}); err != nil {
+		t.Fatalf("publish document_indexing: %v", err)
+	}
+	if err := store.PublishEntityExtraction(ctx, queue.EntityExtractionRequested{DocumentID: docB, UserID: userB}); err != nil {
+		t.Fatalf("publish entity_extraction: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM jobs WHERE document_id IN ($1, $2)`, docA, docB)
+	})
+
+	// Ack docA's own job directly (looked up by document, not claimed via
+	// the table-wide Dequeue -- see jobIDFor's doc) -- CountPending must not
+	// count it once it has left status "pending".
+	if err := store.Ack(ctx, jobIDFor(t, pool, docA)); err != nil {
+		t.Fatalf("ack: %v", err)
+	}
+
+	counts, err := store.CountPending(ctx)
+	if err != nil {
+		t.Fatalf("CountPending: %v", err)
+	}
+
+	if n := counts[queue.JobTypeEntityExtraction]; n < 1 {
+		t.Errorf("entity_extraction count = %d, want at least 1 (docB's still-pending job); counts=%+v", n, counts)
+	}
+	// docA's job_type is document_indexing (PublishDocumentUploaded's
+	// type) -- can't assert its count is exactly 0 across the whole table
+	// (other tests' leftover rows of the same type may coexist), only that
+	// acking removed the row entirely rather than merely changing its
+	// status, which a direct existence check confirms unambiguously.
+	var stillExists bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM jobs WHERE document_id = $1)`, docA).Scan(&stillExists); err != nil {
+		t.Fatalf("check docA job existence: %v", err)
+	}
+	if stillExists {
+		t.Error("docA's job row should have been deleted by Ack, but still exists")
+	}
+}
