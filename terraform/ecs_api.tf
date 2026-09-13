@@ -166,6 +166,15 @@ resource "aws_ecs_service" "api" {
   # same-task sidecar reached over localhost instead -- see the
   # embed-sidecar container in aws_ecs_task_definition.api above.
 
+  # Application Auto Scaling (ecs_api_autoscaling.tf) owns desired_count
+  # once this service exists -- without ignore_changes here, every `tofu
+  # apply` would fight the autoscaler by resetting desired_count back to
+  # this resource's static value, undoing whatever scale-out the target
+  # tracking policy had put in place moments before.
+  lifecycle {
+    ignore_changes = [desired_count]
+  }
+
   depends_on = [aws_lb_listener.https]
 }
 
