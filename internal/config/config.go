@@ -109,6 +109,16 @@ type Config struct {
 	// cmd/worker and cmd/reembed exit at startup if either is empty.
 	EmbedBatchJobQueue      string
 	EmbedBatchJobDefinition string
+	// RegionsBatchJobQueue and RegionsBatchJobDefinition identify a third,
+	// independent AWS Batch resource pair for PDF region extraction
+	// (internal/manifest/awsbatch) -- required, same as the two pairs
+	// above; cmd/worker exits at startup if either is empty. No HTTP
+	// fallback to the old always-on inference service: that path existed
+	// briefly while these Batch resources hadn't been provisioned yet,
+	// but was removed once Fly deploys stopped entirely, since keeping a
+	// fallback this process would never actually use is just dead code.
+	RegionsBatchJobQueue      string
+	RegionsBatchJobDefinition string
 	// BatchPollInterval is how often the awsbatch extractor/embedder
 	// checks a submitted job's status. Defaults to 5s (their own default)
 	// when unset. Shared between entity extraction and embedding — both
@@ -223,13 +233,15 @@ func Load() *Config {
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
 
-		AWSRegion:               getEnv("AWS_REGION", "us-east-1"),
-		BatchJobQueue:           getEnv("BATCH_JOB_QUEUE", ""),
-		BatchJobDefinition:      getEnv("BATCH_JOB_DEFINITION", ""),
-		EmbedBatchJobQueue:      getEnv("EMBED_BATCH_JOB_QUEUE", ""),
-		EmbedBatchJobDefinition: getEnv("EMBED_BATCH_JOB_DEFINITION", ""),
-		BatchPollInterval:       getEnvDuration("BATCH_POLL_INTERVAL", 0),
-		BatchPresignTTL:         getEnvDuration("BATCH_PRESIGN_TTL", 0),
+		AWSRegion:                 getEnv("AWS_REGION", "us-east-1"),
+		BatchJobQueue:             getEnv("BATCH_JOB_QUEUE", ""),
+		BatchJobDefinition:        getEnv("BATCH_JOB_DEFINITION", ""),
+		EmbedBatchJobQueue:        getEnv("EMBED_BATCH_JOB_QUEUE", ""),
+		EmbedBatchJobDefinition:   getEnv("EMBED_BATCH_JOB_DEFINITION", ""),
+		RegionsBatchJobQueue:      getEnv("REGIONS_BATCH_JOB_QUEUE", ""),
+		RegionsBatchJobDefinition: getEnv("REGIONS_BATCH_JOB_DEFINITION", ""),
+		BatchPollInterval:         getEnvDuration("BATCH_POLL_INTERVAL", 0),
+		BatchPresignTTL:           getEnvDuration("BATCH_PRESIGN_TTL", 0),
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 

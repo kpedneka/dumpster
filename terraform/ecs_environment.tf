@@ -36,3 +36,15 @@ locals {
     staging    = ["172.31.128.0/20", "172.31.144.0/20"]
   }
 }
+
+# Moved here from the now-deleted ecs_inference.tf (the standalone
+# inference service was fully retired once region classification and
+# query embedding both moved off it -- see the "Eliminate the standalone
+# inference service" and "Fold region classification into the AWS Batch
+# embed job" dev board cards). Kept as a shared, top-level variable since
+# every remaining task definition (api, worker, cleanup) still uses it.
+variable "image_tag" {
+  type        = string
+  description = "Tag of the images to deploy, shared across all task definitions -- set by the CD pipeline to the commit SHA being deployed."
+  default     = "latest"
+}

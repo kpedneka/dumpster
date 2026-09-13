@@ -28,11 +28,19 @@ resource "aws_ecs_task_definition" "worker" {
       essential = true
       environment = concat(local.shared_environment, [
         { name = "ANTHROPIC_MODEL", value = var.anthropic_model },
-        { name = "INFERENCE_SERVICE_URL", value = "http://inference:8000" },
         { name = "BATCH_JOB_QUEUE", value = var.entity_extraction_job_queue },
         { name = "BATCH_JOB_DEFINITION", value = var.entity_extraction_job_definition },
         { name = "EMBED_BATCH_JOB_QUEUE", value = var.embedding_job_queue },
         { name = "EMBED_BATCH_JOB_DEFINITION", value = var.embedding_job_definition },
+        # PDF/image region classification runs as its own AWS Batch job --
+        # see internal/manifest/awsbatch's package doc. Required, not
+        # opt-in: cmd/worker exits at startup if either is empty. No
+        # fallback to the old standalone inference service's synchronous
+        # /regions call remains -- that's fully retired now that Fly
+        # deploys have stopped entirely (see the "Fold region
+        # classification into the AWS Batch embed job" dev board card).
+        { name = "REGIONS_BATCH_JOB_QUEUE", value = var.regions_batch_job_queue },
+        { name = "REGIONS_BATCH_JOB_DEFINITION", value = var.regions_batch_job_definition },
         { name = "WORKER_CONCURRENCY", value = "5" },
         { name = "ENTITY_EXTRACTION_BATCH_SIZE", value = "50" },
         { name = "R2_SCRATCH_ENDPOINT", value = var.r2_scratch_endpoint },
@@ -65,10 +73,10 @@ resource "aws_ecs_service" "worker" {
     security_groups = [aws_security_group.ecs_tasks.id]
   }
 
-  service_connect_configuration {
-    enabled   = true
-    namespace = aws_service_discovery_http_namespace.internal.arn
-  }
+  # No Service Connect: worker only ever reached the standalone inference
+  # service over it (for /regions), and that call moved to an AWS Batch
+  # job submission instead -- see internal/manifest/awsbatch. Nothing
+  # left in this cluster needs internal service discovery.
 }
 
 variable "worker_cpu" {
@@ -116,6 +124,18 @@ variable "embedding_job_definition" {
   type        = string
   description = "AWS Batch job definition for ingestion-time embedding. Real value confirmed via `aws batch describe-job-definitions`. Shared across environments -- see the note above."
   default     = "dumpster-embedding-jobdef"
+}
+
+variable "regions_batch_job_queue" {
+  type        = string
+  description = "AWS Batch job queue for PDF region extraction. Deliberately the same queue as embedding, not a dedicated one: region extraction is CPU-only with the same compute profile as embedding, and provisioning a 4th idle compute environment for what's likely a minority of ingestion volume (PDF/image uploads only) isn't worth it at this scale. Revisit if PDF-heavy bursts cause real queue-wait contention with embed jobs -- same measure-then-fix approach as the rest of this file's Batch sizing."
+  default     = "dumpster-embedding-queue"
+}
+
+variable "regions_batch_job_definition" {
+  type        = string
+  description = "AWS Batch job definition for PDF region extraction (Dockerfile.batch-regions-job). Not yet created by this Terraform -- AWS Batch job definitions/queues aren't Terraform-managed anywhere in this directory (see the note above these variables), so this needs a real `aws batch register-job-definition` before this default resolves to anything real."
+  default     = "dumpster-region-extraction"
 }
 
 variable "r2_scratch_endpoint" {

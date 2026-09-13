@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+#
+# AWS Batch job image for PDF region extraction (see
+# scripts/batch_regions_job.py). Moved off the always-on Fly inference
+# service's synchronous /regions call for the same idle-capacity-cost
+# reason ingestion-time embedding moved to Batch -- see
+# internal/manifest/awsbatch's package doc for the full story.
+#
+# Deliberately its own Dockerfile, not folded into Dockerfile.batch-embed-job:
+# region extraction (pymupdf + pdfplumber) has nothing to do with the
+# sentence-transformers/torch stack that file's base stage exists for --
+# sharing a base would mean this image drags in ~1.3GB of unused torch
+# weight for a job with no ML model at all.
+#
+# Build with --platform linux/amd64 explicitly. The AWS Batch job
+# definition this runs against (registered by hand, not Terraform-managed
+# -- see ecs_worker.tf's regions_batch_job_definition variable) has no
+# runtimePlatform set, same as the existing embedding/entity-extraction
+# job definitions, which defaults to X86_64. A real "Essential container
+# in task exited" / exit code 255 failure resulted from building this on
+# Apple Silicon without the flag -- the exact same architecture-mismatch
+# signature already hit once with the ECS task definitions, just missed
+# here since this job definition was registered by hand outside Terraform
+# and had no runtime_platform block to remind of the mismatch.
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Same three packages scripts/requirements.txt lists for extract_regions.py
+# -- pymupdf is AGPL-3.0/commercial dual-licensed, see LICENSE at the repo
+# root.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir \
+    "pymupdf>=1.24,<2" "pdfplumber>=0.11,<1" "Pillow>=10,<12"
+
+COPY scripts/extract_regions.py scripts/batch_regions_job.py /app/
+
+CMD ["python", "batch_regions_job.py"]

@@ -155,10 +155,10 @@ resource "aws_ecs_service" "api" {
     container_port   = 8080
   }
 
-  service_connect_configuration {
-    enabled   = true
-    namespace = aws_service_discovery_http_namespace.internal.arn
-  }
+  # No Service Connect: the only thing api ever reached over it was the
+  # standalone inference service (query embeddings), which now runs as a
+  # same-task sidecar reached over localhost instead -- see the
+  # embed-sidecar container in aws_ecs_task_definition.api above.
 
   depends_on = [aws_lb_listener.https]
 }
