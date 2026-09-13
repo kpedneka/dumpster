@@ -61,9 +61,29 @@ jobs:
       # this can't be a static value the way a human's staging.tvars
       # entry is. Computed fresh each run instead, exactly like the
       # manual runbook already tells a human to do with `curl ifconfig.me`.
-      - name: Compute this runner's public IP
+      #
+      # Also merges in vars.STAGING_MANUAL_TESTING_CIDR when set -- a
+      # real gap found only once staging was actually left running after
+      # a successful test (see the Destroy step below): without this,
+      # the allowlist contains only the now-meaningless ephemeral
+      # runner's IP once the job ends, and a human's own browser gets
+      # silently dropped at the security-group layer trying to reach it
+      # afterward -- the same "why won't this load" trap the manual
+      # runbook already warns about with iCloud Private Relay, just from
+      # a different cause. Set this repo variable to your current public
+      # IP (`curl -4 -s ifconfig.me`) as a /32 before a run you intend to
+      # look at by hand; like the manual runbook's own note, it needs
+      # updating if your IP changes between sessions.
+      - name: Compute allowed CIDRs (runner + optional manual-testing IP)
         id: runner_ip
-        run: echo "TF_VAR_staging_allowed_cidrs=[\"$(curl -4 -s ifconfig.me)/32\"]" >> "$GITHUB_ENV"
+        run: |
+          RUNNER_CIDR="$(curl -4 -s ifconfig.me)/32"
+          MANUAL_CIDR="${{ vars.STAGING_MANUAL_TESTING_CIDR }}"
+          if [ -n "$MANUAL_CIDR" ]; then
+            echo "TF_VAR_staging_allowed_cidrs=[\"$RUNNER_CIDR\", \"$MANUAL_CIDR\"]" >> "$GITHUB_ENV"
+          else
+            echo "TF_VAR_staging_allowed_cidrs=[\"$RUNNER_CIDR\"]" >> "$GITHUB_ENV"
+          fi
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -184,10 +204,38 @@ jobs:
           echo "::error::staging never became healthy"
           exit 1
 
-      # Always runs, pass or fail at any prior step (a crashed smoke test
-      # must not leak paid resources -- see CLAUDE.md/the dev board card).
+      # Prints the ALB URL and allowlisted CIDRs to the job summary --
+      # staging stays running after a successful run (see the Destroy
+      # step below), specifically so a human can look at it, and that's
+      # only useful if the URL is somewhere visible, not just implied.
+      - name: Staging is up
+        if: success()
+        working-directory: terraform
+        run: |
+          {
+            echo "### Staging is up for manual testing"
+            echo ""
+            echo "URL: https://$(tofu output -raw alb_dns_name)/ (self-signed against the ALB's own hostname -- see the smoke test step's comment)"
+            echo ""
+            echo "Allowlisted IPs: ${{ env.TF_VAR_staging_allowed_cidrs }}"
+            echo ""
+            echo "Remove the \`deploy-staging\` label from this PR when done -- that tears it down (see teardown-on-unlabel)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only runs on failure/cancellation now, not always() -- a crashed
+      # run still must not leak paid resources, but a *successful* one is
+      # left running on purpose so it can actually be looked at by a
+      # human, not just smoke-tested by curl. Real gap in the original
+      # design, caught by direct feedback, not anticipated: destroying
+      # immediately after every green run meant staging was never
+      # actually usable for manual testing, which was the whole point of
+      # standing up a real environment rather than only running unit
+      # tests. Teardown now happens explicitly, later, by removing the
+      # deploy-staging label -- reusing teardown-on-unlabel below, which
+      # already existed for a different edge case and turns out to be
+      # exactly the right mechanism for this too.
       - name: Destroy staging
-        if: always()
+        if: failure() || cancelled()
         working-directory: terraform
         run: |
           tofu init
