@@ -20,4 +20,17 @@ type Generator interface {
 	// generation completes, identically to what Generate would return for
 	// the same prompt.
 	GenerateStream(ctx context.Context, prompt string, onDelta func(delta string)) (string, error)
+	// GenerateStreamCached behaves like GenerateStream, but marks cacheablePrefix
+	// as eligible for the provider's prompt-caching, so repeat calls sharing
+	// the same prefix verbatim are billed at a fraction of the normal input-
+	// token rate for that portion. dynamicSuffix is appended after the
+	// cached block, uncached -- the part that genuinely varies per call (the
+	// caller's actual question, not the shared context it's asked against).
+	// Intended for callers whose prefix is large and likely to recur across
+	// nearby calls (e.g. retrieved source chunks reused across similar
+	// queries against the same knowledge base); a small, one-off prompt
+	// gets no benefit from this over GenerateStream (providers also enforce
+	// a minimum cacheable size below which a cache breakpoint is silently a
+	// no-op, not an error).
+	GenerateStreamCached(ctx context.Context, cacheablePrefix, dynamicSuffix string, onDelta func(delta string)) (string, error)
 }

@@ -17,17 +17,21 @@ type fakeJudge struct {
 	err        error
 }
 
-func (f *fakeJudge) SameEntity(_ context.Context, _ string, textA, textB string) (bool, error) {
+func (f *fakeJudge) SameEntityBatch(_ context.Context, _ string, textA string, candidates []string) ([]bool, error) {
 	if f.err != nil {
-		return false, f.err
+		return nil, f.err
 	}
-	if v, ok := f.sameByPair[[2]string{textA, textB}]; ok {
-		return v, nil
+	out := make([]bool, len(candidates))
+	for i, textB := range candidates {
+		if v, ok := f.sameByPair[[2]string{textA, textB}]; ok {
+			out[i] = v
+			continue
+		}
+		if v, ok := f.sameByPair[[2]string{textB, textA}]; ok {
+			out[i] = v
+		}
 	}
-	if v, ok := f.sameByPair[[2]string{textB, textA}]; ok {
-		return v, nil
-	}
-	return false, nil
+	return out, nil
 }
 
 func TestResolveAliases_MergesConfirmedAlias(t *testing.T) {
