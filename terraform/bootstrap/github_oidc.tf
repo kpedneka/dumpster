@@ -1,0 +1,273 @@
+# GitHub Actions -> AWS auth for CI, via OIDC -- no static AWS keys ever
+# live in GitHub, matching the secrets architecture already decided (see
+# ecs_secrets.tf's header: "GitHub holds only the OIDC deploy role, AWS
+# Secrets Manager holds everything the app needs to run"). This is that
+# role, and the account-wide trust anchor it depends on -- neither existed
+# before this (confirmed via `aws iam list-open-id-connect-providers`,
+# empty), needed for the first time by the "design the staging spin-up/
+# test/tear-down workflow" dev board card's actual CI job.
+#
+# A deliberately separate root module/state from ../*.tf, not folded into
+# the same directory the staging/production workflows apply -- two real
+# reasons, not just tidiness. First, this resource set is account-global
+# (one OIDC provider, one deploy role for the whole repo), while every
+# other resource in this config is workspace/environment-scoped
+# (staging vs production, applied separately) -- there's no environment
+# for "the thing that lets CI authenticate" to belong to. Second, and
+# more important: the deploy role IAM policy below grants iam:PutRolePolicy
+# etc. on every dumpster-* role -- which would include this role's own
+# policy if it were ever included in a routine `tofu apply` that role
+# itself runs, a real self-privilege-escalation path if a CI job (however
+# unlikely, from a repo-scoped OIDC trust condition) ever pointed at this
+# directory instead of ../. Keeping it a separate root module makes that
+# structurally impossible, not just discouraged by convention: CI's own
+# apply commands never `cd` here. Apply this directory once, by hand,
+# with your own admin credentials -- not part of any automated workflow.
+
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 6.0"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# Fetched, not hand-typed: a wrong hex thumbprint is exactly the kind of
+# typo that's invisible until it silently breaks (or, worse, silently
+# doesn't break anything meaningful since AWS ignores this value anyway --
+# see the resource below) -- fetching it from the actual issuer removes
+# the chance of getting it wrong at all.
+data "tls_certificate" "github_actions" {
+  url = "https://token.actions.githubusercontent.com"
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region this account's resources run in -- matches ../ecs_iam.tf's variable of the same name."
+  default     = "us-east-1"
+}
+
+data "aws_caller_identity" "current" {}
+
+resource "aws_iam_openid_connect_provider" "github_actions" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  # AWS now validates GitHub's OIDC tokens against its own trusted CA
+  # bundle regardless of this value (the thumbprint_list argument is
+  # effectively vestigial post-2023, per AWS's own provider docs) --
+  # still required to be non-empty for the resource to apply.
+  thumbprint_list = [data.tls_certificate.github_actions.certificates[0].sha1_fingerprint]
+}
+
+# repo:kpedneka/dumpster:* -- every trigger type (pull_request, push to
+# main) from this one repo, nothing else. GitHub's actual `sub` claim
+# format differs by trigger (pull_request-triggered runs send
+# "repo:OWNER/REPO:pull_request", push-triggered runs send
+# "repo:OWNER/REPO:ref:refs/heads/<branch>") -- a single wildcard is
+# simpler than enumerating both formats and already covers the CD-on-
+# push-to-main workflow this same card still needs to build, not just
+# today's staging workflow.
+data "aws_iam_policy_document" "github_actions_assume" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    principals {
+      type        = "Federated"
+      identifiers = [aws_iam_openid_connect_provider.github_actions.arn]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "token.actions.githubusercontent.com:aud"
+      values   = ["sts.amazonaws.com"]
+    }
+    condition {
+      test     = "StringLike"
+      variable = "token.actions.githubusercontent.com:sub"
+      values   = ["repo:kpedneka/dumpster:*"]
+    }
+  }
+}
+
+resource "aws_iam_role" "github_actions_deploy" {
+  name               = "dumpster-github-actions-deploy"
+  assume_role_policy = data.aws_iam_policy_document.github_actions_assume.json
+}
+
+# Scoped to what a real `tofu apply`/`destroy` of this directory's config
+# touches. Resource-scoped by the dumpster-* naming convention every
+# resource in this config already follows, wherever the service actually
+# supports resource-level IAM (S3, IAM roles/instance profiles,
+# Secrets Manager, ECR, CloudWatch Logs/alarms). ECS, EC2, Batch, ELB,
+# Application Auto Scaling, and EventBridge Scheduler get broader,
+# service-level grants instead -- not full least-privilege, a deliberate
+# tradeoff: those services either don't support meaningful resource-level
+# scoping for the create/update/delete actions Terraform needs (EC2's
+# networking actions, most Batch and ECS calls), or Terraform's own
+# read-then-diff cycle needs broad Describe*/List* access anyway. Same
+# "accept simpler tradeoffs at personal scale" posture as the NAT
+# instance and ALB decisions elsewhere in this config -- this is a
+# single-project AWS account, not a shared one, so the blast radius of
+# this role over-reaching is contained to this project's own resources
+# regardless.
+data "aws_iam_policy_document" "github_actions_deploy" {
+  statement {
+    sid = "BroadServiceAccess"
+    actions = [
+      "ecs:*",
+      "ec2:*",
+      "batch:*",
+      "elasticloadbalancing:*",
+      "application-autoscaling:*",
+      "scheduler:*",
+      "acm:DescribeCertificate",
+      "acm:ListCertificates",
+      "acm:GetCertificate",
+      "sts:GetCallerIdentity",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid       = "CloudWatch"
+    actions   = ["cloudwatch:*"]
+    resources = ["arn:aws:cloudwatch:${var.aws_region}:${data.aws_caller_identity.current.account_id}:alarm/dumpster-*"]
+  }
+
+  # cloudwatch:PutMetricData/ListMetrics/GetMetricData and friends have no
+  # resource-level scoping at all (always "*") -- split from the alarm
+  # statement above, which does support it, rather than widening that
+  # one's resources to "*" too.
+  statement {
+    sid       = "CloudWatchMetrics"
+    actions   = ["cloudwatch:PutMetricData", "cloudwatch:ListMetrics", "cloudwatch:GetMetricData", "cloudwatch:DescribeAlarms"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "Logs"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:DeleteLogGroup",
+      "logs:DescribeLogGroups",
+      "logs:PutRetentionPolicy",
+      "logs:TagResource",
+      "logs:ListTagsForResource",
+    ]
+    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/dumpster-*"]
+  }
+
+  statement {
+    sid       = "S3"
+    actions   = ["s3:*"]
+    resources = ["arn:aws:s3:::dumpster-*"]
+  }
+
+  statement {
+    sid       = "ECR"
+    actions   = ["ecr:*"]
+    resources = ["arn:aws:ecr:${var.aws_region}:${data.aws_caller_identity.current.account_id}:repository/dumpster-*"]
+  }
+
+  # GetAuthorizationToken (needed for `docker login`) is account-wide by
+  # design -- AWS doesn't support resource-level scoping for it.
+  statement {
+    sid       = "ECRAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    sid = "SecretsManagerRead"
+    actions = [
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:ListSecrets",
+    ]
+    resources = ["arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:dumpster/*"]
+  }
+
+  # IAM: scoped to this project's own role/instance-profile naming
+  # convention -- covers both the per-environment roles this config
+  # creates (dumpster-staging-ecs-execution, etc.) and the shared,
+  # pre-existing Batch instance role/profile batch.tf reads via data
+  # source (dumpster-batch-ecs-instance-profile/-role), which also
+  # matches the dumpster-* prefix.
+  statement {
+    sid = "IAMScoped"
+    actions = [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:GetRole",
+      "iam:TagRole",
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfilesForRole",
+      "iam:PassRole",
+      "iam:GetInstanceProfile",
+      "iam:GetOpenIDConnectProvider",
+    ]
+    resources = [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/dumpster-*",
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/dumpster-*",
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/token.actions.githubusercontent.com",
+    ]
+  }
+
+  # IAM roles this deploy role must be able to *read* but never modify --
+  # the account's default ecsTaskExecutionRole (batch.tf's Fargate job
+  # definitions reference it) and the Batch service-linked role, neither
+  # of which follows the dumpster-* naming convention and neither of
+  # which this Terraform config ever creates or changes.
+  statement {
+    sid     = "IAMReadOnlyExternal"
+    actions = ["iam:GetRole"]
+    resources = [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ecsTaskExecutionRole",
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/batch.amazonaws.com/AWSServiceRoleForBatch",
+    ]
+  }
+
+  # Defense-in-depth against the self-escalation path the header comment
+  # already explains: this role's own name (dumpster-github-actions-
+  # deploy) matches the dumpster-* wildcard IAMScoped grants above, so
+  # without this explicit deny, the role could in principle rewrite its
+  # own trust policy or permissions. Structurally unreachable already
+  # (this directory is never part of any automated apply -- see header),
+  # but an explicit deny costs nothing and doesn't rely solely on that.
+  statement {
+    sid    = "DenySelfModification"
+    effect = "Deny"
+    actions = [
+      "iam:PutRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:DeleteRole",
+      "iam:AttachRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:UpdateAssumeRolePolicy",
+    ]
+    resources = [aws_iam_role.github_actions_deploy.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "github_actions_deploy" {
+  name   = "dumpster-github-actions-deploy"
+  role   = aws_iam_role.github_actions_deploy.id
+  policy = data.aws_iam_policy_document.github_actions_deploy.json
+}
+
+output "github_actions_deploy_role_arn" {
+  value       = aws_iam_role.github_actions_deploy.arn
+  description = "Set as the role-to-assume in the staging/CD workflows' aws-actions/configure-aws-credentials step."
+}

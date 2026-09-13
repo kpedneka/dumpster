@@ -49,8 +49,11 @@ examples/
 
 # Terraform local state and provider cache -- machine-specific, never
 # checked in. terraform/.terraform.lock.hcl (the provider version lock
-# file) is NOT ignored -- that one is meant to be committed.
+# file) is NOT ignored -- that one is meant to be committed. Matches
+# terraform/bootstrap/.terraform/ too (its own separate root module, see
+# that directory's github_oidc.tf), not just terraform/.terraform/ itself.
 terraform/.terraform/
+terraform/bootstrap/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars

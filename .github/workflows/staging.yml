@@ -1,0 +1,180 @@
+# Ephemeral staging: spins up a real AWS staging environment for a PR,
+# smoke-tests it, and tears it down -- gated by the deploy-staging label
+# (see CLAUDE.md's Local workflow section and the "design the staging
+# spin-up/test/tear-down workflow" dev board card), not automatic on
+# every PR, since applying this config starts real AWS billing.
+#
+# Only one staging environment exists in this AWS account (see the
+# concurrency block below) -- it's a shared, personal-scale resource, not
+# one-per-PR. Two PRs both carrying the label at once would otherwise
+# race to apply/destroy the same OpenTofu state; the concurrency group
+# below serializes every run onto a single queue instead, across every
+# PR, not just repeat pushes to the same one.
+
+name: Staging (ephemeral)
+
+on:
+  pull_request:
+    types: [labeled, unlabeled, synchronize]
+
+permissions:
+  id-token: write # required for aws-actions/configure-aws-credentials' OIDC exchange
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: staging-environment
+  cancel-in-progress: false # never cancel mid-apply/destroy -- a killed run can orphan real AWS resources
+
+env:
+  AWS_REGION: us-east-1
+  TF_VAR_environment: staging
+  TF_VAR_acm_domain_name: ${{ vars.STAGING_ACM_DOMAIN }}
+  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+
+jobs:
+  # Normal path: PR carries the label (either just added, or a new commit
+  # landed on an already-labeled PR) -- build real images, apply staging,
+  # smoke test, then always tear down regardless of outcome.
+  deploy-and-test:
+    if: github.event.action != 'unlabeled' && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.6"
+
+      # The ALB's security group allowlists specific /32s (var.
+      # staging_allowed_cidrs, ecs_networking.tf) -- unlike a developer's
+      # home IP, a GitHub-hosted runner's IP is different every run, so
+      # this can't be a static value the way a human's staging.tvars
+      # entry is. Computed fresh each run instead, exactly like the
+      # manual runbook already tells a human to do with `curl ifconfig.me`.
+      - name: Compute this runner's public IP
+        id: runner_ip
+        run: echo "TF_VAR_staging_allowed_cidrs=[\"$(curl -4 -s ifconfig.me)/32\"]" >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/dumpster-github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Built and pushed before `tofu apply`, not after -- ECS tasks
+      # would otherwise try to pull an image tag that doesn't exist yet
+      # the moment the new task definition revision rolls out.
+      - name: Build and push runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runtime
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/dumpster-staging-runtime:${{ env.TF_VAR_image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push embed-sidecar image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.batch-embed-job
+          target: sidecar
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/dumpster-staging-embed-sidecar:${{ env.TF_VAR_image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Select staging workspace
+        working-directory: terraform
+        run: tofu workspace select -or-create staging
+
+      - name: Init
+        working-directory: terraform
+        run: tofu init
+
+      - name: Plan
+        working-directory: terraform
+        run: tofu plan -out=tfplan
+
+      - name: Apply
+        working-directory: terraform
+        run: tofu apply -auto-approve tfplan
+
+      # tofu apply returns as soon as the ECS service/task-definition API
+      # calls succeed, not once tasks are actually running and passing
+      # the ALB's health check -- a real gap the manual runbook doesn't
+      # hit (a human naturally waits and re-checks by hand). Waited for
+      # explicitly here so the smoke test below doesn't race a still-
+      # starting deployment.
+      - name: Wait for ECS services to stabilize
+        run: |
+          aws ecs wait services-stable --cluster dumpster-staging --services api worker
+
+      - name: Smoke test
+        working-directory: terraform
+        run: |
+          ALB_DNS=$(tofu output -raw alb_dns_name)
+          # -k: the ALB's cert is issued for the real hostname
+          # (dumpster-staging.kpednekar.dev), not its own AWS-assigned
+          # DNS name -- DNS for the real hostname isn't repointed by this
+          # workflow (see the header comment on why), so this hits the
+          # ALB directly instead. That's a deliberate scope choice, not
+          # an oversight: this smoke test confirms the deployment itself
+          # is healthy and serving traffic, not that the public hostname/
+          # TLS chain works end-to-end.
+          for i in $(seq 1 10); do
+            if curl -sk -o /dev/null -w '%{http_code}' "https://$ALB_DNS/healthz" | grep -q 200; then
+              echo "healthz OK"
+              exit 0
+            fi
+            echo "attempt $i: not healthy yet, retrying..."
+            sleep 10
+          done
+          echo "::error::staging never became healthy"
+          exit 1
+
+      # Always runs, pass or fail at any prior step (a crashed smoke test
+      # must not leak paid resources -- see CLAUDE.md/the dev board card).
+      - name: Destroy staging
+        if: always()
+        working-directory: terraform
+        run: |
+          tofu workspace select staging
+          tofu destroy -auto-approve
+
+  # Edge case the normal path doesn't cover: the label gets removed with
+  # no new commit pushed afterward, so no "labeled"/"synchronize" event
+  # fires to trigger the always()-destroy above. Runs a destroy-only path
+  # instead, so removing the label is itself enough to tear the
+  # environment down, not just adding it enough to spin one up.
+  teardown-on-unlabel:
+    if: github.event.action == 'unlabeled' && github.event.label.name == 'deploy-staging'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.6"
+
+      - name: Compute this runner's public IP
+        run: echo "TF_VAR_staging_allowed_cidrs=[\"$(curl -4 -s ifconfig.me)/32\"]" >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/dumpster-github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Destroy staging
+        working-directory: terraform
+        run: |
+          tofu workspace select -or-create staging
+          tofu init
+          tofu destroy -auto-approve
