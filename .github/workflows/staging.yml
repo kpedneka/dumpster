@@ -64,17 +64,40 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
+      # Required for the arm64 target below -- GitHub-hosted runners are
+      # amd64, so building for linux/arm64 here means cross-building
+      # under QEMU emulation, not native compilation. setup-buildx-action
+      # alone doesn't provide that; this registers the binfmt handlers
+      # buildx needs to actually execute arm64 instructions on an amd64
+      # host.
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - uses: docker/setup-buildx-action@v3
 
       # Built and pushed before `tofu apply`, not after -- ECS tasks
       # would otherwise try to pull an image tag that doesn't exist yet
       # the moment the new task definition revision rolls out.
+      #
+      # platforms: linux/arm64, explicitly -- found missing only by a
+      # real ECS task actually failing to start (PR #94):
+      # docker/build-push-action defaults to the runner's own platform
+      # when this isn't set, which is amd64 on every GitHub-hosted
+      # runner, not the arm64 these task definitions require (ecs_api.tf/
+      # ecs_worker.tf's runtime_platform block, matching the image
+      # previously built on Apple Silicon). The resulting manifest had no
+      # arm64 descriptor at all -- confirmed directly via `docker buildx
+      # imagetools inspect` -- not a base-image limitation (python:3.11-
+      # slim, alpine:3.20, golang:1.25-alpine, and node:22-slim all
+      # publish real arm64 variants, checked directly too).
       - name: Build and push runtime image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           target: runtime
+          platforms: linux/arm64
           push: true
           tags: ${{ steps.ecr.outputs.registry }}/dumpster-staging-runtime:${{ env.TF_VAR_image_tag }}
           cache-from: type=gha
@@ -86,6 +109,7 @@ jobs:
           context: .
           file: ./Dockerfile.batch-embed-job
           target: sidecar
+          platforms: linux/arm64
           push: true
           tags: ${{ steps.ecr.outputs.registry }}/dumpster-staging-embed-sidecar:${{ env.TF_VAR_image_tag }}
           cache-from: type=gha
