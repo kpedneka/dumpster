@@ -171,6 +171,23 @@ data "aws_iam_policy_document" "ecs_task_s3" {
       "${aws_s3_bucket.scratch.arn}/*",
     ]
   }
+
+  # s3:ListBucket is a bucket-level permission (the bucket ARN itself, not
+  # /* -- object-level actions and this one take different resource
+  # shapes and can't share a statement). Found missing only by a real
+  # GetObject actually failing against these buckets: AWS returned
+  # AccessDenied on GetObject specifically citing missing ListBucket, not
+  # missing GetObject -- confirmed against real IAM error text, not
+  # assumed from documentation. Every object-level action worked fine
+  # (uploads succeeded); only reads through the worker's ingestion path
+  # tripped this.
+  statement {
+    actions = ["s3:ListBucket"]
+    resources = [
+      aws_s3_bucket.documents.arn,
+      aws_s3_bucket.scratch.arn,
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "ecs_task_s3" {
