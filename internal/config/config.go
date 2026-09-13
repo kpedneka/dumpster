@@ -40,30 +40,36 @@ type Config struct {
 	// Use the Neon pooler endpoint (host has -pooler suffix) for the API.
 	DatabaseURLPooled string
 	// Object storage — endpoint-configurable so the same adapter serves
-	// MinIO locally and Cloudflare R2 in the cloud. Holds real,
-	// user-owned documents — a different retention/access contract than
-	// the scratch bucket below, which is why the two are never conflated.
+	// MinIO or Cloudflare R2 locally and real AWS S3 in staging/production
+	// (see internal/objectstore/s3store's doc comment for the credential
+	// implications of that split). Holds real, user-owned documents — a
+	// different retention/access contract than the scratch bucket below,
+	// which is why the two are never conflated.
 	S3Endpoint     string
 	S3Region       string
 	S3Bucket       string
 	S3AccessKey    string
 	S3SecretKey    string
 	S3UsePathStyle bool
-	// R2Scratch* configures a separate bucket for AWS Batch jobs'
-	// transient input/output handoff (internal/entity/awsbatch,
-	// internal/llm/awsbatch) — never real user documents. Kept out of the
-	// main document bucket above deliberately: scratch objects don't need
-	// (and shouldn't get) the same durability/retention guarantees real
-	// documents do, and a separate bucket makes that bucket's size alone
-	// a useful at-a-glance signal for whether Batch scratch cleanup is
-	// actually working, without it being muddied by real document
-	// storage growth.
-	R2ScratchEndpoint     string
-	R2ScratchRegion       string
-	R2ScratchBucket       string
-	R2ScratchAccessKey    string
-	R2ScratchSecretKey    string
-	R2ScratchUsePathStyle bool
+	// S3Scratch* configures a separate bucket for AWS Batch jobs' transient
+	// input/output handoff (internal/entity/awsbatch, internal/llm/awsbatch,
+	// internal/manifest/awsbatch) — never real user documents. Kept out of
+	// the main document bucket above deliberately: scratch objects don't
+	// need (and shouldn't get) the same durability/retention guarantees
+	// real documents do, and a separate bucket makes that bucket's size
+	// alone a useful at-a-glance signal for whether Batch scratch cleanup
+	// is actually working, without it being muddied by real document
+	// storage growth. Named S3Scratch, not R2Scratch, on purpose -- this
+	// bucket moved from Cloudflare R2 to real AWS S3 (see the "Migrate
+	// object storage: R2 -> S3" dev board card); AccessKey/SecretKey are
+	// left empty in every AWS deployment so internal/objectstore/s3store
+	// resolves credentials via the ECS task role instead of a static key.
+	S3ScratchEndpoint     string
+	S3ScratchRegion       string
+	S3ScratchBucket       string
+	S3ScratchAccessKey    string
+	S3ScratchSecretKey    string
+	S3ScratchUsePathStyle bool
 	// Observability
 	MetricsPort string
 	// LLM
@@ -211,22 +217,35 @@ func Load() *Config {
 		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		DatabaseURLPooled: getEnv("DATABASE_URL_POOLED", ""),
 		MetricsPort:       getEnv("METRICS_PORT", "9090"),
-		S3Endpoint:        getEnv("S3_ENDPOINT", "http://localhost:9000"),
-		S3Region:          getEnv("S3_REGION", "auto"),
-		S3Bucket:          getEnv("S3_BUCKET", "dumpster"),
-		S3AccessKey:       getEnv("S3_ACCESS_KEY", "minioadmin"),
-		S3SecretKey:       getEnv("S3_SECRET_KEY", "minioadmin"),
-		S3UsePathStyle:    getEnv("S3_USE_PATH_STYLE", "true") == "true",
+		// No placeholder default for Endpoint/AccessKey/SecretKey (e.g.
+		// "http://localhost:9000", "minioadmin") on purpose: on real AWS S3
+		// (staging/production) all three are deliberately left unset in the
+		// deployed environment -- an empty Endpoint tells s3store.New to let
+		// the SDK resolve the real regional S3 endpoint on its own, and
+		// empty Access/SecretKey tells it to resolve credentials via the
+		// ECS task role instead of attempting -- and failing -- static auth
+		// with a bogus key. A real local MinIO/R2 setup always sets all
+		// three explicitly via .env.local (see .env.example), so none of
+		// these defaults are ever actually relied on for local dev either.
+		S3Endpoint:     getEnv("S3_ENDPOINT", ""),
+		S3Region:       getEnv("S3_REGION", "auto"),
+		S3Bucket:       getEnv("S3_BUCKET", "dumpster"),
+		S3AccessKey:    getEnv("S3_ACCESS_KEY", ""),
+		S3SecretKey:    getEnv("S3_SECRET_KEY", ""),
+		S3UsePathStyle: getEnv("S3_USE_PATH_STYLE", "true") == "true",
 		// No local-dev default (unlike S3* above): the Fargate job writing
 		// here needs a real, internet-reachable bucket regardless of
 		// environment -- a local MinIO instance on docker-compose's
-		// internal network isn't reachable from AWS.
-		R2ScratchEndpoint:     getEnv("R2_SCRATCH_ENDPOINT", ""),
-		R2ScratchRegion:       getEnv("R2_SCRATCH_REGION", "auto"),
-		R2ScratchBucket:       getEnv("R2_SCRATCH_BUCKET", ""),
-		R2ScratchAccessKey:    getEnv("R2_SCRATCH_ACCESS_KEY", ""),
-		R2ScratchSecretKey:    getEnv("R2_SCRATCH_SECRET_KEY", ""),
-		R2ScratchUsePathStyle: getEnv("R2_SCRATCH_USE_PATH_STYLE", "false") == "true",
+		// internal network isn't reachable from AWS. AccessKey/SecretKey
+		// also default to empty, not a placeholder value: on real AWS S3
+		// (staging/production) they're deliberately left unset so
+		// s3store.New resolves credentials via the ECS task role instead.
+		S3ScratchEndpoint:     getEnv("S3_SCRATCH_ENDPOINT", ""),
+		S3ScratchRegion:       getEnv("S3_SCRATCH_REGION", "auto"),
+		S3ScratchBucket:       getEnv("S3_SCRATCH_BUCKET", ""),
+		S3ScratchAccessKey:    getEnv("S3_SCRATCH_ACCESS_KEY", ""),
+		S3ScratchSecretKey:    getEnv("S3_SCRATCH_SECRET_KEY", ""),
+		S3ScratchUsePathStyle: getEnv("S3_SCRATCH_USE_PATH_STYLE", "false") == "true",
 		AnthropicAPIKey:       getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:        getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
 

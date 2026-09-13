@@ -5,25 +5,31 @@
 # All three share the one dumpster-runtime image (ecs_ecr.tf), differing
 # only by container command -- confirmed against the actual Dockerfile,
 # not assumed. Env vars/secrets below are grounded in internal/config's
-# real fields, not guessed: values still point at Neon/R2/Anthropic
-# directly, matching today's actual app -- Aurora/S3/Bedrock migrations
-# are separate, later cards that will update these in place.
+# real fields, not guessed: object storage points at real AWS S3
+# (s3_storage.tf, IAM-role auth, no static key) -- Neon and Anthropic direct
+# are still in place; Aurora/Bedrock migrations are separate, later cards
+# that will update these the same way.
 
 locals {
   # Env vars/secrets every one of the three commands needs, regardless of
   # which binary runs -- object storage and AWS region are read by all
-  # three (cleanup deletes real documents from R2 on account expiry).
+  # three (cleanup deletes real documents from S3 on account expiry).
+  #
+  # No S3_ENDPOINT: real AWS S3 needs no BaseEndpoint override, only a
+  # region (see internal/objectstore/s3store.Config's doc comment) -- unlike
+  # the R2 endpoint this replaced, which had to be a Cloudflare account-
+  # specific URL. No S3_ACCESS_KEY/SECRET_KEY either: left unset so
+  # s3store.New resolves credentials via the ECS task role instead (granted
+  # S3 access in s3_storage.tf) -- real AWS S3 participates in IAM, unlike
+  # R2, so there's no static key to manage or rotate for this bucket at all
+  # any more.
   shared_environment = [
     { name = "AWS_REGION", value = var.aws_region },
-    { name = "S3_ENDPOINT", value = var.r2_endpoint },
-    { name = "S3_REGION", value = "auto" },
-    { name = "S3_BUCKET", value = var.r2_bucket },
-    { name = "S3_USE_PATH_STYLE", value = "true" },
+    { name = "S3_REGION", value = var.aws_region },
+    { name = "S3_BUCKET", value = aws_s3_bucket.documents.bucket },
+    { name = "S3_USE_PATH_STYLE", value = "false" },
   ]
-  shared_secrets = [
-    { name = "S3_ACCESS_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["s3-access-key"].arn },
-    { name = "S3_SECRET_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["s3-secret-key"].arn },
-  ]
+  shared_secrets = []
 
   common_log_config = {
     logDriver = "awslogs"
@@ -173,16 +179,6 @@ variable "api_memory" {
   type        = string
   description = "Fargate memory (MiB) for the whole task -- shared across the api and embed-sidecar containers, not per-container. Bumped from the pre-sidecar 1024 default: the standalone inference service alone (embeddings + region classification) measured ~866MB used on Fly; the sidecar drops region classification's memory (pdfplumber/pymupdf, plus its isolated-subprocess ceiling) but this number isn't independently measured yet either -- same caveat as api_cpu."
   default     = "2048"
-}
-
-variable "r2_endpoint" {
-  type        = string
-  description = "Cloudflare R2 S3-compatible endpoint URL for real document storage (still R2, not S3 yet -- see the 'Migrate object storage: R2 -> S3' card)."
-}
-
-variable "r2_bucket" {
-  type        = string
-  description = "R2 bucket name for real document storage. No default, on purpose -- staging and production must point at separate buckets (e.g. dumpster vs dumpster-staging) so ephemeral staging traffic never reads or writes real user documents; a default here risked silently reusing the production bucket for staging."
 }
 
 variable "anthropic_model" {

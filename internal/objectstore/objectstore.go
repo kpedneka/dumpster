@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// ObjectStore is the boundary over blob storage (MinIO locally, Cloudflare R2 in cloud).
+// ObjectStore is the boundary over blob storage (MinIO or Cloudflare R2
+// locally, AWS S3 in staging/production).
 type ObjectStore interface {
 	// Put uploads r under key. size must be the exact byte count of r.
 	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error

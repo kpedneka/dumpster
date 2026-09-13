@@ -9,11 +9,12 @@
 # being true.
 #
 # Scoped to what the app actually calls today, not preemptively broadened
-# for services not yet migrated (Aurora, S3, Bedrock each get their own
-# IAM additions on their own dev board cards, when those migrations
-# actually happen) -- Neon, R2, and Anthropic are all still external
-# services reached over the internet via the NAT instance, not through
-# IAM at all.
+# for services not yet migrated (Aurora and Bedrock each get their own IAM
+# additions on their own dev board cards, when those migrations actually
+# happen). Object storage's S3 permissions live in s3_storage.tf, not here,
+# since that policy needs the bucket resources this file doesn't define --
+# Neon and Anthropic remain the only genuinely external services, reached
+# over the internet via the NAT instance, not through IAM at all.
 
 data "aws_caller_identity" "current" {}
 

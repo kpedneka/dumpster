@@ -49,8 +49,8 @@ func main() {
 		logger.Error("embedder setup failed", "err", "EMBED_BATCH_JOB_QUEUE and EMBED_BATCH_JOB_DEFINITION are required")
 		os.Exit(1)
 	}
-	if cfg.R2ScratchEndpoint == "" || cfg.R2ScratchBucket == "" || cfg.R2ScratchAccessKey == "" || cfg.R2ScratchSecretKey == "" {
-		logger.Error("scratch object store setup failed", "err", "R2_SCRATCH_ENDPOINT, R2_SCRATCH_BUCKET, R2_SCRATCH_ACCESS_KEY, and R2_SCRATCH_SECRET_KEY are required")
+	if cfg.S3ScratchBucket == "" {
+		logger.Error("scratch object store setup failed", "err", "S3_SCRATCH_BUCKET is required")
 		os.Exit(1)
 	}
 	awsBatchClient, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
@@ -61,14 +61,18 @@ func main() {
 	// Only ever used for the embedder's Batch input/output handoff below --
 	// cmd/reembed never reads or writes real documents directly, so this
 	// points at the scratch bucket, not the main document one.
-	scratchObj := s3store.New(s3store.Config{
-		Endpoint:     cfg.R2ScratchEndpoint,
-		Region:       cfg.R2ScratchRegion,
-		Bucket:       cfg.R2ScratchBucket,
-		AccessKey:    cfg.R2ScratchAccessKey,
-		SecretKey:    cfg.R2ScratchSecretKey,
-		UsePathStyle: cfg.R2ScratchUsePathStyle,
+	scratchObj, err := s3store.New(ctx, s3store.Config{
+		Endpoint:     cfg.S3ScratchEndpoint,
+		Region:       cfg.S3ScratchRegion,
+		Bucket:       cfg.S3ScratchBucket,
+		AccessKey:    cfg.S3ScratchAccessKey,
+		SecretKey:    cfg.S3ScratchSecretKey,
+		UsePathStyle: cfg.S3ScratchUsePathStyle,
 	})
+	if err != nil {
+		logger.Error("scratch object store setup failed", "err", err)
+		os.Exit(1)
+	}
 	embedder := llmawsbatch.New(awsBatchClient, scratchObj, llmawsbatch.Config{
 		JobQueue:      cfg.EmbedBatchJobQueue,
 		JobDefinition: cfg.EmbedBatchJobDefinition,

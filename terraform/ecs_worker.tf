@@ -43,16 +43,17 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "REGIONS_BATCH_JOB_DEFINITION", value = var.regions_batch_job_definition },
         { name = "WORKER_CONCURRENCY", value = "5" },
         { name = "ENTITY_EXTRACTION_BATCH_SIZE", value = "50" },
-        { name = "R2_SCRATCH_ENDPOINT", value = var.r2_scratch_endpoint },
-        { name = "R2_SCRATCH_REGION", value = "auto" },
-        { name = "R2_SCRATCH_BUCKET", value = var.r2_scratch_bucket },
-        { name = "R2_SCRATCH_USE_PATH_STYLE", value = "false" },
+        # No S3_SCRATCH_ENDPOINT and no access-key secrets, same reasoning
+        # as the documents bucket in ecs_api.tf's shared_environment: real
+        # AWS S3 needs no endpoint override, and credentials come from the
+        # ECS task role (granted access in s3_storage.tf), not a static key.
+        { name = "S3_SCRATCH_REGION", value = var.aws_region },
+        { name = "S3_SCRATCH_BUCKET", value = aws_s3_bucket.scratch.bucket },
+        { name = "S3_SCRATCH_USE_PATH_STYLE", value = "false" },
       ])
       secrets = concat(local.shared_secrets, [
         { name = "DATABASE_URL", valueFrom = data.aws_secretsmanager_secret.runtime["database-url"].arn },
         { name = "ANTHROPIC_API_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["anthropic-api-key"].arn },
-        { name = "R2_SCRATCH_ACCESS_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["r2-scratch-access-key"].arn },
-        { name = "R2_SCRATCH_SECRET_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["r2-scratch-secret-key"].arn },
       ])
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "worker" })
@@ -138,12 +139,3 @@ variable "regions_batch_job_definition" {
   default     = "dumpster-region-extraction"
 }
 
-variable "r2_scratch_endpoint" {
-  type        = string
-  description = "R2 endpoint for the Batch jobs' transient scratch bucket -- a different bucket from real document storage (var.r2_endpoint/r2_bucket in ecs_api.tf), no local-dev default since a real Fargate job needs a real internet-reachable bucket regardless of environment."
-}
-
-variable "r2_scratch_bucket" {
-  type        = string
-  description = "R2 scratch bucket name for AWS Batch job input/output handoff."
-}

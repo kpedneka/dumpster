@@ -74,7 +74,7 @@ func main() {
 		"path_style", cfg.S3UsePathStyle,
 		"key_set", cfg.S3AccessKey != "",
 	)
-	obj := s3store.New(s3store.Config{
+	obj, err := s3store.New(context.Background(), s3store.Config{
 		Endpoint:     cfg.S3Endpoint,
 		Region:       cfg.S3Region,
 		Bucket:       cfg.S3Bucket,
@@ -82,6 +82,10 @@ func main() {
 		SecretKey:    cfg.S3SecretKey,
 		UsePathStyle: cfg.S3UsePathStyle,
 	})
+	if err != nil {
+		logger.Error("object store setup failed", "err", err)
+		os.Exit(1)
+	}
 
 	embedder := instrumented.NewEmbedder(llminference.NewQueryEmbedder(cfg.InferenceServiceURL), instruments)
 	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
