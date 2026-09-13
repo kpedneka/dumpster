@@ -71,7 +71,7 @@ resource "aws_ecs_task_definition" "api" {
   container_definitions = jsonencode([
     {
       name      = "api"
-      image     = "${aws_ecr_repository.runtime.repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.runtime.repository_url}:${var.image_tag}"
       command   = ["/bin/api"]
       essential = true
       portMappings = [
@@ -121,7 +121,7 @@ resource "aws_ecs_task_definition" "api" {
       # ECS rather than silently degrading with the api container still
       # accepting traffic it can't actually fulfill.
       name      = "embed-sidecar"
-      image     = "${aws_ecr_repository.embed_sidecar.repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.embed_sidecar.repository_url}:${var.image_tag}"
       essential = true
       portMappings = [
         { containerPort = 8000, name = "embed-sidecar" }

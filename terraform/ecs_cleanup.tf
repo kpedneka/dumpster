@@ -27,7 +27,7 @@ resource "aws_ecs_task_definition" "cleanup" {
   container_definitions = jsonencode([
     {
       name        = "cleanup"
-      image       = "${aws_ecr_repository.runtime.repository_url}:${var.image_tag}"
+      image       = "${data.aws_ecr_repository.runtime.repository_url}:${var.image_tag}"
       command     = ["/bin/cleanup"]
       essential   = true
       environment = concat(local.shared_environment, [])
