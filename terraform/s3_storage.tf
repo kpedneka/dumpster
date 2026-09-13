@@ -42,6 +42,15 @@ locals {
 
 resource "aws_s3_bucket" "documents" {
   bucket = local.documents_bucket_name
+
+  # Same reasoning as aws_ecr_repository's force_delete (ecs_ecr.tf):
+  # a non-empty bucket makes `tofu destroy` fail partway through by
+  # default, and every staging teardown cycle leaves real (if
+  # disposable) test objects behind -- caught for real the first time
+  # staging was actually torn down after real usage. Production keeps
+  # the safe default: force-deleting a bucket holding real user
+  # documents should never be one command away.
+  force_destroy = var.environment == "staging"
 }
 
 resource "aws_s3_bucket_public_access_block" "documents" {
@@ -83,6 +92,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "documents" {
 
 resource "aws_s3_bucket" "scratch" {
   bucket = local.scratch_bucket_name
+
+  # Same reasoning as the documents bucket above (and aws_ecr_repository's
+  # force_delete, ecs_ecr.tf) -- scratch objects are already transient and
+  # non-sensitive by design, so force-deleting them in staging carries even
+  # less risk than the documents bucket does.
+  force_destroy = var.environment == "staging"
 }
 
 resource "aws_s3_bucket_public_access_block" "scratch" {
