@@ -28,10 +28,10 @@ resource "aws_ecs_task_definition" "worker" {
       essential = true
       environment = concat(local.shared_environment, [
         { name = "ANTHROPIC_MODEL", value = var.anthropic_model },
-        { name = "BATCH_JOB_QUEUE", value = var.entity_extraction_job_queue },
-        { name = "BATCH_JOB_DEFINITION", value = var.entity_extraction_job_definition },
-        { name = "EMBED_BATCH_JOB_QUEUE", value = var.embedding_job_queue },
-        { name = "EMBED_BATCH_JOB_DEFINITION", value = var.embedding_job_definition },
+        { name = "BATCH_JOB_QUEUE", value = aws_batch_job_queue.entity_extraction.name },
+        { name = "BATCH_JOB_DEFINITION", value = aws_batch_job_definition.entity_extraction.name },
+        { name = "EMBED_BATCH_JOB_QUEUE", value = aws_batch_job_queue.embedding.name },
+        { name = "EMBED_BATCH_JOB_DEFINITION", value = aws_batch_job_definition.embedding.name },
         # PDF/image region classification runs as its own AWS Batch job --
         # see internal/manifest/awsbatch's package doc. Required, not
         # opt-in: cmd/worker exits at startup if either is empty. No
@@ -39,8 +39,9 @@ resource "aws_ecs_task_definition" "worker" {
         # /regions call remains -- that's fully retired now that Fly
         # deploys have stopped entirely (see the "Fold region
         # classification into the AWS Batch embed job" dev board card).
-        { name = "REGIONS_BATCH_JOB_QUEUE", value = var.regions_batch_job_queue },
-        { name = "REGIONS_BATCH_JOB_DEFINITION", value = var.regions_batch_job_definition },
+        # Shares the embedding queue, not a dedicated one -- see batch.tf.
+        { name = "REGIONS_BATCH_JOB_QUEUE", value = aws_batch_job_queue.embedding.name },
+        { name = "REGIONS_BATCH_JOB_DEFINITION", value = aws_batch_job_definition.region_extraction.name },
         { name = "WORKER_CONCURRENCY", value = "5" },
         { name = "ENTITY_EXTRACTION_BATCH_SIZE", value = "50" },
         # No S3_SCRATCH_ENDPOINT and no access-key secrets, same reasoning
@@ -99,50 +100,11 @@ variable "worker_memory" {
   default     = "512"
 }
 
-# The four Batch variables below default to the real, existing production
-# queues/definitions regardless of var.environment -- deliberately not
-# environment-parameterized. Standing up a second, GPU-backed Batch
-# compute environment just for ephemeral staging runs would cost real
-# money for infrastructure a short-lived smoke test doesn't need; staging
-# is expected to share production's Batch queues unless a future card
-# decides otherwise. This is a real, accepted tradeoff, not an oversight:
-# it means a staging worker's entity-extraction/embedding jobs land in
-# the same queue as production's, so avoid running staging under
-# sustained load that would compete with real traffic for GPU capacity.
-
-variable "entity_extraction_job_queue" {
-  type        = string
-  description = "AWS Batch job queue for entity extraction. Real value confirmed via `aws batch describe-job-queues`. Shared across environments -- see the note above."
-  default     = "dumpster-batch-gpu-pilot-queue"
-}
-
-variable "entity_extraction_job_definition" {
-  type        = string
-  description = "AWS Batch job definition for entity extraction. Real value confirmed via `aws batch describe-job-definitions` -- the production one, not the -dev variant. Shared across environments -- see the note above."
-  default     = "dumpster-entity-extraction"
-}
-
-variable "embedding_job_queue" {
-  type        = string
-  description = "AWS Batch job queue for ingestion-time embedding. Real value confirmed via `aws batch describe-job-queues`. Shared across environments -- see the note above."
-  default     = "dumpster-embedding-queue"
-}
-
-variable "embedding_job_definition" {
-  type        = string
-  description = "AWS Batch job definition for ingestion-time embedding. Real value confirmed via `aws batch describe-job-definitions`. Shared across environments -- see the note above."
-  default     = "dumpster-embedding-jobdef"
-}
-
-variable "regions_batch_job_queue" {
-  type        = string
-  description = "AWS Batch job queue for PDF region extraction. Deliberately the same queue as embedding, not a dedicated one: region extraction is CPU-only with the same compute profile as embedding, and provisioning a 4th idle compute environment for what's likely a minority of ingestion volume (PDF/image uploads only) isn't worth it at this scale. Revisit if PDF-heavy bursts cause real queue-wait contention with embed jobs -- same measure-then-fix approach as the rest of this file's Batch sizing."
-  default     = "dumpster-embedding-queue"
-}
-
-variable "regions_batch_job_definition" {
-  type        = string
-  description = "AWS Batch job definition for PDF region extraction (Dockerfile.batch-regions-job). Not yet created by this Terraform -- AWS Batch job definitions/queues aren't Terraform-managed anywhere in this directory (see the note above these variables), so this needs a real `aws batch register-job-definition` before this default resolves to anything real."
-  default     = "dumpster-region-extraction"
-}
+# The Batch job queues/definitions referenced above (aws_batch_job_queue.*,
+# aws_batch_job_definition.*) now live in batch.tf, environment-
+# parameterized like every other resource in this config -- see that
+# file's header for why entity-extraction and embedding each get their
+# own per-environment queue/compute environment (no more sharing GPU
+# capacity between staging and production), while region extraction
+# keeps riding the embedding queue rather than getting a dedicated one.
 
