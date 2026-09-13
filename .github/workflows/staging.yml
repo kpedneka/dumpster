@@ -91,13 +91,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Select staging workspace
-        working-directory: terraform
-        run: tofu workspace select -or-create staging
-
       - name: Init
         working-directory: terraform
         run: tofu init
+
+      - name: Select staging workspace
+        working-directory: terraform
+        run: tofu workspace select -or-create staging
 
       - name: Plan
         working-directory: terraform
@@ -146,6 +146,7 @@ jobs:
         if: always()
         working-directory: terraform
         run: |
+          tofu init
           tofu workspace select staging
           tofu destroy -auto-approve
 
@@ -175,6 +176,6 @@ jobs:
       - name: Destroy staging
         working-directory: terraform
         run: |
-          tofu workspace select -or-create staging
           tofu init
+          tofu workspace select -or-create staging
           tofu destroy -auto-approve
