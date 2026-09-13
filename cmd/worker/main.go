@@ -32,6 +32,8 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/queuemetrics"
+	metricscloudwatch "github.com/kunalpednekar/dumpster/internal/queuemetrics/cloudwatch"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/stats"
@@ -134,6 +136,11 @@ func main() {
 		logger.Error("aws batch client setup failed", "err", err)
 		os.Exit(1)
 	}
+	cloudwatchClient, err := metricscloudwatch.NewClient(ctx, cfg.AWSRegion)
+	if err != nil {
+		logger.Error("cloudwatch client setup failed", "err", err)
+		os.Exit(1)
+	}
 	// Ingestion-time embedding runs on AWS Batch (a separate, CPU-only
 	// Fargate compute environment from entity extraction's GPU one) —
 	// moved off the HTTP inference service after measuring Fly's
@@ -219,6 +226,16 @@ func main() {
 	// queue/pgstore.Store.ReclaimStale for what this recovers from.
 	go runJobReclaimLoop(ctx, cfg.SweepInterval, cfg.JobStaleTimeout, q, logger)
 
+	// Queue-depth metrics publish on their own, much shorter cadence (see
+	// QueueMetricsPublishInterval's doc) -- the signal
+	// terraform/ecs_worker_autoscaling.tf's step-scaling policy watches.
+	// Every worker replica runs this independently and publishes the same
+	// table-wide total; CloudWatch tolerates the redundant data points
+	// trivially (well within the free tier), and it means the scaling
+	// signal doesn't depend on any single replica staying alive to publish
+	// it.
+	go runQueueMetricsLoop(ctx, cfg.QueueMetricsPublishInterval, queuemetrics.New(q, cloudwatchClient), logger)
+
 	logger.Info("worker starting",
 		"db_host", cfg.DBHost, "db_name", cfg.DBName,
 		"entity_types", cfg.EntityTypes,
@@ -284,6 +301,30 @@ func runJobReclaimLoop(ctx context.Context, interval, staleAfter time.Duration, 
 		}
 		if reclaimed > 0 || deadLettered > 0 {
 			logger.Info("job reclaim complete", "reclaimed", reclaimed, "dead_lettered", deadLettered)
+		}
+	}
+
+	run()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			run()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// runQueueMetricsLoop publishes queue backlog depth immediately on startup
+// and then on every tick of interval, so the worker's ECS step-scaling
+// policy has a fresh data point from the moment this process starts rather
+// than waiting a full interval. Exits when ctx is cancelled.
+func runQueueMetricsLoop(ctx context.Context, interval time.Duration, publisher *queuemetrics.Publisher, logger *slog.Logger) {
+	run := func() {
+		if err := publisher.Publish(ctx); err != nil {
+			logger.Error("queue metrics publish failed", "err", err)
 		}
 	}
 

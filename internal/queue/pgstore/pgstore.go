@@ -377,5 +377,31 @@ func (s *Store) ReclaimStale(ctx context.Context, staleAfter time.Duration) (rec
 	return len(stale) - deadLettered, deadLettered, nil
 }
 
+// CountPending implements queue.PendingCounter.
+func (s *Store) CountPending(ctx context.Context) (map[queue.JobType]int, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT job_type, count(*) FROM jobs WHERE status = 'pending' GROUP BY job_type`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("queue: count pending: %w", err)
+	}
+	defer rows.Close()
+
+	counts := make(map[queue.JobType]int)
+	for rows.Next() {
+		var jobType string
+		var count int
+		if err := rows.Scan(&jobType, &count); err != nil {
+			return nil, fmt.Errorf("queue: count pending scan: %w", err)
+		}
+		counts[queue.JobType(jobType)] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("queue: count pending rows: %w", err)
+	}
+	return counts, nil
+}
+
 var _ queue.Queue = (*Store)(nil)
 var _ queue.JobStatusReader = (*Store)(nil)
+var _ queue.PendingCounter = (*Store)(nil)
