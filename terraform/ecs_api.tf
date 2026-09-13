@@ -41,7 +41,7 @@ locals {
     { name = "S3_BUCKET", value = aws_s3_bucket.documents.bucket },
     { name = "S3_USE_PATH_STYLE", value = "false" },
     { name = "LLM_PROVIDER", value = local.llm_provider },
-    { name = "BEDROCK_MODEL_ID", value = var.bedrock_model_id },
+    { name = "BEDROCK_MODEL_ID", value = local.bedrock_model_id },
   ]
   shared_secrets = []
 

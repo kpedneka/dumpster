@@ -115,17 +115,19 @@ resource "aws_iam_role_policy" "ecs_task_logs_read" {
 # bedrock_model_id's description gives for reading the env var everywhere:
 # flipping providers during an outage shouldn't also need an IAM change.
 #
-# Two resource ARNs, not one: Claude Sonnet 5 requires invoking through a
-# cross-region inference profile rather than the bare model directly
-# (confirmed for real, not assumed -- see var.bedrock_model_id's
-# description), and Bedrock's IAM model for inference profiles requires
-# permission on both the profile itself *and* the underlying foundation
-# model(s) it can route a request to, since the profile has no compute of
-# its own -- it just directs the same InvokeModel/Converse call to
-# whichever regional model instance is available. The foundation-model ARN
-# has no account segment (Anthropic's Bedrock-hosted models are AWS-owned,
-# not something this account created) and a wildcard region, matching that
-# it can route to any US region, not just this one.
+# Three resource ARNs, not one -- a whole chain, not a single hop:
+# production invokes through its own tagged application inference profile
+# (bedrock.tf, for cost-tracking separation), which routes to the
+# system-defined cross-region profile (Claude Sonnet 5 rejects on-demand
+# invocation by bare model ID -- confirmed for real, not assumed), which
+# in turn routes to whichever regional foundation model instance is
+# available. Bedrock's IAM model requires permission at every hop in that
+# chain, not just the one actually named in the request, since none of
+# the intermediate profiles have compute of their own -- each just directs
+# the same call one hop further. The foundation-model ARN has no account
+# segment (Anthropic's Bedrock-hosted models are AWS-owned, not something
+# this account created) and a wildcard region, matching that it can route
+# to any US region, not just this one.
 data "aws_iam_policy_document" "ecs_task_bedrock" {
   statement {
     actions = [
@@ -134,10 +136,13 @@ data "aws_iam_policy_document" "ecs_task_bedrock" {
       "bedrock:Converse",
       "bedrock:ConverseStream",
     ]
-    resources = [
-      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/${var.bedrock_model_id}",
-      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
-    ]
+    resources = concat(
+      var.environment == "production" ? [aws_bedrock_inference_profile.app[0].arn] : [],
+      [
+        "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+      ]
+    )
   }
 }
 
