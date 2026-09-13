@@ -28,10 +28,14 @@ type PhaseSetter interface {
 	SetPhase(ctx context.Context, jobID uuid.UUID, phase string) error
 }
 
-// LayoutExtractor classifies PDF regions via the Python layered classifier
-// (layers 1+2: pdfplumber + unstructured.io). Defined here so the
+// LayoutExtractor classifies PDF regions via scripts/extract_regions.py
+// (pymupdf for native text, pdfplumber for native tables -- see that
+// file's own docstring for why unstructured.io's figure/scanned-content
+// layer was dropped entirely rather than kept). Defined here so
 // RegionClassificationHandler depends on an interface rather than the
-// concrete layout.Extractor directly.
+// concrete implementation directly; the real implementation
+// (internal/manifest/awsbatch.Extractor) submits an AWS Batch job per
+// call rather than an HTTP request.
 type LayoutExtractor interface {
 	ExtractRegions(ctx context.Context, pdfBytes []byte) ([]*layout.RawRegion, error)
 }

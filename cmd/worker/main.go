@@ -27,7 +27,7 @@ import (
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	llmawsbatch "github.com/kunalpednekar/dumpster/internal/llm/awsbatch"
-	"github.com/kunalpednekar/dumpster/internal/manifest/layout"
+	regionsawsbatch "github.com/kunalpednekar/dumpster/internal/manifest/awsbatch"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue"
@@ -117,6 +117,10 @@ func main() {
 		logger.Error("scratch object store setup failed", "err", "R2_SCRATCH_ENDPOINT, R2_SCRATCH_BUCKET, R2_SCRATCH_ACCESS_KEY, and R2_SCRATCH_SECRET_KEY are required")
 		os.Exit(1)
 	}
+	if cfg.RegionsBatchJobQueue == "" || cfg.RegionsBatchJobDefinition == "" {
+		logger.Error("region extractor setup failed", "err", "REGIONS_BATCH_JOB_QUEUE and REGIONS_BATCH_JOB_DEFINITION are required")
+		os.Exit(1)
+	}
 	awsBatchClient, err := awsbatch.NewClient(ctx, cfg.AWSRegion)
 	if err != nil {
 		logger.Error("aws batch client setup failed", "err", err)
@@ -144,7 +148,21 @@ func main() {
 	})
 
 	manifestRepo := manifestpg.New(txRunner)
-	layoutExtractor := layout.New(layout.Config{BaseURL: cfg.InferenceServiceURL})
+	// Region extraction runs on AWS Batch, the same idle-capacity-cost
+	// motivation as embedding's own move (see internal/llm/awsbatch's
+	// comment above) -- no HTTP fallback to the old always-on inference
+	// service, matching how embedding and entity extraction already work.
+	// This was briefly an opt-in flag while the AWS Batch resources it
+	// needs hadn't been provisioned yet; now that Fly deploys have
+	// stopped entirely, keeping a fallback this process will never be
+	// deployed anywhere that needs would just be dead code. See
+	// internal/manifest/awsbatch's package doc.
+	layoutExtractor := regionsawsbatch.New(awsBatchClient, scratchObj, regionsawsbatch.Config{
+		JobQueue:      cfg.RegionsBatchJobQueue,
+		JobDefinition: cfg.RegionsBatchJobDefinition,
+		PollInterval:  cfg.BatchPollInterval,
+		PresignTTL:    cfg.BatchPresignTTL,
+	})
 
 	docHandler := worker.NewDocumentHandler(docs, obj, chunks, splitter, embedder).
 		WithEntityExtractionPublisher(q).
