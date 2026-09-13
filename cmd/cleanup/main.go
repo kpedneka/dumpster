@@ -8,12 +8,14 @@ package main
 import (
 	"context"
 	"os"
+	"time"
 
 	"github.com/kunalpednekar/dumpster/internal/account"
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
+	ratelimitpg "github.com/kunalpednekar/dumpster/internal/ratelimit/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
@@ -60,6 +62,19 @@ func main() {
 	for _, sweepErr := range result.Errors {
 		logger.Error("sweep: per-session error", "err", sweepErr)
 	}
+
+	// rate_limit_counters (internal/ratelimit/pgstore) grows by one
+	// permanent row per distinct client IP ever seen unless something
+	// periodically prunes it -- a day's staleness is generous next to the
+	// default one-minute window, so this only ever removes rows for
+	// clients that have been fully idle for a full day.
+	deleted, err := ratelimitpg.DeleteExpired(ctx, pool, 24*time.Hour)
+	if err != nil {
+		logger.Error("rate limit counter cleanup failed", "err", err)
+	} else {
+		logger.Info("rate limit counter cleanup complete", "deleted", deleted)
+	}
+
 	if len(result.Errors) > 0 {
 		os.Exit(1)
 	}

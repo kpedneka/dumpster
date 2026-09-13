@@ -1,6 +1,8 @@
 package ratelimit_test
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -39,6 +41,25 @@ func TestMiddleware_allowsWhenLimiterPermits(t *testing.T) {
 	}
 }
 
+// TestMiddleware_failsOpenOnLimiterError verifies that a Limiter error (e.g.
+// pgstore's Postgres connection dropping) allows the request through rather
+// than blocking it -- rate limiting is defense-in-depth, not a correctness
+// gate, so its own backing-store outage shouldn't become a total API outage.
+func TestMiddleware_failsOpenOnLimiterError(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	h := ratelimit.Middleware(ratelimitMock.Failing(errors.New("connection refused")), next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 (fail open)", w.Code)
+	}
+}
+
 // TestMiddleware_keysOnClientIP verifies that the key passed to Allow is the
 // client IP — both from X-Forwarded-For and from RemoteAddr.
 func TestMiddleware_keysOnClientIP(t *testing.T) {
@@ -72,9 +93,9 @@ func TestMiddleware_keysOnClientIP(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotKey string
 			limiter := &ratelimitMock.Limiter{
-				AllowFn: func(key string) bool {
+				AllowFn: func(_ context.Context, key string) (bool, error) {
 					gotKey = key
-					return true
+					return true, nil
 				},
 			}
 			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

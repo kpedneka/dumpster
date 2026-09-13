@@ -22,6 +22,7 @@ import (
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
+	ratelimitpg "github.com/kunalpednekar/dumpster/internal/ratelimit/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	queryrouter "github.com/kunalpednekar/dumpster/internal/router"
@@ -127,6 +128,13 @@ func main() {
 		Instruments:  instruments,
 		SPADir:       "web/dist",
 		CookieSecure: cfg.CookieSecure,
+		// Postgres-backed, not internal/ratelimit/memory: the in-process
+		// implementation keeps its counter in this replica's own memory,
+		// which silently under-enforces once api runs more than one
+		// replica (N replicas = N independent counters = an effective
+		// limit N times more permissive). This shares state across every
+		// replica via rate_limit_counters (migrations/030).
+		RateLimiter: ratelimitpg.New(pool, cfg.RateLimitRequests, cfg.RateLimitWindow),
 	}
 
 	router := server.NewRouter(deps)
