@@ -38,7 +38,16 @@ jobs:
   # smoke test, then always tear down regardless of outcome.
   deploy-and-test:
     if: github.event.action != 'unlabeled' && contains(github.event.pull_request.labels.*.name, 'deploy-staging')
-    runs-on: ubuntu-latest
+    # Native arm64 runner, not ubuntu-latest (amd64) + QEMU emulation --
+    # found painfully slow by a real run (PR #94): QEMU emulates every
+    # instruction and syscall for CPU-bound work like `go build`, and a
+    # Go compiler is syscall-heavy (lots of file I/O). What measured
+    # ~70s natively (api+worker+cleanup combined) stretched past 25
+    # minutes under emulation without finishing. GitHub's own hosted
+    # arm64 Linux runners avoid the emulation question entirely --
+    # native compilation, no QEMU, no docker/setup-qemu-action step
+    # needed at all.
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -63,16 +72,6 @@ jobs:
 
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
-
-      # Required for the arm64 target below -- GitHub-hosted runners are
-      # amd64, so building for linux/arm64 here means cross-building
-      # under QEMU emulation, not native compilation. setup-buildx-action
-      # alone doesn't provide that; this registers the binfmt handlers
-      # buildx needs to actually execute arm64 instructions on an amd64
-      # host.
-      - uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - uses: docker/setup-buildx-action@v3
 
