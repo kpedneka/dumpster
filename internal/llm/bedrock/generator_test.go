@@ -1,9 +1,12 @@
 package bedrock
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/kunalpednekar/dumpster/internal/llm"
 )
 
 // outputText is the one piece of this package's logic that's meaningfully
@@ -82,3 +85,44 @@ func TestAws32_ReturnsPointerToValue(t *testing.T) {
 		t.Errorf("aws32(4096) = %v, want pointer to 4096", p)
 	}
 }
+
+// wrapErr is the other piece of real logic in this package worth testing
+// without live AWS: it's what lets a caller (search/answerer.go, etc.)
+// tell "the spend budget denied this" apart from any other failure, via
+// a plain errors.Is check, without needing to know anything about Bedrock
+// or AWS SDK error types itself.
+
+func TestWrapErr_AccessDenied_WrapsProviderQuotaExceeded(t *testing.T) {
+	denied := &types.AccessDeniedException{Message: strPtr("budget action denied this")}
+	err := wrapErr("converse", denied)
+	if !errors.Is(err, llm.ErrProviderQuotaExceeded) {
+		t.Errorf("wrapErr(AccessDeniedException) = %v, want errors.Is match against llm.ErrProviderQuotaExceeded", err)
+	}
+	if !errors.Is(err, denied) {
+		t.Error("wrapErr should still preserve the original error in its chain (errors.Is against the original)")
+	}
+}
+
+func TestWrapErr_OtherError_DoesNotWrapProviderQuotaExceeded(t *testing.T) {
+	throttled := &types.ThrottlingException{Message: strPtr("too many requests")}
+	err := wrapErr("converse", throttled)
+	if errors.Is(err, llm.ErrProviderQuotaExceeded) {
+		t.Errorf("wrapErr(ThrottlingException) = %v, should NOT match llm.ErrProviderQuotaExceeded -- throttling and a spend-limit denial are different problems", err)
+	}
+	if !errors.Is(err, throttled) {
+		t.Error("wrapErr should still preserve the original error in its chain")
+	}
+}
+
+func TestWrapErr_IncludesOpInMessage(t *testing.T) {
+	err := wrapErr("converse stream", fmt.Errorf("boom"))
+	if err == nil || !errors.Is(err, err) {
+		t.Fatal("unexpected nil error")
+	}
+	want := "bedrock: converse stream: boom"
+	if err.Error() != want {
+		t.Errorf("err.Error() = %q, want %q", err.Error(), want)
+	}
+}
+
+func strPtr(s string) *string { return &s }

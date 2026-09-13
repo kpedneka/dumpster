@@ -10,12 +10,14 @@ package bedrock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/kunalpednekar/dumpster/internal/llm"
 )
 
 // maxTokens caps every call's response length, matching the direct
@@ -60,7 +62,7 @@ func (g *Generator) Generate(ctx context.Context, prompt string) (string, error)
 		InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws32(maxTokens)},
 	})
 	if err != nil {
-		return "", fmt.Errorf("bedrock: converse: %w", err)
+		return "", wrapErr("converse", err)
 	}
 	text, err := outputText(out.Output)
 	if err != nil {
@@ -105,7 +107,7 @@ func (g *Generator) converseStream(ctx context.Context, content []types.ContentB
 		InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws32(maxTokens)},
 	})
 	if err != nil {
-		return "", fmt.Errorf("bedrock: converse stream: %w", err)
+		return "", wrapErr("converse stream", err)
 	}
 	stream := out.GetStream()
 	defer func() { _ = stream.Close() }()
@@ -149,6 +151,29 @@ func outputText(output types.ConverseOutput) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// wrapErr classifies err before wrapping it with call context. An
+// AccessDeniedException is specifically what AWS Budgets' automatic
+// APPLY_IAM_POLICY action produces once production's Bedrock spend cap is
+// hit -- attaching a Deny policy to this same task role (see the
+// "Bedrock spend budget and graceful degradation" dev board card) means
+// the very next call is rejected at the authorization step, before any
+// request is even processed, not mid-stream. Wrapped with
+// llm.ErrProviderQuotaExceeded so a caller (search/answerer.go, etc.) can
+// degrade gracefully with errors.Is instead of surfacing a raw AWS error
+// or a generic failure worth retrying. Every other error type (a real
+// network problem, a malformed request, actual throttling) is left as a
+// plain wrapped error -- only an access-denial is treated as "this is the
+// spend limit", since assuming every failure is the budget would hide a
+// genuinely different, worth-investigating problem behind the same
+// reassuring message.
+func wrapErr(op string, err error) error {
+	var accessDenied *types.AccessDeniedException
+	if errors.As(err, &accessDenied) {
+		return fmt.Errorf("bedrock: %s: %w: %w", op, llm.ErrProviderQuotaExceeded, err)
+	}
+	return fmt.Errorf("bedrock: %s: %w", op, err)
 }
 
 func aws32(v int32) *int32 { return &v }

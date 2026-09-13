@@ -1,6 +1,21 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+// ErrProviderQuotaExceeded is returned by a Generator when the underlying
+// provider has refused a call because a spend or quota limit was hit --
+// e.g. AWS Budgets' automatic IAM-deny action attaching to the ECS task
+// role once production's Bedrock spend cap is reached (see the "Bedrock
+// spend budget and graceful degradation" dev board card). Provider-
+// agnostic on purpose: a caller checking for this (errors.Is) shouldn't
+// need to know or care which Generator implementation is behind the
+// interface, only that the answer is "not available right now because of
+// a spend limit" rather than a generic failure worth retrying or
+// surfacing as a raw error.
+var ErrProviderQuotaExceeded = errors.New("llm: provider quota or spend limit exceeded")
 
 // Embedder converts text into dense vector representations.
 type Embedder interface {
