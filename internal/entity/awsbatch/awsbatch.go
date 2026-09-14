@@ -11,9 +11,23 @@
 // This package never touches Postgres or grants the Batch container real
 // object-storage credentials — see scripts/batch_entity_job.py's own
 // docstring for the matching half of this design. The container gets a
-// short-lived presigned GET URL for its input and prints its result to
-// stdout for this package to read back via CloudWatch Logs, not a second
-// storage round trip.
+// short-lived presigned GET URL for its input and a presigned PUT URL for
+// its result, the same shape internal/llm/awsbatch already uses for
+// embedding.
+//
+// Originally the result travelled back via a "BATCH_RESULT: " line in
+// stdout, read back through CloudWatch Logs instead of a second storage
+// round trip — internal/llm/awsbatch's own package doc explains why that
+// approach doesn't hold up for a large enough response: GetLogEvents caps
+// a single page at 1MB with no pagination here, and BATCH_RESULT is
+// always the last line printed, so it's specifically the part that goes
+// missing first once a job's total output crosses that cap. Entity
+// extraction's responses were assumed small enough this would never bite
+// it — confirmed false live (a real, dense document produced a result
+// close enough to the cap, and this exact failure mode was hit before
+// per-batch chunking existed, when a whole document's entities
+// accumulated into one call). Moved to the S3 round trip for the same
+// reason embeddings already made this move.
 package awsbatch
 
 import (
@@ -21,8 +35,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -33,11 +47,6 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/entity"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 )
-
-// resultMarker is the line prefix scripts/batch_entity_job.py uses to mark
-// its actual result line in job output, distinguishing it from
-// extract_entities.py's own timing print (which also goes to stdout).
-const resultMarker = "BATCH_RESULT: "
 
 // Config holds the AWS Batch resources this Extractor submits jobs
 // against, plus the tunables around polling/URL lifetime.
@@ -158,6 +167,7 @@ func (e *Extractor) ExtractBatches(ctx context.Context, batches [][]*chunk.Chunk
 type submission struct {
 	jobID       string
 	inputKey    string
+	resultKey   string
 	byID        map[string]*chunk.Chunk
 	batchIdx    int
 	submittedAt time.Time
@@ -193,6 +203,7 @@ func (e *Extractor) submit(ctx context.Context, batchIdx int, chunks []*chunk.Ch
 	documentID := chunks[0].DocumentID
 	shortSuffix := uuid.New().String()[:8]
 	inputKey := fmt.Sprintf("batch-jobs/entities/%s/batch-%d-%s/input.json", documentID, batchIdx, shortSuffix)
+	resultKey := fmt.Sprintf("batch-jobs/entities/%s/batch-%d-%s/result.json", documentID, batchIdx, shortSuffix)
 	if err := e.store.Put(ctx, inputKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
 		return nil, fmt.Errorf("awsbatch: upload input: %w", err)
 	}
@@ -202,33 +213,37 @@ func (e *Extractor) submit(ctx context.Context, batchIdx int, chunks []*chunk.Ch
 		_ = e.store.Delete(context.WithoutCancel(ctx), inputKey)
 		return nil, fmt.Errorf("awsbatch: presign input: %w", err)
 	}
+	resultURL, err := e.store.PresignedPutURL(ctx, resultKey, e.cfg.PresignTTL)
+	if err != nil {
+		_ = e.store.Delete(context.WithoutCancel(ctx), inputKey)
+		return nil, fmt.Errorf("awsbatch: presign result: %w", err)
+	}
 
 	jobID, err := e.client.SubmitJob(ctx, awsbatch.SubmitJobParams{
 		JobName:       fmt.Sprintf("entity-extraction-%s-batch-%d", documentID, batchIdx),
 		JobQueue:      e.cfg.JobQueue,
 		JobDefinition: e.cfg.JobDefinition,
-		Environment:   map[string]string{"CHUNKS_URL": inputURL},
+		Environment:   map[string]string{"CHUNKS_URL": inputURL, "RESULT_URL": resultURL},
 	})
 	if err != nil {
 		_ = e.store.Delete(context.WithoutCancel(ctx), inputKey)
 		return nil, fmt.Errorf("awsbatch: submit job: %w", err)
 	}
 
-	return &submission{jobID: jobID, inputKey: inputKey, byID: byID, batchIdx: batchIdx, submittedAt: time.Now()}, nil
+	return &submission{jobID: jobID, inputKey: inputKey, resultKey: resultKey, byID: byID, batchIdx: batchIdx, submittedAt: time.Now()}, nil
 }
 
 // await waits for sub's job to reach a terminal state, fetches and parses
 // its result, and maps it back onto entity.Entity rows -- the "await" half
-// of what Extract used to do in one synchronous call. Always cleans up the
-// job's input object, on both success and failure.
+// of what Extract used to do in one synchronous call. Always cleans up both
+// the job's input and result objects, on both success and failure.
 //
 // Logs a per-phase timing breakdown for every batch -- added specifically
 // to diagnose a measured ~2.6-minute tail latency on ExtractBatches calls,
 // where the whole call is gated by whichever single batch is slowest.
 // Candidate causes were AWS Batch's own job-status-transition propagation
-// (waitForCompletion) vs. CloudWatch Logs' delivery lag (JobLogs) -- this
-// makes which one actually dominates observable per real run instead of
-// guessed at.
+// (waitForCompletion) vs. the result fetch itself -- this makes which one
+// actually dominates observable per real run instead of guessed at.
 func (e *Extractor) await(ctx context.Context, sub *submission) entity.BatchResult {
 	defer func() {
 		// Best-effort: a leaked temp object costs pennies and isn't worth
@@ -236,6 +251,7 @@ func (e *Extractor) await(ctx context.Context, sub *submission) entity.BatchResu
 		// cancellation-detached context since ctx may already be near its
 		// deadline by the time this returns.
 		_ = e.store.Delete(context.WithoutCancel(ctx), sub.inputKey)
+		_ = e.store.Delete(context.WithoutCancel(ctx), sub.resultKey)
 	}()
 
 	waitStart := time.Now()
@@ -247,23 +263,26 @@ func (e *Extractor) await(ctx context.Context, sub *submission) entity.BatchResu
 		return entity.BatchResult{Err: waitErr}
 	}
 
-	logsStart := time.Now()
-	logs, err := e.client.JobLogs(ctx, sub.jobID)
-	logsElapsed := time.Since(logsStart)
-	totalElapsed := time.Since(sub.submittedAt)
-	log.Printf("awsbatch: batch %d (job %s): waitForCompletion=%s JobLogs=%s totalSinceSubmit=%s",
-		sub.batchIdx, sub.jobID, waitElapsed, logsElapsed, totalElapsed)
+	resultStart := time.Now()
+	rc, err := e.store.Get(ctx, sub.resultKey)
 	if err != nil {
-		return entity.BatchResult{Err: fmt.Errorf("awsbatch: fetch job %s logs: %w", sub.jobID, err)}
+		resultElapsed := time.Since(resultStart)
+		log.Printf("awsbatch: batch %d (job %s): waitForCompletion=%s fetchResult=%s (failed): %v",
+			sub.batchIdx, sub.jobID, waitElapsed, resultElapsed, err)
+		return entity.BatchResult{Err: fmt.Errorf("awsbatch: job %s: fetch result: %w", sub.jobID, err)}
 	}
-
-	resultLine, err := extractResultLine(logs)
+	resultBody, err := io.ReadAll(rc)
+	_ = rc.Close()
+	resultElapsed := time.Since(resultStart)
+	totalElapsed := time.Since(sub.submittedAt)
+	log.Printf("awsbatch: batch %d (job %s): waitForCompletion=%s fetchResult=%s totalSinceSubmit=%s",
+		sub.batchIdx, sub.jobID, waitElapsed, resultElapsed, totalElapsed)
 	if err != nil {
-		return entity.BatchResult{Err: fmt.Errorf("awsbatch: job %s: %w", sub.jobID, err)}
+		return entity.BatchResult{Err: fmt.Errorf("awsbatch: job %s: read result: %w", sub.jobID, err)}
 	}
 
 	var resp entitiesResponse
-	if err := json.Unmarshal([]byte(resultLine), &resp); err != nil {
+	if err := json.Unmarshal(resultBody, &resp); err != nil {
 		return entity.BatchResult{Err: fmt.Errorf("awsbatch: job %s: unmarshal entities response: %w", sub.jobID, err)}
 	}
 
@@ -317,20 +336,6 @@ func (e *Extractor) waitForCompletion(ctx context.Context, jobID string) error {
 		case <-ticker.C:
 		}
 	}
-}
-
-// extractResultLine finds batch_entity_job.py's marked result line in a
-// job's captured output. Its absence (most likely a BATCH_ERROR: line
-// instead, printed on a fetch or extraction failure inside the job) is
-// surfaced as an error carrying the full log, so a failure is debuggable
-// from the returned error alone.
-func extractResultLine(logs string) (string, error) {
-	for _, line := range strings.Split(logs, "\n") {
-		if strings.HasPrefix(line, resultMarker) {
-			return strings.TrimPrefix(line, resultMarker), nil
-		}
-	}
-	return "", fmt.Errorf("no result line in job output: %s", logs)
 }
 
 var _ entity.BatchExtractor = (*Extractor)(nil)

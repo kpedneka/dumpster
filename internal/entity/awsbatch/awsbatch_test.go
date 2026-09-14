@@ -26,6 +26,75 @@ func testConfig() Config {
 	return Config{JobQueue: "test-queue", JobDefinition: "test-job-def", PollInterval: time.Millisecond}
 }
 
+// waitForJobs polls batchClient until at least n jobs have been submitted,
+// returning a snapshot of them. Needed by any test that must observe a
+// submission while the call that made it (Extract/ExtractBatches, which
+// submit and then block awaiting the result) is still in flight.
+func waitForJobs(t *testing.T, batchClient *batchmock.Client, n int) []awsbatch.SubmitJobParams {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var jobs []awsbatch.SubmitJobParams
+	for time.Now().Before(deadline) {
+		jobs = batchClient.Jobs()
+		if len(jobs) >= n {
+			return jobs
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("expected %d jobs submitted, got %d", n, len(jobs))
+	return nil
+}
+
+// writeResult uploads result to the S3 key encoded in a submitted job's
+// RESULT_URL -- simulating scripts/batch_entity_job.py's own PUT. The
+// result key isn't known ahead of time (submit() generates it internally
+// with a random UUID suffix), so this can only run after the job has
+// actually been submitted, unlike the old deterministic-job-ID-keyed
+// SetLogs() pattern.
+func writeResult(t *testing.T, store *objectstoremock.Store, resultURL string, result entitiesResponse) {
+	t.Helper()
+	resultKey := strings.TrimPrefix(resultURL, "http://mock/")
+	body, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if err := store.Put(context.Background(), resultKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
+		t.Fatalf("write result: %v", err)
+	}
+}
+
+// runExtractWithResult calls ex.Extract(ctx, chunks, allowedTypes) and,
+// once the job it submits is visible, uploads result to that job's
+// RESULT_URL and marks it succeeded -- simulating
+// scripts/batch_entity_job.py actually running, in the correct order
+// (result written, then job marked terminal) since Extract reads the
+// result only after waitForCompletion returns.
+func runExtractWithResult(t *testing.T, ex *Extractor, batchClient *batchmock.Client, store *objectstoremock.Store, chunks []*chunk.Chunk, allowedTypes []entity.Type, result entitiesResponse) ([]*entity.Entity, error) {
+	t.Helper()
+	type outcome struct {
+		entities []*entity.Entity
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		entities, err := ex.Extract(context.Background(), chunks, allowedTypes)
+		done <- outcome{entities, err}
+	}()
+
+	jobs := waitForJobs(t, batchClient, 1)
+	submitted := jobs[len(jobs)-1]
+	writeResult(t, store, submitted.Environment["RESULT_URL"], result)
+	batchClient.SetState(fmt.Sprintf("mock-job-%d", len(jobs)), awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+
+	select {
+	case out := <-done:
+		return out.entities, out.err
+	case <-time.After(2 * time.Second):
+		t.Fatal("Extract did not return after the job was marked succeeded")
+		return nil, nil
+	}
+}
+
 func TestExtract_EmptyInputs_NoJobSubmitted(t *testing.T) {
 	batchClient := batchmock.New()
 	store := objectstoremock.New()
@@ -52,14 +121,9 @@ func TestExtract_SubmitsJobAndMapsResponse(t *testing.T) {
 	store := objectstoremock.New()
 	ex := New(batchClient, store, testConfig())
 
-	jobID := batchClient.NextJobID()
-	batchClient.SetState(jobID, awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	resultJSON, _ := json.Marshal(entitiesResponse{
+	got, err := runExtractWithResult(t, ex, batchClient, store, []*chunk.Chunk{c}, []entity.Type{"person"}, entitiesResponse{
 		Entities: []entityResponse{{ChunkID: chunkID.String(), Type: "person", Text: "Ada Lovelace", Start: 0, End: 12, Score: 0.93}},
 	})
-	batchClient.SetLogs(jobID, "extract_entities: 1 chunks -> 1 entities in 0.29s\n"+resultMarker+string(resultJSON))
-
-	got, err := ex.Extract(context.Background(), []*chunk.Chunk{c}, []entity.Type{"person"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +138,9 @@ func TestExtract_SubmitsJobAndMapsResponse(t *testing.T) {
 	if _, ok := submitted.Environment["CHUNKS_URL"]; !ok {
 		t.Error("expected CHUNKS_URL to be set in the job's environment")
 	}
+	if _, ok := submitted.Environment["RESULT_URL"]; !ok {
+		t.Error("expected RESULT_URL to be set in the job's environment")
+	}
 
 	if len(got) != 1 {
 		t.Fatalf("got %d entities, want 1", len(got))
@@ -87,22 +154,39 @@ func TestExtract_SubmitsJobAndMapsResponse(t *testing.T) {
 	}
 }
 
+// recordingPutStore wraps an ObjectStore, capturing the bytes of the first
+// Put() call (the job input -- the result upload in these tests goes
+// through the embedded Store's Put directly, not this wrapper) so a test
+// can inspect an upload's content even after the code under test has since
+// deleted it as cleanup.
+type recordingPutStore struct {
+	*objectstoremock.Store
+	lastPutBody []byte
+}
+
+func (s *recordingPutStore) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if s.lastPutBody == nil {
+		s.lastPutBody = data
+	}
+	return s.Store.Put(ctx, key, bytes.NewReader(data), size, contentType)
+}
+
 func TestExtract_UploadsRequestBodyMatchingWireProtocol(t *testing.T) {
 	c := &chunk.Chunk{ID: uuid.New(), Text: "Ada Lovelace wrote notes."}
 
 	batchClient := batchmock.New()
 	// Extract() deletes the input object as cleanup before returning (see
-	// TestExtract_DeletesInputObjectAfterSuccess), so inspecting it via
-	// the store after Extract() returns wouldn't find anything — a
+	// TestExtract_DeletesInputAndResultObjectsAfterSuccess), so inspecting
+	// it via the store after Extract() returns wouldn't find anything — a
 	// recording wrapper captures what was actually uploaded at Put time.
 	store := &recordingPutStore{Store: objectstoremock.New()}
 	ex := New(batchClient, store, testConfig())
 
-	jobID := batchClient.NextJobID()
-	batchClient.SetState(jobID, awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	batchClient.SetLogs(jobID, resultMarker+`{"entities":[]}`)
-
-	if _, err := ex.Extract(context.Background(), []*chunk.Chunk{c}, []entity.Type{"person"}); err != nil {
+	if _, err := runExtractWithResult(t, ex, batchClient, store.Store, []*chunk.Chunk{c}, []entity.Type{"person"}, entitiesResponse{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -124,41 +208,23 @@ func TestExtract_UploadsRequestBodyMatchingWireProtocol(t *testing.T) {
 	}
 }
 
-// recordingPutStore wraps an ObjectStore, capturing the bytes of the last
-// Put() call so a test can inspect an upload's content even after the
-// code under test has since deleted it as cleanup.
-type recordingPutStore struct {
-	*objectstoremock.Store
-	lastPutBody []byte
-}
-
-func (s *recordingPutStore) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return err
-	}
-	s.lastPutBody = data
-	return s.Store.Put(ctx, key, bytes.NewReader(data), size, contentType)
-}
-
-func TestExtract_DeletesInputObjectAfterSuccess(t *testing.T) {
+func TestExtract_DeletesInputAndResultObjectsAfterSuccess(t *testing.T) {
 	c := &chunk.Chunk{ID: uuid.New(), Text: "hi"}
 	batchClient := batchmock.New()
 	store := objectstoremock.New()
 	ex := New(batchClient, store, testConfig())
 
-	jobID := batchClient.NextJobID()
-	batchClient.SetState(jobID, awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	batchClient.SetLogs(jobID, resultMarker+`{"entities":[]}`)
-
-	if _, err := ex.Extract(context.Background(), []*chunk.Chunk{c}, []entity.Type{"person"}); err != nil {
+	if _, err := runExtractWithResult(t, ex, batchClient, store, []*chunk.Chunk{c}, []entity.Type{"person"}, entitiesResponse{}); err != nil {
 		t.Fatal(err)
 	}
 
-	presignedURL := batchClient.SubmittedJobs[0].Environment["CHUNKS_URL"]
-	key := presignedURL[len("http://mock/"):]
-	if _, err := store.Get(context.Background(), key); err == nil {
-		t.Error("expected the temp input object to be deleted after Extract completes")
+	submitted := batchClient.SubmittedJobs[0]
+	for _, envKey := range []string{"CHUNKS_URL", "RESULT_URL"} {
+		presignedURL := submitted.Environment[envKey]
+		key := strings.TrimPrefix(presignedURL, "http://mock/")
+		if _, err := store.Get(context.Background(), key); err == nil {
+			t.Errorf("expected the temp object for %s to be deleted after Extract completes", envKey)
+		}
 	}
 }
 
@@ -168,14 +234,9 @@ func TestExtract_UnknownChunkID_Skipped(t *testing.T) {
 	store := objectstoremock.New()
 	ex := New(batchClient, store, testConfig())
 
-	jobID := batchClient.NextJobID()
-	batchClient.SetState(jobID, awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	resultJSON, _ := json.Marshal(entitiesResponse{
+	got, err := runExtractWithResult(t, ex, batchClient, store, []*chunk.Chunk{c}, []entity.Type{"person"}, entitiesResponse{
 		Entities: []entityResponse{{ChunkID: uuid.New().String(), Type: "person", Text: "X", Start: 0, End: 1, Score: 0.5}},
 	})
-	batchClient.SetLogs(jobID, resultMarker+string(resultJSON))
-
-	got, err := ex.Extract(context.Background(), []*chunk.Chunk{c}, []entity.Type{"person"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +263,13 @@ func TestExtract_JobFailed_ReturnsErrorWithReason(t *testing.T) {
 	}
 }
 
-func TestExtract_NoResultLineInLogs_ReturnsErrorWithLogContent(t *testing.T) {
+// TestExtract_JobSucceededButNeverWroteResult_ReturnsError covers a job
+// that AWS Batch reports SUCCEEDED without ever PUTing to RESULT_URL (e.g.
+// it crashed after computing entities but before the upload, or the upload
+// itself silently failed) -- Get() on a key that was never written is the
+// only signal of that failure mode, since there's no log line to fall back
+// on any more.
+func TestExtract_JobSucceededButNeverWroteResult_ReturnsError(t *testing.T) {
 	c := &chunk.Chunk{ID: uuid.New(), Text: "hi"}
 	batchClient := batchmock.New()
 	store := objectstoremock.New()
@@ -210,14 +277,10 @@ func TestExtract_NoResultLineInLogs_ReturnsErrorWithLogContent(t *testing.T) {
 
 	jobID := batchClient.NextJobID()
 	batchClient.SetState(jobID, awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	batchClient.SetLogs(jobID, "BATCH_ERROR: fetching CHUNKS_URL: connection refused")
 
 	_, err := ex.Extract(context.Background(), []*chunk.Chunk{c}, []entity.Type{"person"})
 	if err == nil {
-		t.Fatal("expected error when no BATCH_RESULT line is present")
-	}
-	if got := err.Error(); !strings.Contains(got, "BATCH_ERROR") {
-		t.Errorf("error should surface the job's actual log output, got: %v", got)
+		t.Fatal("expected an error when the job succeeded without writing a result")
 	}
 }
 
@@ -304,17 +367,27 @@ func TestExtractBatches_OneBatchFailingDoesNotBlockOthers(t *testing.T) {
 	succeeding := &chunk.Chunk{ID: uuid.New(), DocumentID: docID, Text: "b"}
 	batches := [][]*chunk.Chunk{{failing}, {succeeding}}
 
+	done := make(chan []entity.BatchResult, 1)
+	go func() {
+		done <- ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+	}()
+
 	// submit() is called in batch order (0, then 1), so the mock's
 	// sequential job IDs are deterministic: "mock-job-1" for batch 0,
 	// "mock-job-2" for batch 1.
+	jobs := waitForJobs(t, batchClient, 2)
 	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusFailed, Reason: "boom"})
-	batchClient.SetState("mock-job-2", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	resultJSON, _ := json.Marshal(entitiesResponse{
+	writeResult(t, store, jobs[1].Environment["RESULT_URL"], entitiesResponse{
 		Entities: []entityResponse{{ChunkID: succeeding.ID.String(), Type: "person", Text: "B", Start: 0, End: 1, Score: 0.5}},
 	})
-	batchClient.SetLogs("mock-job-2", resultMarker+string(resultJSON))
+	batchClient.SetState("mock-job-2", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
 
-	results := ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+	var results []entity.BatchResult
+	select {
+	case results = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ExtractBatches did not return after both jobs reached a terminal state")
+	}
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
@@ -345,12 +418,23 @@ func TestExtractBatches_JobNamingIsTraceableToDocumentAndBatch(t *testing.T) {
 		{{ID: uuid.New(), DocumentID: docID, Text: "a"}},
 		{{ID: uuid.New(), DocumentID: docID, Text: "b"}},
 	}
-	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	batchClient.SetLogs("mock-job-1", resultMarker+`{"entities":[]}`)
-	batchClient.SetState("mock-job-2", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	batchClient.SetLogs("mock-job-2", resultMarker+`{"entities":[]}`)
 
-	ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+	done := make(chan []entity.BatchResult, 1)
+	go func() {
+		done <- ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+	}()
+
+	jobs := waitForJobs(t, batchClient, 2)
+	for i, job := range jobs {
+		writeResult(t, store, job.Environment["RESULT_URL"], entitiesResponse{})
+		batchClient.SetState(fmt.Sprintf("mock-job-%d", i+1), awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ExtractBatches did not return after both jobs reached a terminal state")
+	}
 
 	if len(batchClient.SubmittedJobs) != 2 {
 		t.Fatalf("expected 2 jobs submitted, got %d", len(batchClient.SubmittedJobs))
@@ -379,10 +463,22 @@ func TestExtractBatches_EmptyBatchesSkipped(t *testing.T) {
 		{},
 		{{ID: uuid.New(), DocumentID: docID, Text: "a"}},
 	}
-	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
-	batchClient.SetLogs("mock-job-1", resultMarker+`{"entities":[]}`)
 
-	results := ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+	done := make(chan []entity.BatchResult, 1)
+	go func() {
+		done <- ex.ExtractBatches(context.Background(), batches, []entity.Type{"person"})
+	}()
+
+	jobs := waitForJobs(t, batchClient, 1)
+	writeResult(t, store, jobs[0].Environment["RESULT_URL"], entitiesResponse{})
+	batchClient.SetState("mock-job-1", awsbatch.JobState{Status: awsbatch.StatusSucceeded})
+
+	var results []entity.BatchResult
+	select {
+	case results = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ExtractBatches did not return after the job reached a terminal state")
+	}
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(results))
