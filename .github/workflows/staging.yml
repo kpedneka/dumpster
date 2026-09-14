@@ -55,36 +55,6 @@ jobs:
         with:
           tofu_version: "1.12.6"
 
-      # The ALB's security group allowlists specific /32s (var.
-      # staging_allowed_cidrs, ecs_networking.tf) -- unlike a developer's
-      # home IP, a GitHub-hosted runner's IP is different every run, so
-      # this can't be a static value the way a human's staging.tvars
-      # entry is. Computed fresh each run instead, exactly like the
-      # manual runbook already tells a human to do with `curl ifconfig.me`.
-      #
-      # Also merges in vars.STAGING_MANUAL_TESTING_CIDR when set -- a
-      # real gap found only once staging was actually left running after
-      # a successful test (see the Destroy step below): without this,
-      # the allowlist contains only the now-meaningless ephemeral
-      # runner's IP once the job ends, and a human's own browser gets
-      # silently dropped at the security-group layer trying to reach it
-      # afterward -- the same "why won't this load" trap the manual
-      # runbook already warns about with iCloud Private Relay, just from
-      # a different cause. Set this repo variable to your current public
-      # IP (`curl -4 -s ifconfig.me`) as a /32 before a run you intend to
-      # look at by hand; like the manual runbook's own note, it needs
-      # updating if your IP changes between sessions.
-      - name: Compute allowed CIDRs (runner + optional manual-testing IP)
-        id: runner_ip
-        run: |
-          RUNNER_CIDR="$(curl -4 -s ifconfig.me)/32"
-          MANUAL_CIDR="${{ vars.STAGING_MANUAL_TESTING_CIDR }}"
-          if [ -n "$MANUAL_CIDR" ]; then
-            echo "TF_VAR_staging_allowed_cidrs=[\"$RUNNER_CIDR\", \"$MANUAL_CIDR\"]" >> "$GITHUB_ENV"
-          else
-            echo "TF_VAR_staging_allowed_cidrs=[\"$RUNNER_CIDR\"]" >> "$GITHUB_ENV"
-          fi
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/dumpster-github-actions-deploy
@@ -278,9 +248,6 @@ jobs:
       - uses: opentofu/setup-opentofu@v1
         with:
           tofu_version: "1.12.6"
-
-      - name: Compute this runner's public IP
-        run: echo "TF_VAR_staging_allowed_cidrs=[\"$(curl -4 -s ifconfig.me)/32\"]" >> "$GITHUB_ENV"
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:

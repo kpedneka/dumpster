@@ -187,8 +187,8 @@ resource "aws_cloudfront_distribution" "frontend" {
   aliases             = [var.acm_domain_name]
 
   # PriceClass_100 (cheapest, fewest edge locations) for staging: its only
-  # real traffic is one IP (var.staging_allowed_cidrs) doing manual review,
-  # so the extra edge locations PriceClass_All pays for buy nothing here.
+  # real traffic is one person doing manual review, so the extra edge
+  # locations PriceClass_All pays for buy nothing here.
   # Production keeps every edge location -- real, geographically-unknown
   # visitors benefit from the full network.
   #
