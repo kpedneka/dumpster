@@ -57,3 +57,11 @@ terraform/bootstrap/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
+
+# Saved `tofu plan -out=...` files from local-first IaC verification
+# (CLAUDE.md's IaC verification policy) -- one-off snapshots from a single
+# machine at a single moment, not meant to be reviewed via git diff (binary)
+# or relied on later (a plan goes stale the moment anything else changes the
+# real state). Can also embed real planned resource values.
+.local-plans/
+*.tfplan

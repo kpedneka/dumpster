@@ -2,7 +2,7 @@
 # End-to-end smoke test: anonymous session → upload → search → verify cleanup.
 #
 # Usage:
-#   BASE_URL=https://your-app.fly.dev bash scripts/smoke_test.sh
+#   BASE_URL=https://dumpster-staging.kpednekar.dev bash scripts/smoke_test.sh
 #
 # Requirements: curl, jq
 # The script exits non-zero on any failure.
@@ -26,7 +26,7 @@ ok "healthz: $status"
 
 # ── 2. Session cookie ─────────────────────────────────────────────────────────
 info "Requesting session cookie..."
-curl -sf -c "$COOKIE_JAR" "$BASE_URL/kbs" > /dev/null
+curl -sf -c "$COOKIE_JAR" "$BASE_URL/api/kbs" > /dev/null
 SESSION_ID=$(grep -m1 'session_id' "$COOKIE_JAR" | awk '{print $NF}' || true)
 [[ -n "$SESSION_ID" ]] || fail "no session_id cookie received"
 ok "session_id: $SESSION_ID"
@@ -34,7 +34,7 @@ ok "session_id: $SESSION_ID"
 # ── 3. Create knowledge base ──────────────────────────────────────────────────
 info "Creating knowledge base..."
 KB=$(curl -sf -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-  -X POST "$BASE_URL/kbs" \
+  -X POST "$BASE_URL/api/kbs" \
   -H "Content-Type: application/json" \
   -d '{"name":"smoke-test-kb"}')
 KB_ID=$(echo "$KB" | jq -r '.id')
@@ -51,42 +51,52 @@ in the world for 41 years until the Chrysler Building was built in 1930.
 EOF
 
 DOC=$(curl -sf -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-  -X POST "$BASE_URL/kbs/$KB_ID/documents" \
+  -X POST "$BASE_URL/api/kbs/$KB_ID/documents" \
   -F "file=@$TMP_DOC;type=text/plain")
 DOC_ID=$(echo "$DOC" | jq -r '.id')
 [[ "$DOC_ID" != "null" && -n "$DOC_ID" ]] || fail "document upload failed: $DOC"
 ok "document: $DOC_ID"
 
 # ── 5. Wait for indexing ──────────────────────────────────────────────────────
-info "Waiting for document to be indexed (up to 60s)..."
+# ~90s observed against real staging (AWS), even for a one-sentence document
+# -- fixed pipeline latency, not doc-size-driven. 60s (this loop's original
+# local-dev-era budget) reliably timed out before indexing ever finished.
+info "Waiting for document to be indexed (up to 3 minutes)..."
 INDEXED=false
 DOC_STATUS="unknown"
-for _ in $(seq 1 30); do
+for _ in $(seq 1 36); do
   DOC_STATUS=$(curl -sf -b "$COOKIE_JAR" \
-    "$BASE_URL/kbs/$KB_ID/documents/$DOC_ID" | jq -r '.status')
+    "$BASE_URL/api/kbs/$KB_ID/documents/$DOC_ID" | jq -r '.status')
   if [[ "$DOC_STATUS" == "indexed" ]]; then
     INDEXED=true
     break
   fi
   [[ "$DOC_STATUS" == "failed" ]] && fail "document processing failed"
-  sleep 2
+  sleep 5
 done
-$INDEXED || fail "document not indexed within 60s (last status: $DOC_STATUS)"
+$INDEXED || fail "document not indexed within 3 minutes (last status: $DOC_STATUS)"
 ok "document indexed"
 
 # ── 6. Search ─────────────────────────────────────────────────────────────────
+# /search responds as Server-Sent Events, not one JSON body: a stream of
+# retrieved_files/delta frames ending in exactly one done (success) or error
+# (failure) frame -- see searchhandler.go's writeSSE. Only that final
+# frame's data line carries the full summary.
 info "Searching..."
-RESULT=$(curl -sf -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
-  -X POST "$BASE_URL/kbs/$KB_ID/search" \
+STREAM=$(curl -sf -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+  -X POST "$BASE_URL/api/kbs/$KB_ID/search" \
   -H "Content-Type: application/json" \
   -d '{"query":"How tall is the Eiffel Tower?"}')
-SUMMARY=$(echo "$RESULT" | jq -r '.summary // empty')
-[[ -n "$SUMMARY" ]] || fail "search returned no summary: $RESULT"
+ERROR_DATA=$( (echo "$STREAM" | grep -A1 '^event: error' | grep '^data: ' | sed 's/^data: //') || true )
+[[ -z "$ERROR_DATA" ]] || fail "search returned an error event: $ERROR_DATA"
+DONE_DATA=$( (echo "$STREAM" | grep -A1 '^event: done' | grep '^data: ' | sed 's/^data: //') || true )
+SUMMARY=$(echo "$DONE_DATA" | jq -r '.summary // empty')
+[[ -n "$SUMMARY" ]] || fail "search returned no summary: $STREAM"
 ok "search summary: ${SUMMARY:0:100}..."
 
 # ── 7. Account status ─────────────────────────────────────────────────────────
 info "Checking account status..."
-ACCT=$(curl -sf -b "$COOKIE_JAR" "$BASE_URL/account/status")
+ACCT=$(curl -sf -b "$COOKIE_JAR" "$BASE_URL/api/account/status")
 WARNING=$(echo "$ACCT" | jq -r '.warning_active')
 DELETES_AT=$(echo "$ACCT" | jq -r '.deletes_at')
 ok "warning_active=$WARNING  deletes_at=$DELETES_AT"
@@ -108,8 +118,8 @@ Cleanup verification (requires accelerated timeouts or waiting for idle expiry):
        psql \$DATABASE_URL -c "SELECT id FROM sessions WHERE id='$SESSION_ID'"
      (expect 0 rows)
 
-  3. R2 objects gone — check the Cloudflare dashboard or list with:
-       aws s3 ls s3://\$S3_BUCKET/ --endpoint-url \$S3_ENDPOINT
+  3. S3 objects gone — check the AWS console or list with:
+       aws s3 ls s3://\$DOCUMENTS_BUCKET/documents/$SESSION_ID/
      (no objects matching the deleted session's document keys)
 
 INSTRUCTIONS
