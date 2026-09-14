@@ -3,33 +3,39 @@ package telemetry
 import (
 	"context"
 	"fmt"
-	"net/http"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	promexporter "go.opentelemetry.io/otel/exporters/prometheus"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 )
 
-// Setup initialises a Prometheus-backed OTel MeterProvider and returns the
-// metric instruments plus an HTTP handler for the Prometheus scrape endpoint.
+// Setup initialises an OTLP/gRPC-backed OTel MeterProvider and returns the
+// metric instruments plus a shutdown func that flushes any buffered data and
+// closes the exporter.
 //
 // Application code depends only on the OTel metric API via Instruments;
-// swapping the backend to OTLP/gRPC or another exporter is a change here,
-// not in the instrumented paths — satisfying the vendor-neutral seam requirement.
+// swapping the export path is a change here, not in the instrumented paths —
+// satisfying the vendor-neutral seam requirement.
+//
+// The OTLP endpoint is always localhost:4317: metrics are pushed to the ADOT
+// Collector sidecar running in the same ECS task (Dockerfile.otel-collector),
+// reachable over localhost under ECS awsvpc networking, not a shared
+// collector service. See the "Push OTel metrics to CloudWatch" dev board
+// card for why AWS's documented collector-sidecar path was chosen over a
+// hand-rolled exporter.
 //
 // Setup does not set the global OTel MeterProvider to keep it self-contained
 // and safe to call multiple times in tests.
-func Setup(_ context.Context) (*Instruments, http.Handler, error) {
-	reg := prometheus.NewRegistry()
-
-	exp, err := promexporter.New(promexporter.WithRegisterer(reg))
+func Setup(ctx context.Context) (*Instruments, func(context.Context) error, error) {
+	exp, err := otlpmetricgrpc.New(ctx,
+		otlpmetricgrpc.WithEndpoint("localhost:4317"),
+		otlpmetricgrpc.WithInsecure(),
+	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("telemetry: prometheus exporter: %w", err)
+		return nil, nil, fmt.Errorf("telemetry: otlp exporter: %w", err)
 	}
 
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(exp))
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)))
 	meter := provider.Meter("dumpster")
 
 	inst, err := newInstruments(meter)
@@ -37,8 +43,7 @@ func Setup(_ context.Context) (*Instruments, http.Handler, error) {
 		return nil, nil, err
 	}
 
-	handler := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
-	return inst, handler, nil
+	return inst, provider.Shutdown, nil
 }
 
 func newInstruments(meter metric.Meter) (*Instruments, error) {
