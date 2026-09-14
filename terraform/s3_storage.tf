@@ -17,8 +17,10 @@
 # aws provider requirement lives here, not duplicated per-file --
 # OpenTofu/Terraform allows exactly one required_providers block per module.
 # Previously lived in the now-deleted r2_lifecycle.tf, which also carried a
-# cloudflare provider requirement -- dropped entirely now that R2 is fully
-# retired from every AWS-hosted environment.
+# cloudflare provider requirement -- dropped entirely once R2 was retired
+# from every AWS-hosted environment, then reintroduced by dns.tf (staging's
+# ephemeral CloudFront domain needs to be kept pointed at by kpednekar.dev's
+# DNS, which is still on Cloudflare even though R2 itself is gone).
 terraform {
   required_providers {
     aws = {
@@ -31,6 +33,10 @@ terraform {
     random = {
       source  = "hashicorp/random"
       version = "~> 3.6"
+    }
+    cloudflare = {
+      source  = "cloudflare/cloudflare"
+      version = "~> 5.0"
     }
   }
 }

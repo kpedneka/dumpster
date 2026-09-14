@@ -33,3 +33,12 @@ type Instruments struct {
 	// whether to move off the Postgres-backed queue.
 	JobDuration metric.Float64Histogram
 }
+
+// NewInstruments builds Instruments from an already-configured OTel Meter.
+// Setup is the production entry point (OTLP/gRPC via the ADOT Collector
+// sidecar); NewInstruments exists for tests in other packages that need real
+// instruments backed by their own reader — e.g. telemetrytest's in-memory
+// manual reader — instead of a live network exporter.
+func NewInstruments(meter metric.Meter) (*Instruments, error) {
+	return newInstruments(meter)
+}

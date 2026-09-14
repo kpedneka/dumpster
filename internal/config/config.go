@@ -70,8 +70,6 @@ type Config struct {
 	S3ScratchAccessKey    string
 	S3ScratchSecretKey    string
 	S3ScratchUsePathStyle bool
-	// Observability
-	MetricsPort string
 	// LLM
 	AnthropicAPIKey string
 	AnthropicModel  string
@@ -244,7 +242,6 @@ func Load() *Config {
 		DBSSL:             getEnv("DB_SSLMODE", "disable"),
 		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		DatabaseURLPooled: getEnv("DATABASE_URL_POOLED", ""),
-		MetricsPort:       getEnv("METRICS_PORT", "9090"),
 		// No placeholder default for Endpoint/AccessKey/SecretKey (e.g.
 		// "http://localhost:9000", "minioadmin") on purpose: on real AWS S3
 		// (staging/production) all three are deliberately left unset in the

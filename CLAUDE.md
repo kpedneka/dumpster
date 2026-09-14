@@ -9,6 +9,13 @@
 - "Done" means tests written, passing, and the **coverage gate is green**. A feature that works but lacks tests is not done.
 - Where a card calls for strict TDD, commit failing tests first, then the code that makes them pass, in separate commits.
 
+## Testing infrastructure changes (IaC)
+
+- **Verify locally against real staging AWS resources before committing.** A `deploy-staging`-labeled PR is a final confirmation gate, not where infrastructure bugs get found for the first time — the ephemeral build/apply/teardown cycle is too slow and expensive to be the primary iteration loop for a Terraform or workflow change.
+- **Local verification must assume the actual CI deploy role**, not a personal admin session: `aws sts assume-role` against `dumpster-github-actions-deploy` (`terraform/bootstrap/github_oidc.tf`) before running `tofu plan`/`apply`. This is the one non-negotiable part of this workflow — a broader personal identity can pass locally and still fail in CI on a permission gap the deploy role actually has (this is a real incident, not a hypothetical one).
+- **Don't destroy staging between attempts while debugging.** Fix, re-`apply` in place, recheck — the same running environment absorbs the whole iteration loop. Tear down only once the change is confirmed working, or leave it for the next `deploy-staging` PR run to reconcile.
+- Commit and push only once the change is verified working this way. CI (`terraform-fmt-validate` on every push, a full `deploy-staging` run when labeled) is a second, independent confirmation from a clean identity and zero local state — not a substitute for the local pass.
+
 ## Architecture invariants
 
 - **Multi-tenancy:** every domain table carries `user_id`; every query filters on the current tenant. No exceptions.
@@ -25,4 +32,4 @@
 
 - `make run` (full stack), `make test`, `make lint`, `make migrate`.
 - CI runs build + test + lint + coverage gate on every push; a red pipeline blocks merge.
-- A PR gets a real ephemeral AWS staging environment + smoke tests only when it carries the `deploy-staging` label — adding the label is what starts real billing for that PR's review, so add it deliberately, not by default. A failed/cancelled run tears staging down automatically; a successful one is left running on purpose for manual testing — the CI job summary prints the CloudFront URL to open (staging's ALB is internal with no public IP, reachable only via CloudFront's VPC origin; there's no IP allowlist to configure). Remove the `deploy-staging` label when done to tear it down.
+- A PR gets a real ephemeral AWS staging environment + smoke tests only when it carries the `deploy-staging` label — adding the label is what starts real billing for that PR's review, so add it deliberately, not by default. A failed/cancelled run tears staging down automatically; a successful one is left running on purpose for manual testing — the CI job summary prints the real `dumpster-staging.kpednekar.dev` URL to open (Cloudflare-managed DNS repointed at the fresh CloudFront distribution on every deploy; staging's ALB is internal with no public IP, reachable only via CloudFront's VPC origin). Remove the `deploy-staging` label when done to tear it down.

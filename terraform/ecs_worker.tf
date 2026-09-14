@@ -59,6 +59,24 @@ resource "aws_ecs_task_definition" "worker" {
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "worker" })
       })
+    },
+    {
+      # The metrics sidecar -- see the matching container in
+      # aws_ecs_task_definition.api (ecs_api.tf) for the full reasoning;
+      # identical shape here, just DUMPSTER_SERVICE = "worker".
+      name      = "otel-collector"
+      image     = "${data.aws_ecr_repository.otel_collector.repository_url}:${var.image_tag}"
+      essential = false
+      environment = [
+        { name = "DUMPSTER_ENV", value = var.environment },
+        { name = "DUMPSTER_SERVICE", value = "worker" },
+      ]
+      portMappings = [
+        { containerPort = 4317, name = "otel-collector" }
+      ]
+      logConfiguration = merge(local.common_log_config, {
+        options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "otel-collector" })
+      })
     }
   ])
 }

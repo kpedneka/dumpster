@@ -9,11 +9,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+
 	"github.com/kunalpednekar/dumpster/internal/canonical"
 	canonicalmem "github.com/kunalpednekar/dumpster/internal/canonical/memory"
 	"github.com/kunalpednekar/dumpster/internal/document"
@@ -24,7 +25,7 @@ import (
 	objmock "github.com/kunalpednekar/dumpster/internal/objectstore/mock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	qmem "github.com/kunalpednekar/dumpster/internal/queue/memory"
-	"github.com/kunalpednekar/dumpster/internal/telemetry"
+	"github.com/kunalpednekar/dumpster/internal/telemetry/telemetrytest"
 )
 
 // multipartUpload builds a multipart/form-data request body for the given
@@ -1151,46 +1152,9 @@ func TestDocTenantIsolation(t *testing.T) {
 	}
 }
 
-// mustInstruments returns real OTel instruments and their Prometheus scrape
-// handler, so tests can assert on actual exposition output rather than
-// mocking the metrics API.
-func mustInstruments(t *testing.T) (*telemetry.Instruments, http.Handler) {
-	t.Helper()
-	inst, metricsHandler, err := telemetry.Setup(context.Background())
-	if err != nil {
-		t.Fatalf("telemetry.Setup: %v", err)
-	}
-	return inst, metricsHandler
-}
-
-func scrapeMetrics(t *testing.T, handler http.Handler) string {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	return w.Body.String()
-}
-
-// hasMetricSample reports whether body contains a Prometheus exposition line
-// for name with the given outcome label and value, regardless of what other
-// labels (e.g. OTel's otel_scope_* resource attributes) are also present.
-func hasMetricSample(body, name, outcome string, value int) bool {
-	pattern := fmt.Sprintf(`%s\{[^}]*outcome="%s"[^}]*\}\s+%d`, regexp.QuoteMeta(name), regexp.QuoteMeta(outcome), value)
-	return regexp.MustCompile(pattern).MatchString(body)
-}
-
-// hasHistogramCount reports whether body contains a Prometheus _count sample
-// for the given histogram name with the given count, regardless of labels.
-// The exporter may insert a unit suffix (e.g. "_milliseconds") between name
-// and "_count", so that gap is matched loosely.
-func hasHistogramCount(body, name string, count int) bool {
-	pattern := fmt.Sprintf(`%s[a-z_]*_count\{[^}]*\}\s+%d`, regexp.QuoteMeta(name), count)
-	return regexp.MustCompile(pattern).MatchString(body)
-}
-
 func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -1207,16 +1171,15 @@ func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
 		t.Fatalf("status: got %d, want 201 — body: %s", w.Code, w.Body)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasMetricSample(got, "documents_uploaded_total", "success", 1) {
-		t.Errorf("expected success upload metric, got:\n%s", got)
+	if _, ok := metrics.CounterValue("documents_uploaded_total", attribute.String("outcome", "success")); !ok {
+		t.Error("expected success upload metric")
 	}
 }
 
 func TestDocUpload_RecordsFailureMetric(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
 	deps.Publisher = &failPublisher{}
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -1233,9 +1196,8 @@ func TestDocUpload_RecordsFailureMetric(t *testing.T) {
 		t.Fatalf("status: got %d, want 500 on publish failure", w.Code)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasMetricSample(got, "documents_uploaded_total", "failure", 1) {
-		t.Errorf("expected failure upload metric, got:\n%s", got)
+	if _, ok := metrics.CounterValue("documents_uploaded_total", attribute.String("outcome", "failure")); !ok {
+		t.Error("expected failure upload metric")
 	}
 }
 
@@ -1245,7 +1207,7 @@ func TestDocUpload_RecordsFailureMetric(t *testing.T) {
 // document" with "the client sent a bad request", which is a distinct signal.
 func TestDocUpload_ValidationErrorDoesNotRecordMetric(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -1262,15 +1224,14 @@ func TestDocUpload_ValidationErrorDoesNotRecordMetric(t *testing.T) {
 		t.Fatalf("status: got %d, want 422 for unsupported type", w.Code)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if strings.Contains(got, "documents_uploaded_total") {
-		t.Errorf("validation rejection should not record an upload attempt metric, got:\n%s", got)
+	if metrics.HasMetric("documents_uploaded_total") {
+		t.Error("validation rejection should not record an upload attempt metric")
 	}
 }
 
 func TestDocDelete_RecordsSuccessMetric(t *testing.T) {
 	deps, kbRepo, docRepo, obj, _ := defaultDeps()
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -1294,15 +1255,14 @@ func TestDocDelete_RecordsSuccessMetric(t *testing.T) {
 		t.Fatalf("status: got %d, want 204 — body: %s", w.Code, w.Body)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasMetricSample(got, "documents_deleted_total", "success", 1) {
-		t.Errorf("expected success delete metric, got:\n%s", got)
+	if _, ok := metrics.CounterValue("documents_deleted_total", attribute.String("outcome", "success")); !ok {
+		t.Error("expected success delete metric")
 	}
 }
 
 func TestDocDelete_RecordsFailureMetric(t *testing.T) {
 	deps, kbRepo, docRepo, obj, _ := defaultDeps()
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -1327,9 +1287,8 @@ func TestDocDelete_RecordsFailureMetric(t *testing.T) {
 		t.Fatalf("status: got %d, want 500 on delete failure", w.Code)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasMetricSample(got, "documents_deleted_total", "failure", 1) {
-		t.Errorf("expected failure delete metric, got:\n%s", got)
+	if _, ok := metrics.CounterValue("documents_deleted_total", attribute.String("outcome", "failure")); !ok {
+		t.Error("expected failure delete metric")
 	}
 }
 

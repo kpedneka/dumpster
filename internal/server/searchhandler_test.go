@@ -16,6 +16,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/search"
 	searchmock "github.com/kunalpednekar/dumpster/internal/search/mock"
 	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
+	"github.com/kunalpednekar/dumpster/internal/telemetry/telemetrytest"
 )
 
 var errFakeGeneration = errors.New("generation failed")
@@ -580,7 +581,7 @@ func TestSearch_RecordsLatencyMetric(t *testing.T) {
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	deps.Searcher = searchmock.NewSearcher(search.Result{Summary: "the answer"})
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 
@@ -594,9 +595,8 @@ func TestSearch_RecordsLatencyMetric(t *testing.T) {
 		t.Fatalf("status: got %d, want 200 — body: %s", w.Code, w.Body)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasHistogramCount(got, "search_latency_ms", 1) {
-		t.Errorf("expected search_latency_ms sample, got:\n%s", got)
+	if got := metrics.HistogramCount("search_latency_ms"); got != 1 {
+		t.Errorf("search_latency_ms count: got %d, want 1", got)
 	}
 }
 
@@ -605,7 +605,7 @@ func TestSearch_RecordsLatencyMetric_OnError(t *testing.T) {
 	userID := uuid.New()
 	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
 	deps.Searcher = searchmock.NewErrorSearcher("index unavailable")
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
 
@@ -619,9 +619,8 @@ func TestSearch_RecordsLatencyMetric_OnError(t *testing.T) {
 		t.Fatalf("status: got %d, want 500", w.Code)
 	}
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasHistogramCount(got, "search_latency_ms", 1) {
-		t.Errorf("expected search_latency_ms sample even on error, got:\n%s", got)
+	if got := metrics.HistogramCount("search_latency_ms"); got != 1 {
+		t.Errorf("search_latency_ms count even on error: got %d, want 1", got)
 	}
 }
 

@@ -351,3 +351,8 @@ output "nat_instance_public_ip" {
   value       = aws_instance.nat.public_ip
   description = "Useful for verifying real NAT traffic is flowing once applied"
 }
+
+output "nat_instance_id" {
+  value       = aws_instance.nat.id
+  description = "Target for scripts/wait_for_nat_ready.sh's SSM readiness check -- the NAT instance isn't confirmable via routing alone (tofu apply doesn't wait for its user_data to finish), so this lets a caller poll it directly."
+}

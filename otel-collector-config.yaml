@@ -1,0 +1,42 @@
+# Config for the metrics sidecar (Dockerfile.otel-collector). Receives OTLP
+# from internal/telemetry (both cmd/api and cmd/worker run one of these each)
+# and exports to CloudWatch via awsemf.
+#
+# One shared config for both services, not two -- the app itself sets the
+# OTel service.name resource attribute (internal/telemetry/telemetry.go),
+# and awsemf carries resource attributes through as EMF dimensions, so
+# api/worker metrics land in the same namespace distinguished by that
+# dimension, rather than needing two near-identical configs or two
+# namespaces that would sit confusingly close to queuemetrics' existing,
+# separate Dumpster/Worker namespace (internal/queuemetrics/cloudwatch --
+# a different, hand-rolled system feeding the autoscaling policy, kept
+# entirely separate from this one).
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: localhost:4317
+
+processors:
+  batch:
+    timeout: 30s
+    send_batch_size: 8192
+
+# DUMPSTER_ENV/DUMPSTER_SERVICE are set on the otel-collector container per
+# task definition (terraform/ecs_api.tf, ecs_worker.tf) -- one shared image
+# and config for every environment/service, not one baked-in config apiece.
+exporters:
+  awsemf:
+    namespace: Dumpster/App
+    log_group_name: "/dumpster/${env:DUMPSTER_ENV}/otel-metrics"
+    log_stream_name: "${env:DUMPSTER_SERVICE}"
+    dimension_rollup_option: "NoDimensionRollup"
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awsemf]
