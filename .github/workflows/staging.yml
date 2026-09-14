@@ -204,10 +204,50 @@ jobs:
           echo "::error::staging never became healthy"
           exit 1
 
+      # A second, separate smoke test against CloudFront itself, not just
+      # the ALB above -- see frontend.tf's wait_for_deployment comment for
+      # why this needs its own (much longer) retry window: staging's
+      # distribution is created from scratch every cycle with
+      # wait_for_deployment = false, so `tofu apply` returns before global
+      # edge propagation (confirmed directly against AWS's docs: 5-20+
+      # minutes) actually finishes, unlike production which waits for a
+      # real "Deployed" state. /healthz specifically: that cache behavior
+      # routes straight to the ALB (frontend.tf) regardless of whether the
+      # S3 bucket has the built frontend synced into it yet, so this check
+      # is meaningful on its own without depending on a frontend deploy
+      # step. 90 attempts x 20s = 30 minutes of runway, matching this
+      # workflow's existing "give real AWS propagation generous, not
+      # padded-once, time" pattern (see the ECS-stabilize step above).
+      - name: Smoke test CloudFront
+        working-directory: terraform
+        run: |
+          CF_DOMAIN=$(tofu output -raw cloudfront_domain_name)
+          for i in $(seq 1 90); do
+            if curl -s -o /dev/null -w '%{http_code}' "https://$CF_DOMAIN/healthz" | grep -q 200; then
+              echo "CloudFront healthz OK"
+              exit 0
+            fi
+            echo "attempt $i: CloudFront not serving healthz yet, retrying..."
+            sleep 20
+          done
+          echo "::error::CloudFront never started serving /healthz"
+          exit 1
+
       # Prints the ALB URL and allowlisted CIDRs to the job summary --
       # staging stays running after a successful run (see the Destroy
       # step below), specifically so a human can look at it, and that's
       # only useful if the URL is somewhere visible, not just implied.
+      # Points at CloudFront now, not the ALB directly: since the "Decouple
+      # SPA hosting from the API instance" card, the ALB only serves
+      # /api/* and /healthz (internal/server/server.go) -- the ALB's own
+      # URL no longer renders the app at all, only CloudFront does. The
+      # CloudFront default domain (*.cloudfront.net), not the real
+      # dumpster-staging.kpednekar.dev alias -- same reason the ALB check
+      # above uses -k against the raw ALB hostname: this workflow
+      # deliberately doesn't repoint the real DNS hostname per ephemeral
+      # run, and CloudFront's default domain always works over HTTPS with
+      # CloudFront's own cert regardless of the alias/custom viewer cert
+      # config.
       - name: Staging is up
         if: success()
         working-directory: terraform
@@ -215,9 +255,9 @@ jobs:
           {
             echo "### Staging is up for manual testing"
             echo ""
-            echo "URL: https://$(tofu output -raw alb_dns_name)/ (self-signed against the ALB's own hostname -- see the smoke test step's comment)"
+            echo "URL: https://$(tofu output -raw cloudfront_domain_name)/"
             echo ""
-            echo "Allowlisted IPs: ${{ env.TF_VAR_staging_allowed_cidrs }}"
+            echo "Allowlisted IPs (API/backend only -- CloudFront itself is not IP-restricted, see frontend.tf): ${{ env.TF_VAR_staging_allowed_cidrs }}"
             echo ""
             echo "Remove the \`deploy-staging\` label from this PR when done -- that tears it down (see teardown-on-unlabel)."
           } >> "$GITHUB_STEP_SUMMARY"

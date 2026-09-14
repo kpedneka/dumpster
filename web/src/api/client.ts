@@ -1,9 +1,12 @@
 import createClient from 'openapi-fetch'
 import type { paths } from './schema.d.ts'
 
-// In development, Vite proxies /api → http://localhost:8080 (stripping the prefix).
-// In production, the API is served from the same origin.
-const BASE_URL = import.meta.env.DEV ? '/api' : '/'
+// The backend itself now lives under /api for both environments (see the
+// "Decouple SPA hosting from the API instance" dev board card): CloudFront
+// routes /api/* to the ALB and everything else to S3 in production, and
+// Vite's dev proxy forwards /api/* straight through to the local backend
+// unmodified (no path rewrite -- the backend expects the prefix now too).
+const BASE_URL = '/api'
 
 export const api = createClient<paths>({
   baseUrl: BASE_URL,

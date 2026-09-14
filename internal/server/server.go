@@ -3,9 +3,6 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
@@ -87,11 +84,6 @@ type Deps struct {
 	// MaxDocumentsPerSession caps the number of documents a single session
 	// may upload across all knowledge bases. 0 defaults to 20.
 	MaxDocumentsPerSession int
-	// SPADir is the path to the built React SPA (e.g. "web/dist"). When set,
-	// the router serves static assets from that directory and falls back to
-	// index.html for browser navigation. Leave empty to disable SPA serving
-	// (development: Vite dev server handles this instead).
-	SPADir string
 	// CookieSecure controls the Secure attribute on the session cookie
 	// (config.Config.CookieSecure). Defaults to false (the Go zero value) if
 	// unset, so callers must set it explicitly to true in any environment
@@ -99,17 +91,29 @@ type Deps struct {
 	CookieSecure bool
 }
 
-// NewRouter constructs the application HTTP router. All routes (other than
-// /healthz, /openapi.yaml, and /stats) are wrapped by anonymous session
-// middleware, which mints a new session cookie when none is present and
-// never returns 401.
+// NewRouter constructs the application HTTP router. Every route except
+// /healthz lives under /api/ -- see the "Decouple SPA hosting from the API
+// instance" dev board card for why: CloudFront picks an origin per request
+// using only the URL path (it can't inspect the Accept header the way the
+// single-instance same-origin setup this replaced used to), and the SPA's
+// own client-side routes (e.g. /kbs/:kbId) would otherwise collide with
+// real API paths that share the same shape (GET /kbs/{id}) -- both are
+// legitimate requests to the identical path that need to reach different
+// origins (S3 for browser navigation, the API for the SPA's own fetch
+// calls). The /api prefix is what makes that decision unambiguous by path
+// alone. /healthz stays unprefixed: it's an infra-level probe (the ALB's
+// own health check hits it directly against the container, never through
+// CloudFront's routing at all), not a frontend/backend disambiguation.
+//
+// All routes under /api/ (other than /openapi.yaml and /stats) are wrapped
+// by anonymous session middleware, which mints a new session cookie when
+// none is present and never returns 401.
 func NewRouter(deps Deps) http.Handler {
-	mux := http.NewServeMux()
+	api := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", healthz)
-	mux.HandleFunc("GET /openapi.yaml", serveOpenAPI)
+	api.HandleFunc("GET /openapi.yaml", serveOpenAPI)
 	if deps.Stats != nil {
-		registerStatsRoutes(mux, deps.Stats)
+		registerStatsRoutes(api, deps.Stats)
 	}
 
 	authed := http.NewServeMux()
@@ -136,63 +140,12 @@ func NewRouter(deps Deps) http.Handler {
 	if deps.RateLimiter != nil {
 		handler = ratelimit.Middleware(deps.RateLimiter, handler)
 	}
+	api.Handle("/", handler)
 
-	// When SPADir is set (production), serve static assets and wrap the API
-	// handler so browser navigation returns index.html instead of JSON 404s.
-	if deps.SPADir != "" {
-		handler = spaHandler(deps.SPADir, handler)
-	}
-	mux.Handle("/", handler)
-
-	return mux
-}
-
-// spaHandler serves whatever actually exists as a file under dir — the
-// bundled, hashed JS/CSS under /assets/, and anything Vite copied verbatim
-// from web/public/ (favicons, etc.) to the dist root — before falling back
-// to index.html for browser navigation (GET requests with "text/html" in
-// their Accept header) so React Router can handle client-side routes.
-// Everything else (API calls, whose Accept is application/json or */*) passes
-// through to next unchanged.
-//
-// A single existence check replaces the old approach of hardcoding "/assets/"
-// and "/favicon.ico" as the only static routes: that missed every other
-// public/ file (e.g. favicon.svg) since Accept for an <link rel="icon">
-// request is image-ish, not text/html, so those requests fell through past
-// the SPA fallback into the API mux and 404ed.
-func spaHandler(dir string, next http.Handler) http.Handler {
-	fileServer := http.FileServer(http.Dir(dir))
-	indexPath := filepath.Join(dir, "index.html")
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if existingFile(dir, r.URL.Path) {
-			fileServer.ServeHTTP(w, r)
-			return
-		}
-		if strings.Contains(r.Header.Get("Accept"), "text/html") {
-			http.ServeFile(w, r, indexPath)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// existingFile reports whether urlPath resolves to a regular file under dir,
-// rejecting any path (e.g. "/../go.mod") that would resolve outside dir.
-func existingFile(dir, urlPath string) bool {
-	root, err := filepath.Abs(dir)
-	if err != nil {
-		return false
-	}
-	candidate := filepath.Join(root, filepath.Clean("/"+urlPath))
-	if candidate != root && !strings.HasPrefix(candidate, root+string(filepath.Separator)) {
-		return false
-	}
-	info, err := os.Stat(candidate)
-	return err == nil && !info.IsDir()
+	root := http.NewServeMux()
+	root.HandleFunc("GET /healthz", healthz)
+	root.Handle("/api/", http.StripPrefix("/api", api))
+	return root
 }
 
 func healthz(w http.ResponseWriter, r *http.Request) {

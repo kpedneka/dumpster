@@ -138,7 +138,6 @@ func main() {
 		Sessions:     sessionpg.New(pool),
 		Stats:        statsRepo,
 		Instruments:  instruments,
-		SPADir:       "web/dist",
 		CookieSecure: cfg.CookieSecure,
 		// Postgres-backed, not internal/ratelimit/memory: the in-process
 		// implementation keeps its counter in this replica's own memory,

@@ -2,7 +2,7 @@ import type { components } from './schema.d.ts'
 
 type Document = components['schemas']['Document']
 
-const BASE_URL = import.meta.env.DEV ? '/api' : ''
+const BASE_URL = '/api'
 
 /**
  * Uploads a file to a knowledge base using multipart/form-data.
