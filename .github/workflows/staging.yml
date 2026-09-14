@@ -30,6 +30,10 @@ env:
   AWS_REGION: us-east-1
   TF_VAR_environment: staging
   TF_VAR_acm_domain_name: ${{ vars.STAGING_ACM_DOMAIN }}
+  # dns.tf's cloudflare_dns_record.staging repoints this domain at each
+  # cycle's fresh CloudFront distribution -- the Cloudflare provider reads
+  # this env var automatically (see dns.tf's provider block comment).
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
   # run_id + run_attempt, not just the commit SHA: ECR's repos are
   # immutable-tag mode (ecs_ecr.tf), so a plain PR+SHA tag collides on
   # retry -- both a same-run retry (run_attempt covers that alone) and a
@@ -208,36 +212,46 @@ jobs:
       # step. 90 attempts x 20s = 30 minutes of runway, matching this
       # workflow's existing "give real AWS propagation generous, not
       # padded-once, time" pattern (see the ECS-stabilize step above).
+      #
+      # Tests via the real alias domain (dns.tf's STAGING_ACM_DOMAIN),
+      # resolved straight to CloudFront's own default-domain IP with
+      # --resolve, not through real DNS -- Cloudflare's record update
+      # (this same apply) is typically near-instant, but this check must
+      # not depend on that propagation timing at all. Found live: curling
+      # the plain *.cloudfront.net default domain directly, as this step
+      # used to, gets a real 502 from CloudFront itself -- the VPC origin
+      # (ecs_alb.tf) still does real TLS validation against the ALB's own
+      # certificate, which only covers the real alias, not the default
+      # domain, so the SNI/Host CloudFront forwards has to be the real
+      # alias for the handshake to succeed at all. Same `--resolve` trick
+      # already proven manually earlier in this migration for exactly this
+      # class of check, now made a permanent, automated part of this step.
       - name: Smoke test
         working-directory: terraform
         run: |
           CF_DOMAIN=$(tofu output -raw cloudfront_domain_name)
+          ALIAS_DOMAIN="${{ vars.STAGING_ACM_DOMAIN }}"
           for i in $(seq 1 90); do
-            if curl -s -o /dev/null -w '%{http_code}' "https://$CF_DOMAIN/healthz" | grep -q 200; then
-              echo "CloudFront healthz OK"
+            CF_IP=$(dig +short "$CF_DOMAIN" | head -1)
+            if [[ -n "$CF_IP" ]] && curl -s --resolve "$ALIAS_DOMAIN:443:$CF_IP" -o /dev/null -w '%{http_code}' "https://$ALIAS_DOMAIN/healthz" | grep -q 200; then
+              echo "CloudFront healthz OK (via $ALIAS_DOMAIN resolved to $CF_IP)"
               exit 0
             fi
-            echo "attempt $i: CloudFront not serving healthz yet, retrying..."
+            echo "attempt $i: not ready yet, retrying..."
             sleep 20
           done
           echo "::error::CloudFront never started serving /healthz"
           exit 1
 
-      # Prints the ALB URL and allowlisted CIDRs to the job summary --
-      # staging stays running after a successful run (see the Destroy
-      # step below), specifically so a human can look at it, and that's
-      # only useful if the URL is somewhere visible, not just implied.
-      # Points at CloudFront now, not the ALB directly: since the "Decouple
-      # SPA hosting from the API instance" card, the ALB only serves
-      # /api/* and /healthz (internal/server/server.go) -- the ALB's own
-      # URL no longer renders the app at all, only CloudFront does. The
-      # CloudFront default domain (*.cloudfront.net), not the real
-      # dumpster-staging.kpednekar.dev alias -- same reason the ALB check
-      # above uses -k against the raw ALB hostname: this workflow
-      # deliberately doesn't repoint the real DNS hostname per ephemeral
-      # run, and CloudFront's default domain always works over HTTPS with
-      # CloudFront's own cert regardless of the alias/custom viewer cert
-      # config.
+      # Prints the real alias URL, not CloudFront's default domain -- a
+      # human's browser can't do the --resolve trick the smoke test above
+      # uses, and it doesn't need to: dns.tf's cloudflare_dns_record.staging
+      # (this same apply) repoints dumpster-staging.kpednekar.dev at this
+      # cycle's fresh distribution for real, so the plain URL below now
+      # actually works. It didn't before this card -- that record was
+      # stale, pointing at a torn-down architecture from before the
+      # VPC-origins migration, silently broken for manual testing this
+      # whole time despite the smoke test above passing.
       - name: Staging is up
         if: success()
         working-directory: terraform
@@ -245,7 +259,7 @@ jobs:
           {
             echo "### Staging is up for manual testing"
             echo ""
-            echo "URL: https://$(tofu output -raw cloudfront_domain_name)/"
+            echo "URL: https://${{ vars.STAGING_ACM_DOMAIN }}/"
             echo ""
             echo ""
             echo "Remove the \`deploy-staging\` label from this PR when done -- that tears it down (see teardown-on-unlabel)."
