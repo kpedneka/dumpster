@@ -51,6 +51,14 @@ data "aws_acm_certificate" "this" {
   most_recent = true
 }
 
+# Default action is a fixed 403, not a forward -- see aws_lb_listener_rule.
+# from_cloudfront below for the actual forwarding rule and why. This is the
+# AWS-documented pattern for CloudFront-only ALB access (confirmed directly
+# against restrict-access-to-load-balancer.html): only a request carrying
+# the CloudFront-injected secret header gets forwarded; everything else,
+# including a request that came through CloudFront's own IP ranges but
+# wasn't actually sent by this distribution, hits this default and gets
+# rejected.
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.api.arn
   port              = 443
@@ -59,8 +67,60 @@ resource "aws_lb_listener" "https" {
   certificate_arn   = data.aws_acm_certificate.this.arn
 
   default_action {
+    type = "fixed-response"
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "Access denied"
+      status_code  = "403"
+    }
+  }
+}
+
+# Only requests carrying frontend.tf's CloudFront-injected secret header get
+# forwarded to the real target group -- the actual enforcement half of the
+# CloudFront-only restriction described on aws_lb_listener.https above.
+# Priority 1 (evaluated before the listener's own default action, which
+# only ever applies when no rule matches).
+resource "aws_lb_listener_rule" "from_cloudfront" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 1
+
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  condition {
+    http_header {
+      http_header_name = local.cloudfront_origin_header_name
+      values           = [random_password.cloudfront_origin_secret.result]
+    }
+  }
+}
+
+# /healthz specifically bypasses the CloudFront-only restriction above --
+# lower priority (2), only reached when the header rule doesn't match.
+# Deliberate, narrow exception, not an oversight: staging.yml's smoke test
+# hits the ALB directly on purpose, bypassing CloudFront entirely, to
+# verify the backend deployment independently of CloudFront's own state --
+# see that workflow's "Smoke test" step comment. /healthz returns nothing
+# but a static {"status":"ok"}, so there's no real exposure in leaving it
+# reachable without the header; the network-layer restriction
+# (ecs_networking.tf's CloudFront prefix list / staging CIDR allowlist)
+# still applies regardless of this rule.
+resource "aws_lb_listener_rule" "healthz_direct" {
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 2
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.api.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/healthz"]
+    }
   }
 }
 
