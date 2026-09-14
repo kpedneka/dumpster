@@ -246,45 +246,24 @@ resource "aws_route_table_association" "private_1b" {
 # Task port is 8080, matching cmd/api's HTTPPort default -- see
 # internal/config/config.go.
 
-variable "staging_allowed_cidrs" {
-  type        = list(string)
-  description = "CIDR blocks allowed to reach staging's ALB over HTTPS (e.g. your current public IP as a /32). Ignored entirely in production, which stays genuinely public -- defaults to empty so a production apply never has to supply an irrelevant staging-only value. Staging enforces at least one entry via the validation block below, so it can't silently end up either wide open to the internet or fully locked out with no ingress rule at all."
-  default     = []
-
-  validation {
-    condition     = var.environment != "staging" || length(var.staging_allowed_cidrs) > 0
-    error_message = "staging_allowed_cidrs must contain at least one CIDR block when environment is \"staging\"."
-  }
-}
-
-locals {
-  # Staging isn't meant to be publicly reachable the way production is --
-  # it's where unreleased features get tested, so open-to-the-internet by
-  # default would be a real exposure, not a cosmetic one. Production used to
-  # be genuinely open to 0.0.0.0/0 (that was the whole point of it before
-  # CloudFront existed); now that CloudFront sits in front of it (see
-  # frontend.tf), the ALB itself only needs to accept CloudFront's own
-  # origin-facing traffic. Staging keeps its existing CIDR allowlist too
-  # (var.staging_allowed_cidrs / STAGING_MANUAL_TESTING_CIDR, CLAUDE.md) for
-  # the smoke test's deliberate direct-ALB check (staging.yml, bypassing
-  # CloudFront on purpose to test the backend independently) -- but CANNOT
-  # drop CloudFront's prefix list the way it keeps everything else
-  # unchanged: staging also gets its own CloudFront distribution now
-  # (frontend.tf), and every real /api/* call -- including the user's own
-  # manual testing through the app, not just random internet traffic --
-  # now genuinely originates from CloudFront's IPs, not the allowlisted
-  # CIDR. Without this, CloudFront's own origin requests to the ALB would
-  # be rejected at the security-group layer and every API call would fail
-  # for everyone, including the person the CIDR allowlist exists for.
-  alb_ingress_cidrs = var.environment == "staging" ? var.staging_allowed_cidrs : []
-}
-
 # CloudFront's own origin-facing IP ranges, AWS-managed and kept up to date
 # by AWS itself -- the standard way to scope an origin's security group to
 # "CloudFront only" without hardcoding or maintaining an IP list by hand.
-# Needed in both environments now that both get a CloudFront distribution
-# (frontend.tf) -- see local.alb_ingress_cidrs above for why staging can't
-# skip this even though it keeps its own CIDR allowlist too.
+# Both environments' ALBs are internal now (no public IP at all -- see
+# ecs_alb.tf's VPC-origins migration), so this is defense-in-depth on top
+# of that private network path, not the actual enforcement -- but harmless
+# and cheap to keep, and it also feeds ecs_alb.tf's origin-verification
+# header story.
+#
+# There used to be a second ingress source here too: var.staging_allowed_cidrs,
+# an IP allowlist for staging.yml's direct-ALB smoke test (bypassing
+# CloudFront on purpose to test the backend independently). Removed
+# entirely once the ALB went internal -- there's no public IP left for any
+# CIDR to reach, so the variable, its validation, and the CI logic that
+# computed it (staging.yml's "Compute allowed CIDRs" step and
+# teardown-on-unlabel's "Compute this runner's public IP" step, which only
+# existed to satisfy that variable's validation during `tofu destroy`)
+# were all genuinely dead, not just simplified.
 data "aws_ec2_managed_prefix_list" "cloudfront" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
@@ -301,7 +280,7 @@ resource "aws_security_group" "alb" {
   # lets AWS generate a unique suffix so the new SG can exist briefly
   # alongside the old one.
   name_prefix = "${local.name_prefix}-alb-"
-  description = "CloudFront origin-facing IPs (both environments) plus, in staging only, the allowlisted CIDRs staging.yml uses to smoke test the ALB directly -- see var.staging_allowed_cidrs."
+  description = "CloudFront origin-facing IPs only -- both ALBs are internal now, see ecs_alb.tf."
   vpc_id      = data.aws_vpc.default.id
 
   lifecycle {
@@ -309,11 +288,10 @@ resource "aws_security_group" "alb" {
   }
 
   ingress {
-    description     = "HTTPS -- CloudFronts origin-facing prefix list (both environments) plus, in staging only, IP-restricted direct access (local.alb_ingress_cidrs)"
+    description     = "HTTPS -- CloudFronts origin-facing prefix list only"
     from_port       = 443
     to_port         = 443
     protocol        = "tcp"
-    cidr_blocks     = local.alb_ingress_cidrs
     prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront.id]
   }
 
