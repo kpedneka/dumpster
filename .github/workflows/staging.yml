@@ -146,6 +146,44 @@ jobs:
         working-directory: terraform
         run: tofu apply -auto-approve tfplan
 
+      # Real, pre-existing gap this pipeline had until now, found live:
+      # nothing ever built or synced the frontend to S3 for a staging
+      # deploy -- only the backend (api/worker/cleanup images) got
+      # deployed. The root path (`/`, CloudFront's S3 cache behavior --
+      # frontend.tf) has never actually served a real build; `/healthz`
+      # (routed straight to the ALB instead) was the only path anyone had
+      # ever actually verified. An empty, OAC-fronted bucket returns a
+      # generic S3 AccessDenied for any object, not a 404 -- a real, if
+      # confusing, AWS behavior (avoids leaking object-existence info to
+      # an unauthorized requester), which is what made this look like a
+      # permissions bug rather than "there's just nothing here yet."
+      #
+      # No env vars needed at build time (web/.env.example: the frontend
+      # only ever calls a same-origin, relative /api path -- see
+      # client.ts), so this build is identical regardless of environment.
+      # No CloudFront invalidation needed either: staging's distribution
+      # is destroyed and recreated every cycle (frontend.tf), so it never
+      # has a stale cached response to invalidate in the first place --
+      # unlike a long-lived distribution (production), this one's cache
+      # starts empty on every deploy.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci --legacy-peer-deps
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Sync frontend to S3
+        working-directory: terraform
+        run: |
+          BUCKET=$(tofu output -raw frontend_bucket_name)
+          aws s3 sync ../web/dist/ "s3://$BUCKET/" --delete
+
       # tofu apply only waits for the EC2 API to report the NAT instance
       # exists, not for its user_data to finish installing/configuring
       # iptables (ecs_networking.tf) -- real wall-clock time after that.
