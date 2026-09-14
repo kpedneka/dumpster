@@ -107,6 +107,14 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 		{DocumentID: docA.ID, KBID: kb.ID, UserID: userID, Ordinal: 0, Text: "Ada Lovelace worked closely with Charles Babbage.", CharStart: 0, CharEnd: 50},
 		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, Ordinal: 0, Text: "Ada Lovelace briefed Charles Babbage on the analytical engine.", CharStart: 0, CharEnd: 60},
 		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, Ordinal: 1, Text: "Ada Lovelace flagged a gap for Platform Security.", CharStart: 60, CharEnd: 110},
+		// A second Ada/Platform Security co-occurrence, purely so that
+		// pair clears minCoOccurrenceForPMI's floor of 2 -- with only one
+		// (as this fixture had until relation extraction was disabled and
+		// stopped rescuing single-mention pairs), community.
+		// ApplyPMIWeighting correctly drops the edge entirely, which broke
+		// this test's own edge-count assertion below without reflecting
+		// any real bug in KBGraph itself.
+		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, Ordinal: 2, Text: "Ada Lovelace escalated the same Platform Security gap again.", CharStart: 110, CharEnd: 172},
 	}); err != nil {
 		t.Fatalf("create chunks: %v", err)
 	}
@@ -115,7 +123,7 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 		t.Fatalf("list chunks A: %v (%d)", err, len(storedA))
 	}
 	storedB, err := chunks.ListByDocument(ctx, userID, docB.ID)
-	if err != nil || len(storedB) != 2 {
+	if err != nil || len(storedB) != 3 {
 		t.Fatalf("list chunks B: %v (%d)", err, len(storedB))
 	}
 
@@ -126,6 +134,8 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, ChunkID: storedB[0].ID, Type: "person", Text: "Charles Babbage", Start: 21, End: 36},
 		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, ChunkID: storedB[1].ID, Type: "person", Text: "Ada Lovelace", Start: 0, End: 12},
 		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, ChunkID: storedB[1].ID, Type: "org", Text: "Platform Security", Start: 32, End: 49},
+		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, ChunkID: storedB[2].ID, Type: "person", Text: "Ada Lovelace", Start: 0, End: 12},
+		{DocumentID: docB.ID, KBID: kb.ID, UserID: userID, ChunkID: storedB[2].ID, Type: "org", Text: "Platform Security", Start: 33, End: 50},
 	}); err != nil {
 		t.Fatalf("create entities: %v", err)
 	}
@@ -135,7 +145,7 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 		t.Fatalf("list entities A: %v (%d)", err, len(allA))
 	}
 	allB, err := entities.ListByDocument(ctx, userID, docB.ID)
-	if err != nil || len(allB) != 4 {
+	if err != nil || len(allB) != 6 {
 		t.Fatalf("list entities B: %v (%d)", err, len(allB))
 	}
 
@@ -153,7 +163,9 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 	charlesB0 := byChunkAndText(allB, storedB[0].ID, "Charles Babbage")
 	adaB1 := byChunkAndText(allB, storedB[1].ID, "Ada Lovelace")
 	platformB1 := byChunkAndText(allB, storedB[1].ID, "Platform Security")
-	if adaA == nil || charlesA == nil || adaB0 == nil || charlesB0 == nil || adaB1 == nil || platformB1 == nil {
+	adaB2 := byChunkAndText(allB, storedB[2].ID, "Ada Lovelace")
+	platformB2 := byChunkAndText(allB, storedB[2].ID, "Platform Security")
+	if adaA == nil || charlesA == nil || adaB0 == nil || charlesB0 == nil || adaB1 == nil || platformB1 == nil || adaB2 == nil || platformB2 == nil {
 		t.Fatalf("setup: missing expected entities: A=%+v B=%+v", allA, allB)
 	}
 
@@ -161,11 +173,12 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 		graphedge.NewEdge(docA.ID, kb.ID, userID, storedA[0].ID, adaA.ID, charlesA.ID),
 		graphedge.NewEdge(docB.ID, kb.ID, userID, storedB[0].ID, adaB0.ID, charlesB0.ID),
 		graphedge.NewEdge(docB.ID, kb.ID, userID, storedB[1].ID, adaB1.ID, platformB1.ID),
+		graphedge.NewEdge(docB.ID, kb.ID, userID, storedB[2].ID, adaB2.ID, platformB2.ID),
 	}); err != nil {
 		t.Fatalf("create edges: %v", err)
 	}
 
-	if err := canonical.ResolveNew(ctx, canonicalRepo, entities, userID, append(allA, allB...)); err != nil {
+	if _, err := canonical.ResolveNew(ctx, canonicalRepo, entities, userID, append(allA, allB...)); err != nil {
 		t.Fatalf("canonicalize: %v", err)
 	}
 
@@ -225,14 +238,19 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 	if !adaCharlesFound {
 		t.Fatal("expected an Ada-Charles edge, found none")
 	}
-	if adaCharlesWeight != 2 {
-		t.Errorf("Ada-Charles weight: got %v, want 2 (one mention pair per document, collapsed and summed)", adaCharlesWeight)
+	// KBGraph returns PPMI scores, not raw summed counts (see pmi.go) --
+	// both pairs here land on exactly the same score by construction: raw
+	// co-occurrence 2, mention counts Ada=4/Charles=2/Platform=2 (total 8),
+	// giving log2(2 / (freqA*freqB/total)) = log2(2/1) = 1 either way.
+	const wantPMIWeight = 1.0
+	if adaCharlesWeight != wantPMIWeight {
+		t.Errorf("Ada-Charles weight: got %v, want %v (PPMI of a pair mentioned once per document, collapsed and summed to raw count 2)", adaCharlesWeight, wantPMIWeight)
 	}
 	if !adaPlatformFound {
 		t.Fatal("expected an Ada-PlatformSecurity edge, found none")
 	}
-	if adaPlatformWeight != 1 {
-		t.Errorf("Ada-PlatformSecurity weight: got %v, want 1", adaPlatformWeight)
+	if adaPlatformWeight != wantPMIWeight {
+		t.Errorf("Ada-PlatformSecurity weight: got %v, want %v", adaPlatformWeight, wantPMIWeight)
 	}
 
 	// SaveResult + GetResult round-trip: assign every node to community 0,

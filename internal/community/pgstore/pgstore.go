@@ -96,7 +96,7 @@ func (s *Store) KBGraph(ctx context.Context, userID, kbID uuid.UUID) (*community
 			       GREATEST(ea.canonical_entity_id, eb.canonical_entity_id) AS b,
 			       SUM(ee.co_occurrence_count)                              AS weight,
 			       BOOL_OR(ee.relation_type IS NOT NULL AND ee.relation_type <> 'none') AS confirmed,
-			       BOOL_OR(ee.relation_type = 'none')                       AS none_found
+			       COALESCE(BOOL_OR(ee.relation_type = 'none'), false)      AS none_found
 			FROM   entity_edges ee
 			JOIN   entities ea ON ea.id = ee.entity_a_id
 			JOIN   entities eb ON eb.id = ee.entity_b_id
@@ -114,6 +114,14 @@ func (s *Store) KBGraph(ctx context.Context, userID, kbID uuid.UUID) (*community
 		for edgeRows.Next() {
 			var e community.WeightedEdge
 			var weight int64
+			// Both flags scan as plain bool, so none_found is COALESCEd to
+			// false in SQL rather than left as BOOL_OR's raw result:
+			// BOOL_OR returns NULL, not false, when every relation_type in
+			// the group is NULL -- the normal case whenever relation
+			// extraction hasn't run (or is disabled, as it currently is),
+			// which previously made every edge in every KB fail this scan
+			// with "cannot scan NULL into *bool" and broke community
+			// detection entirely.
 			var isConfirmed, isNoneFound bool
 			if err := edgeRows.Scan(&e.A, &e.B, &weight, &isConfirmed, &isNoneFound); err != nil {
 				return err
@@ -199,7 +207,7 @@ func (s *Store) GraphView(ctx context.Context, userID, kbID uuid.UUID) (*communi
 			       MAX(ee.relation_type) FILTER (
 			           WHERE ee.relation_type IS NOT NULL AND ee.relation_type <> 'none'
 			       )                                                        AS relation_type,
-			       BOOL_OR(ee.relation_type = 'none')                       AS none_found
+			       COALESCE(BOOL_OR(ee.relation_type = 'none'), false)      AS none_found
 			FROM   entity_edges ee
 			JOIN   entities ea ON ea.id = ee.entity_a_id
 			JOIN   entities eb ON eb.id = ee.entity_b_id
