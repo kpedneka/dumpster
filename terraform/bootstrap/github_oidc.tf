@@ -94,6 +94,25 @@ data "aws_iam_policy_document" "github_actions_assume" {
       values   = ["repo:kpedneka/dumpster:*"]
     }
   }
+
+  # Lets the admin SSO session assume this exact role for local IaC
+  # verification (see CLAUDE.md's "Testing infrastructure changes" section)
+  # -- `aws sts assume-role` against this role before `tofu plan`/`apply`,
+  # so a local test exercises the same permission boundary CI actually
+  # uses, not a broader personal identity that can mask a gap the deploy
+  # role really has (confirmed real: two of the IAM gaps tonight would
+  # have passed locally under plain admin credentials). A separate
+  # statement/action from the OIDC one above, not a broadened condition on
+  # it -- sts:AssumeRole (IAM principal) and sts:AssumeRoleWithWebIdentity
+  # (OIDC federation) are different actions with different principal
+  # types.
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_DumpsterAdmin_cb5e8cb8a8f76f46"]
+    }
+  }
 }
 
 resource "aws_iam_role" "github_actions_deploy" {

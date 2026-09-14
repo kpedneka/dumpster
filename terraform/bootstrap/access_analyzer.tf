@@ -16,4 +16,17 @@
 resource "aws_accessanalyzer_analyzer" "unused_access" {
   analyzer_name = "dumpster-unused-access"
   type          = "ACCOUNT_UNUSED_ACCESS"
+
+  # Explicit, matching AWS's own server-side default (90 days) -- left
+  # implicit originally, which meant every `tofu plan` saw AWS's silently-
+  # applied default as drift against "no configuration specified," and
+  # since this block can't be updated in place (only replaced), that
+  # cosmetic mismatch alone wanted to delete and recreate the analyzer on
+  # every single plan. Written out explicitly here so the configured value
+  # and the real state actually agree.
+  configuration {
+    unused_access {
+      unused_access_age = 90
+    }
+  }
 }
