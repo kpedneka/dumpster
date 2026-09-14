@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"net/http"
 	"sort"
@@ -70,6 +71,7 @@ func (h *communityHandler) recompute(w http.ResponseWriter, r *http.Request) {
 
 	count, err := h.communities.CountCanonicalEntities(r.Context(), userID, kbID)
 	if err != nil {
+		slog.Error("community: count canonical entities failed", "kb_id", kbID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to check knowledge base size")
 		return
 	}
@@ -80,6 +82,7 @@ func (h *communityHandler) recompute(w http.ResponseWriter, r *http.Request) {
 
 	graph, err := h.communities.KBGraph(r.Context(), userID, kbID)
 	if err != nil {
+		slog.Error("community: load kb graph failed", "kb_id", kbID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load knowledge base graph")
 		return
 	}
@@ -92,6 +95,7 @@ func (h *communityHandler) recompute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusGatewayTimeout, "community detection timed out")
 			return
 		}
+		slog.Error("community: louvain failed", "kb_id", kbID, "err", err)
 		writeError(w, http.StatusInternalServerError, "community detection failed")
 		return
 	}
@@ -104,6 +108,7 @@ func (h *communityHandler) recompute(w http.ResponseWriter, r *http.Request) {
 		EdgeCount:      len(graph.Edges),
 	}
 	if err := h.communities.SaveResult(r.Context(), userID, kbID, assignments, run); err != nil {
+		slog.Error("community: save result failed", "kb_id", kbID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to save community detection result")
 		return
 	}
@@ -149,6 +154,7 @@ func (h *communityHandler) get(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, community.ErrNoResult):
 		writeJSON(w, http.StatusOK, communityResultResponse{})
 	default:
+		slog.Error("community: get result failed", "kb_id", kbID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load community detection result")
 	}
 }
@@ -174,6 +180,7 @@ func (h *communityHandler) graph(w http.ResponseWriter, r *http.Request) {
 
 	view, err := h.communities.GraphView(r.Context(), userID, kbID)
 	if err != nil {
+		slog.Error("community: load graph view failed", "kb_id", kbID, "err", err)
 		writeError(w, http.StatusInternalServerError, "failed to load knowledge base graph")
 		return
 	}
