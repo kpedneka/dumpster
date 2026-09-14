@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/resource"
 )
 
 // Setup initialises an OTLP/gRPC-backed OTel MeterProvider and returns the
@@ -17,6 +19,13 @@ import (
 // swapping the export path is a change here, not in the instrumented paths —
 // satisfying the vendor-neutral seam requirement.
 //
+// serviceName ("api" or "worker") is stamped as the service.name resource
+// attribute on every metric this process records. The ADOT Collector
+// sidecar's awsemf exporter (otel-collector-config.yaml) carries resource
+// attributes through as CloudWatch EMF dimensions, which is what lets both
+// services' metrics share the one Dumpster/App namespace while still being
+// distinguishable there.
+//
 // The OTLP endpoint is always localhost:4317: metrics are pushed to the ADOT
 // Collector sidecar running in the same ECS task (Dockerfile.otel-collector),
 // reachable over localhost under ECS awsvpc networking, not a shared
@@ -26,7 +35,7 @@ import (
 //
 // Setup does not set the global OTel MeterProvider to keep it self-contained
 // and safe to call multiple times in tests.
-func Setup(ctx context.Context) (*Instruments, func(context.Context) error, error) {
+func Setup(ctx context.Context, serviceName string) (*Instruments, func(context.Context) error, error) {
 	exp, err := otlpmetricgrpc.New(ctx,
 		otlpmetricgrpc.WithEndpoint("localhost:4317"),
 		otlpmetricgrpc.WithInsecure(),
@@ -35,7 +44,17 @@ func Setup(ctx context.Context) (*Instruments, func(context.Context) error, erro
 		return nil, nil, fmt.Errorf("telemetry: otlp exporter: %w", err)
 	}
 
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)))
+	res, err := resource.Merge(resource.Default(), resource.NewSchemaless(
+		attribute.String("service.name", serviceName),
+	))
+	if err != nil {
+		return nil, nil, fmt.Errorf("telemetry: resource: %w", err)
+	}
+
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(exp)),
+		sdkmetric.WithResource(res),
+	)
 	meter := provider.Meter("dumpster")
 
 	inst, err := newInstruments(meter)

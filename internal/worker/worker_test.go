@@ -3,17 +3,13 @@ package worker_test
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"regexp"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/queue"
-	"github.com/kunalpednekar/dumpster/internal/telemetry"
+	"github.com/kunalpednekar/dumpster/internal/telemetry/telemetrytest"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
 
@@ -286,46 +282,11 @@ func TestWorker_NacksJobWithUnregisteredType(t *testing.T) {
 	}
 }
 
-// mustInstruments returns real OTel instruments and their Prometheus scrape
-// handler, so tests can assert on actual exposition output.
-func mustInstruments(t *testing.T) (*telemetry.Instruments, http.Handler) {
-	t.Helper()
-	inst, metricsHandler, err := telemetry.Setup(context.Background())
-	if err != nil {
-		t.Fatalf("telemetry.Setup: %v", err)
-	}
-	return inst, metricsHandler
-}
-
-func scrapeMetrics(t *testing.T, handler http.Handler) string {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-	return w.Body.String()
-}
-
-// hasHistogramCount reports whether body contains a Prometheus _count sample
-// for the given histogram name and outcome label with the given count. The
-// exporter may insert a unit suffix (e.g. "_milliseconds") between name and
-// "_count", so that gap is matched loosely.
-func hasHistogramCount(body, name, outcome string, count int) bool {
-	pattern := fmt.Sprintf(`%s[a-z_]*_count\{[^}]*outcome="%s"[^}]*\}\s+%d`, regexp.QuoteMeta(name), regexp.QuoteMeta(outcome), count)
-	return regexp.MustCompile(pattern).MatchString(body)
-}
-
-// hasBareCounterSample reports whether body contains a Prometheus sample for
-// name with the given value, regardless of what labels are present.
-func hasBareCounterSample(body, name string, value int) bool {
-	pattern := fmt.Sprintf(`%s\{[^}]*\}\s+%d`, regexp.QuoteMeta(name), value)
-	return regexp.MustCompile(pattern).MatchString(body)
-}
-
 func TestWorker_RecordsJobDurationOnSuccess(t *testing.T) {
 	job := &queue.Job{ID: uuid.New(), DocumentID: uuid.New(), UserID: uuid.New()}
 	consumer := &stubConsumer{jobs: []*queue.Job{job}}
 	handler := &stubHandler{}
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -333,12 +294,11 @@ func TestWorker_RecordsJobDurationOnSuccess(t *testing.T) {
 	w := worker.New(consumer, handler, worker.Config{PollInterval: 10 * time.Millisecond, Instruments: inst})
 	_ = w.Run(ctx)
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasHistogramCount(got, "job_duration_ms", "success", 1) {
-		t.Errorf("expected job_duration_ms success sample, got:\n%s", got)
+	if got := metrics.HistogramCount("job_duration_ms"); got != 1 {
+		t.Errorf("job_duration_ms count: got %d, want 1", got)
 	}
-	if hasBareCounterSample(got, "job_failure_total", 1) {
-		t.Errorf("job_failure_total should not be recorded on success, got:\n%s", got)
+	if metrics.HasMetric("job_failure_total") {
+		t.Error("job_failure_total should not be recorded on success")
 	}
 }
 
@@ -346,7 +306,7 @@ func TestWorker_RecordsJobDurationOnRescheduledFailure(t *testing.T) {
 	job := &queue.Job{ID: uuid.New(), DocumentID: uuid.New(), UserID: uuid.New()}
 	consumer := &stubConsumer{jobs: []*queue.Job{job}} // deadLetterOnNack defaults false
 	handler := &stubHandler{handleErr: errors.New("processing failed")}
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -354,12 +314,11 @@ func TestWorker_RecordsJobDurationOnRescheduledFailure(t *testing.T) {
 	w := worker.New(consumer, handler, worker.Config{PollInterval: 10 * time.Millisecond, Instruments: inst})
 	_ = w.Run(ctx)
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasHistogramCount(got, "job_duration_ms", "failure", 1) {
-		t.Errorf("expected job_duration_ms failure sample, got:\n%s", got)
+	if got := metrics.HistogramCount("job_duration_ms"); got != 1 {
+		t.Errorf("job_duration_ms count: got %d, want 1", got)
 	}
-	if hasBareCounterSample(got, "job_failure_total", 1) {
-		t.Errorf("job_failure_total should not be recorded on a rescheduled (non-dead-lettered) nack, got:\n%s", got)
+	if metrics.HasMetric("job_failure_total") {
+		t.Error("job_failure_total should not be recorded on a rescheduled (non-dead-lettered) nack")
 	}
 }
 
@@ -367,7 +326,7 @@ func TestWorker_RecordsJobFailureOnDeadLetter(t *testing.T) {
 	job := &queue.Job{ID: uuid.New(), DocumentID: uuid.New(), UserID: uuid.New()}
 	consumer := &stubConsumer{jobs: []*queue.Job{job}, deadLetterOnNack: true}
 	handler := &stubHandler{handleErr: errors.New("permanent failure")}
-	inst, metricsHandler := mustInstruments(t)
+	inst, metrics := telemetrytest.New(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -375,12 +334,11 @@ func TestWorker_RecordsJobFailureOnDeadLetter(t *testing.T) {
 	w := worker.New(consumer, handler, worker.Config{PollInterval: 10 * time.Millisecond, Instruments: inst})
 	_ = w.Run(ctx)
 
-	got := scrapeMetrics(t, metricsHandler)
-	if !hasBareCounterSample(got, "job_failure_total", 1) {
-		t.Errorf("expected job_failure_total sample, got:\n%s", got)
+	if !metrics.HasMetric("job_failure_total") {
+		t.Error("expected job_failure_total to be recorded")
 	}
-	if !hasHistogramCount(got, "job_duration_ms", "failure", 1) {
-		t.Errorf("expected job_duration_ms failure sample, got:\n%s", got)
+	if got := metrics.HistogramCount("job_duration_ms"); got != 1 {
+		t.Errorf("job_duration_ms count: got %d, want 1", got)
 	}
 }
 

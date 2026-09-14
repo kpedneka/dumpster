@@ -12,7 +12,7 @@ import (
 )
 
 func TestSetup_InstrumentsNonNil(t *testing.T) {
-	inst, shutdown, err := telemetry.Setup(context.Background())
+	inst, shutdown, err := telemetry.Setup(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestSetup_InstrumentsNonNil(t *testing.T) {
 // true in this test environment and also true briefly in production before
 // the sidecar container finishes starting.
 func TestSetup_InstrumentsRecordWithoutError(t *testing.T) {
-	inst, _, err := telemetry.Setup(context.Background())
+	inst, _, err := telemetry.Setup(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSetup_InstrumentsRecordWithoutError(t *testing.T) {
 // attempt inside Shutdown may fail, but it must respect the caller's context
 // deadline rather than hang retrying a connection.
 func TestSetup_ShutdownReturnsPromptly(t *testing.T) {
-	_, shutdown, err := telemetry.Setup(context.Background())
+	_, shutdown, err := telemetry.Setup(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}

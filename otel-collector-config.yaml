@@ -22,11 +22,14 @@ processors:
     timeout: 30s
     send_batch_size: 8192
 
+# DUMPSTER_ENV/DUMPSTER_SERVICE are set on the otel-collector container per
+# task definition (terraform/ecs_api.tf, ecs_worker.tf) -- one shared image
+# and config for every environment/service, not one baked-in config apiece.
 exporters:
   awsemf:
     namespace: Dumpster/App
-    log_group_name: "/dumpster/production/otel-metrics"
-    log_stream_name: "{service.name}"
+    log_group_name: "/dumpster/${env:DUMPSTER_ENV}/otel-metrics"
+    log_stream_name: "${env:DUMPSTER_SERVICE}"
     dimension_rollup_option: "NoDimensionRollup"
     resource_to_telemetry_conversion:
       enabled: true

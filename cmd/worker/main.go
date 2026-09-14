@@ -46,7 +46,7 @@ func main() {
 	cfg := config.Load()
 	logger := telemetry.NewLogger(os.Stdout, "worker")
 
-	instruments, shutdownTelemetry, err := telemetry.Setup(context.Background())
+	instruments, shutdownTelemetry, err := telemetry.Setup(context.Background(), "worker")
 	if err != nil {
 		logger.Error("telemetry setup failed", "err", err)
 		os.Exit(1)
