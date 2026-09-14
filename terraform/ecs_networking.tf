@@ -290,9 +290,23 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
 }
 
 resource "aws_security_group" "alb" {
-  name        = "${local.name_prefix}-alb"
-  description = "CloudFront origin-facing IPs (both environments) plus, in staging only, the allowlisted CIDRs staging.yml's smoke test uses to hit the ALB directly -- see var.staging_allowed_cidrs."
+  # name_prefix, not a fixed name -- real bug hit on the first apply of this
+  # description text: AWS requires unique SG names per VPC, and this
+  # resource's own description change forces replacement (AWS won't let you
+  # update a security group's description in place). With a fixed name and
+  # no create_before_destroy, Terraform's default destroy-then-create order
+  # tried to delete the old SG before the new one existed to take over the
+  # ALB's/ecs_tasks's references to it -- a genuine ordering deadlock
+  # (DependencyViolation), not a transient AWS timing issue. name_prefix
+  # lets AWS generate a unique suffix so the new SG can exist briefly
+  # alongside the old one.
+  name_prefix = "${local.name_prefix}-alb-"
+  description = "CloudFront origin-facing IPs (both environments) plus, in staging only, the allowlisted CIDRs staging.yml uses to smoke test the ALB directly -- see var.staging_allowed_cidrs."
   vpc_id      = data.aws_vpc.default.id
+
+  lifecycle {
+    create_before_destroy = true
+  }
 
   ingress {
     description     = "HTTPS -- CloudFronts origin-facing prefix list (both environments) plus, in staging only, IP-restricted direct access (local.alb_ingress_cidrs)"
