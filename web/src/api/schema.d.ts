@@ -42,7 +42,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/openapi.yaml": {
+    "/api/openapi.yaml": {
         parameters: {
             query?: never;
             header?: never;
@@ -78,7 +78,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/stats": {
+    "/api/stats": {
         parameters: {
             query?: never;
             header?: never;
@@ -124,7 +124,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/account/status": {
+    "/api/account/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -167,7 +167,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs": {
+    "/api/kbs": {
         parameters: {
             query?: never;
             header?: never;
@@ -260,7 +260,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}": {
+    "/api/kbs/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -411,7 +411,7 @@ export interface paths {
         };
         trace?: never;
     };
-    "/kbs/{id}/search": {
+    "/api/kbs/{id}/search": {
         parameters: {
             query?: never;
             header?: never;
@@ -489,7 +489,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/communities": {
+    "/api/kbs/{id}/communities": {
         parameters: {
             query?: never;
             header?: never;
@@ -609,7 +609,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/themes": {
+    "/api/kbs/{id}/themes": {
         parameters: {
             query?: never;
             header?: never;
@@ -720,7 +720,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/intrusion-test": {
+    "/api/kbs/{id}/intrusion-test": {
         parameters: {
             query?: never;
             header?: never;
@@ -831,7 +831,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/relations": {
+    "/api/kbs/{id}/relations": {
         parameters: {
             query?: never;
             header?: never;
@@ -890,7 +890,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/graph": {
+    "/api/kbs/{id}/graph": {
         parameters: {
             query?: never;
             header?: never;
@@ -949,7 +949,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/inquiry": {
+    "/api/kbs/{id}/inquiry": {
         parameters: {
             query?: never;
             header?: never;
@@ -1008,7 +1008,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{id}/inquiry/messages/{messageId}/reevaluate": {
+    "/api/kbs/{id}/inquiry/messages/{messageId}/reevaluate": {
         parameters: {
             query?: never;
             header?: never;
@@ -1084,7 +1084,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{kbId}/documents": {
+    "/api/kbs/{kbId}/documents": {
         parameters: {
             query?: never;
             header?: never;
@@ -1223,7 +1223,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{kbId}/documents/{docId}": {
+    "/api/kbs/{kbId}/documents/{docId}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1331,7 +1331,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{kbId}/documents/{docId}/retry": {
+    "/api/kbs/{kbId}/documents/{docId}/retry": {
         parameters: {
             query?: never;
             header?: never;
@@ -1403,7 +1403,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{kbId}/documents/{docId}/retry-entity-extraction": {
+    "/api/kbs/{kbId}/documents/{docId}/retry-entity-extraction": {
         parameters: {
             query?: never;
             header?: never;
@@ -1475,7 +1475,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/kbs/{kbId}/documents/{docId}/content": {
+    "/api/kbs/{kbId}/documents/{docId}/content": {
         parameters: {
             query?: never;
             header?: never;

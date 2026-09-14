@@ -534,7 +534,7 @@ paths:
                   status:
                     type: string
 
-  /openapi.yaml:
+  /api/openapi.yaml:
     get:
       summary: OpenAPI specification
       security: []
@@ -546,7 +546,7 @@ paths:
               schema:
                 type: string
 
-  /stats:
+  /api/stats:
     get:
       summary: Site-wide usage stats
       description: >
@@ -574,7 +574,7 @@ paths:
                   sessions_swept:
                     type: integer
 
-  /account/status:
+  /api/account/status:
     get:
       summary: Get the current session's expiry status
       description: >-
@@ -596,7 +596,7 @@ paths:
                     format: date-time
                 required: [warning_active, deletes_at]
 
-  /kbs:
+  /api/kbs:
     get:
       summary: List knowledge bases
       parameters:
@@ -658,7 +658,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}:
+  /api/kbs/{id}:
     parameters:
       - in: path
         name: id
@@ -745,7 +745,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/search:
+  /api/kbs/{id}/search:
     post:
       summary: Search a knowledge base
       parameters:
@@ -806,7 +806,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/communities:
+  /api/kbs/{id}/communities:
     get:
       summary: Get a knowledge base's most recent community-detection result
       description: >-
@@ -886,7 +886,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/themes:
+  /api/kbs/{id}/themes:
     get:
       summary: Get a knowledge base's most recently generated theme labels
       description: >-
@@ -964,7 +964,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/intrusion-test:
+  /api/kbs/{id}/intrusion-test:
     get:
       summary: Get a knowledge base's most recently run intrusion test result
       description: >-
@@ -1050,7 +1050,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/relations:
+  /api/kbs/{id}/relations:
     post:
       summary: >-
         Review a bounded batch of not-yet-checked co-occurrence edges for
@@ -1092,7 +1092,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/graph:
+  /api/kbs/{id}/graph:
     get:
       summary: Get a knowledge base's canonical-entity graph, shaped for display
       description: >-
@@ -1128,7 +1128,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/inquiry:
+  /api/kbs/{id}/inquiry:
     get:
       summary: Get the researcher's Inquiry (turn history) for a knowledge base
       description: >-
@@ -1162,7 +1162,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{id}/inquiry/messages/{messageId}/reevaluate:
+  /api/kbs/{id}/inquiry/messages/{messageId}/reevaluate:
     post:
       summary: >-
         Re-run the query behind a past assistant message against the
@@ -1223,7 +1223,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{kbId}/documents:
+  /api/kbs/{kbId}/documents:
     parameters:
       - in: path
         name: kbId
@@ -1321,7 +1321,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{kbId}/documents/{docId}:
+  /api/kbs/{kbId}/documents/{docId}:
     parameters:
       - in: path
         name: kbId
@@ -1382,7 +1382,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{kbId}/documents/{docId}/retry:
+  /api/kbs/{kbId}/documents/{docId}/retry:
     parameters:
       - in: path
         name: kbId
@@ -1429,7 +1429,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{kbId}/documents/{docId}/retry-entity-extraction:
+  /api/kbs/{kbId}/documents/{docId}/retry-entity-extraction:
     parameters:
       - in: path
         name: kbId
@@ -1482,7 +1482,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /kbs/{kbId}/documents/{docId}/content:
+  /api/kbs/{kbId}/documents/{docId}/content:
     parameters:
       - in: path
         name: kbId

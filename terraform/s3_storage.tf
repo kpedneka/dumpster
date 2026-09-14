@@ -25,6 +25,13 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    # Generates the CloudFront-to-ALB origin-verification secret
+    # (frontend.tf) -- infra-to-infra only, no application code ever reads
+    # it, so it lives in Terraform state rather than Secrets Manager.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 

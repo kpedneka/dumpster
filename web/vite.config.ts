@@ -25,9 +25,10 @@ export default defineConfig({
       clientFiles: ['./src/main.tsx'],
     },
     proxy: {
+      // No rewrite: the backend now serves everything under /api itself
+      // (see client.ts), so the prefix is forwarded through unmodified.
       '/api': {
         target: 'http://localhost:8080',
-        rewrite: (p) => p.replace(/^\/api/, ''),
         changeOrigin: true,
       },
     },

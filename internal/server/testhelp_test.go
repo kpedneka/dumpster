@@ -65,20 +65,24 @@ func defaultDeps() (Deps, *kbmem.Repository, *docmem.Repository, *objmock.Store,
 // authedRequest creates a request carrying a session_id cookie that resolves
 // to exactly sessionID. It seeds that session in deps.Sessions (which must be
 // a *sessionmock.Store) so the middleware can find it. Pass nil for body when
-// no body is needed.
+// no body is needed. target is everything under /api/ (e.g. "/kbs"), not
+// including the /api prefix itself -- this helper adds it, matching every
+// real route except /healthz (see server.go's NewRouter doc for why the
+// prefix exists).
 func authedRequest(t *testing.T, deps Deps, method, target string, body io.Reader, sessionID uuid.UUID) *http.Request {
 	t.Helper()
 	if store, ok := deps.Sessions.(*sessionmock.Store); ok {
 		store.Seed(&session.Session{ID: sessionID, CreatedAt: time.Now()})
 	}
-	req := httptest.NewRequest(method, target, body)
+	req := httptest.NewRequest(method, "/api"+target, body)
 	req.AddCookie(&http.Cookie{Name: "session_id", Value: sessionID.String()})
 	return req
 }
 
 // unauthRequest creates a request with no session cookie, causing the
 // middleware to mint a fresh anonymous session. Useful for testing routes
-// that must work even on a brand-new, cookie-less client.
+// that must work even on a brand-new, cookie-less client. target is
+// everything under /api/, same convention as authedRequest.
 func unauthRequest(method, target string, body io.Reader) *http.Request {
-	return httptest.NewRequest(method, target, body)
+	return httptest.NewRequest(method, "/api"+target, body)
 }

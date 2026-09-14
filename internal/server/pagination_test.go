@@ -152,7 +152,7 @@ func TestOpenAPISpec(t *testing.T) {
 	deps, _, _, _, _ := defaultDeps()
 	router := NewRouter(deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
@@ -172,7 +172,7 @@ func TestOpenAPISpec_NoAuthRequired(t *testing.T) {
 	router := NewRouter(deps)
 
 	// No auth header — must still return 200
-	req := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/openapi.yaml", nil)
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 

@@ -26,7 +26,7 @@ func accountStatusRequest(t *testing.T, createdAt, lastActiveAt time.Time) *http
 	})
 	router := NewRouter(deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/account/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/account/status", nil)
 	req.AddCookie(&http.Cookie{Name: "session_id", Value: sessionID.String()})
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)

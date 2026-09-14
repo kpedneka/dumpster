@@ -12,9 +12,8 @@ export type SearchStreamEvent =
 // The typed openapi-fetch client (see ./client.ts) expects a single JSON
 // response body, which doesn't fit these endpoints' actual wire format now
 // that they stream Server-Sent Events — so these calls go through plain
-// fetch instead. The BASE_URL logic mirrors client.ts: Vite proxies
-// /api → the API in dev, same-origin in production.
-const BASE_URL = import.meta.env.DEV ? '/api' : ''
+// fetch instead. BASE_URL mirrors client.ts.
+const BASE_URL = '/api'
 
 // searchStream POSTs a query to the search endpoint and invokes onEvent for
 // each SSE frame as it arrives, in order: one retrieved_files event, then
