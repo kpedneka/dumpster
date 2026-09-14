@@ -1,18 +1,39 @@
-# The public-facing ALB, api's target group, and the HTTPS listener.
-# Only api sits behind this -- worker and inference are never reached
-# directly from outside the cluster (worker pulls from the queue;
-# inference is called internally by api/worker over Service Connect, see
-# ecs_inference.tf).
-
+# The api's ALB, target group, and HTTPS listener -- internal, not
+# public-facing. Only api sits behind this -- worker and inference are
+# never reached directly from outside the cluster (worker pulls from the
+# queue; inference is called internally by api/worker over Service
+# Connect, see ecs_inference.tf).
+#
+# internal = true, in the private subnets, reached only via CloudFront's
+# VPC origin (frontend.tf) -- not the public-facing ALB + secret-header
+# design this replaced. That design (kept working, verified for real
+# against production) was a real, working defense-in-depth, but a
+# *policy* guarantee: the ALB still had a public IP, technically part of
+# internet routing space, protected by a security-group prefix list and a
+# secret header that had to stay correctly configured. A private ALB is a
+# *structural* guarantee instead -- there is no route to it from the
+# internet at all, full stop, nothing to misconfigure away. AWS's own
+# restrict-access-to-load-balancer.html docs list this (VPC origins) as
+# the first, preferred option, with the custom-header approach as the
+# fallback for when you can't move to private subnets -- we can, so this
+# is the properly-done version, not a settled-for one.
+#
+# name_prefix + create_before_destroy, learned directly from tonight's
+# real security-group replacement deadlock (ecs_networking.tf): `internal`
+# and `subnets` are both ForceNew on aws_lb, and a fixed name would hit
+# the exact same "can't create the new one until the old one's name frees
+# up, can't free up the old one while things still reference it" ordering
+# problem this fixes for the security group.
 resource "aws_lb" "api" {
-  name               = "${local.name_prefix}-api"
-  internal           = false
+  name_prefix        = "api-"
+  internal           = true
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  # ALB needs subnets in at least 2 AZs. Public subnets, not the new
-  # private ones -- the ALB itself is the thing the internet reaches;
-  # only the tasks behind it are private.
-  subnets = [data.aws_subnet.public_1a.id, data.aws_subnet.public_1b.id]
+  subnets            = [aws_subnet.private_1a.id, aws_subnet.private_1b.id]
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_lb_target_group" "api" {
@@ -94,32 +115,6 @@ resource "aws_lb_listener_rule" "from_cloudfront" {
     http_header {
       http_header_name = local.cloudfront_origin_header_name
       values           = [random_password.cloudfront_origin_secret.result]
-    }
-  }
-}
-
-# /healthz specifically bypasses the CloudFront-only restriction above --
-# lower priority (2), only reached when the header rule doesn't match.
-# Deliberate, narrow exception, not an oversight: staging.yml's smoke test
-# hits the ALB directly on purpose, bypassing CloudFront entirely, to
-# verify the backend deployment independently of CloudFront's own state --
-# see that workflow's "Smoke test" step comment. /healthz returns nothing
-# but a static {"status":"ok"}, so there's no real exposure in leaving it
-# reachable without the header; the network-layer restriction
-# (ecs_networking.tf's CloudFront prefix list / staging CIDR allowlist)
-# still applies regardless of this rule.
-resource "aws_lb_listener_rule" "healthz_direct" {
-  listener_arn = aws_lb_listener.https.arn
-  priority     = 2
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.api.arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/healthz"]
     }
   }
 }

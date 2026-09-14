@@ -45,6 +45,26 @@ resource "random_password" "cloudfront_origin_secret" {
   special = false
 }
 
+# The private, AWS-managed connection into the VPC that lets CloudFront
+# reach the internal ALB (ecs_alb.tf) without it ever having a public IP.
+# CloudFront creates a service-managed ENI in the ALB's own subnets for
+# this -- confirmed directly against AWS's docs, that ENI creation is what
+# the "up to 15 minutes to reach Deployed" wait (below) actually covers.
+resource "aws_cloudfront_vpc_origin" "alb" {
+  vpc_origin_endpoint_config {
+    name                   = "${local.name_prefix}-alb"
+    arn                    = aws_lb.api.arn
+    http_port              = 80
+    https_port             = 443
+    origin_protocol_policy = "https-only"
+
+    origin_ssl_protocols {
+      items    = ["TLSv1.2"]
+      quantity = 1
+    }
+  }
+}
+
 # --- S3 bucket: the built SPA (dist/), private, reachable only via CloudFront ---
 
 resource "aws_s3_bucket" "frontend" {
@@ -197,32 +217,33 @@ resource "aws_cloudfront_distribution" "frontend" {
     origin_access_control_id = aws_cloudfront_origin_access_control.frontend.id
   }
 
-  # HTTPS-only at 443 -- the ALB's own port-80 listener only redirects to
-  # 443 (ecs_alb.tf), so this is the only origin_protocol_policy that
-  # actually reaches the API rather than following a redirect CloudFront
-  # doesn't traverse for origin requests.
+  # vpc_origin_config, not custom_origin_config: the ALB is internal, in
+  # private subnets with no public IP at all (ecs_alb.tf) -- CloudFront
+  # reaches it over a private, AWS-managed ENI-based connection into the
+  # VPC, never touching the public internet. This is the properly-done
+  # version of "restrict this ALB to CloudFront-only," not the
+  # public-ALB-plus-secret-header design it replaced: that was a real,
+  # working *policy* guarantee (three layers: security-group prefix list,
+  # TLS cert match, secret header), but the ALB still had a public IP,
+  # technically part of internet routing space. A private ALB is a
+  # *structural* guarantee instead -- there's no route to it from the
+  # internet, full stop, nothing to misconfigure away later. AWS's own
+  # restrict-access-to-load-balancer.html docs list VPC origins first, with
+  # the custom-header approach as the fallback for when you can't move to
+  # private subnets.
   #
-  # custom_header: the AWS-documented primary mechanism for restricting an
-  # ALB to CloudFront-only traffic -- confirmed directly against AWS's own
-  # docs (restrict-access-to-load-balancer.html), which lists this ahead of
-  # (and independent of) the security-group prefix-list restriction
-  # (ecs_networking.tf). The prefix list alone has a real, AWS-documented
-  # gap: it only proves a request came from *some* CloudFront distribution,
-  # not specifically this one -- a different AWS account's own distribution
-  # could reference this ALB's DNS name as a custom origin and pass the
-  # prefix-list check too. This header is checked by an ALB listener rule
-  # (ecs_alb.tf) that only forwards requests carrying it, returning 403 to
-  # everything else -- closing that gap. random_password.cloudfront_origin_secret
-  # is Terraform-generated and lives only in state; no application code
-  # ever reads it, only this origin config and the listener rule need it.
+  # The secret header (custom_header, random_password.cloudfront_origin_secret)
+  # stays anyway, as one more layer even though the network path alone now
+  # closes the gap the header was originally added for (a different AWS
+  # account's own CloudFront distribution referencing this ALB) -- a
+  # private ALB has no route for another distribution to reach at all,
+  # VPC-origin or not, so this is now genuinely defense-in-depth rather
+  # than the actual enforcement mechanism.
   origin {
     domain_name = aws_lb.api.dns_name
     origin_id   = local.frontend_alb_origin_id
-    custom_origin_config {
-      http_port              = 80
-      https_port             = 443
-      origin_protocol_policy = "https-only"
-      origin_ssl_protocols   = ["TLSv1.2"]
+    vpc_origin_config {
+      vpc_origin_id = aws_cloudfront_vpc_origin.alb.id
     }
     custom_header {
       name  = local.cloudfront_origin_header_name

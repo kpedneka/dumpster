@@ -181,31 +181,14 @@ jobs:
           echo "::error::ECS services never reached steady state"
           exit 1
 
-      - name: Smoke test
-        working-directory: terraform
-        run: |
-          ALB_DNS=$(tofu output -raw alb_dns_name)
-          # -k: the ALB's cert is issued for the real hostname
-          # (dumpster-staging.kpednekar.dev), not its own AWS-assigned
-          # DNS name -- DNS for the real hostname isn't repointed by this
-          # workflow (see the header comment on why), so this hits the
-          # ALB directly instead. That's a deliberate scope choice, not
-          # an oversight: this smoke test confirms the deployment itself
-          # is healthy and serving traffic, not that the public hostname/
-          # TLS chain works end-to-end.
-          for i in $(seq 1 10); do
-            if curl -sk -o /dev/null -w '%{http_code}' "https://$ALB_DNS/healthz" | grep -q 200; then
-              echo "healthz OK"
-              exit 0
-            fi
-            echo "attempt $i: not healthy yet, retrying..."
-            sleep 10
-          done
-          echo "::error::staging never became healthy"
-          exit 1
-
-      # A second, separate smoke test against CloudFront itself, not just
-      # the ALB above -- see frontend.tf's wait_for_deployment comment for
+      # The direct-ALB smoke test this replaced (curling the ALB's own DNS
+      # name, bypassing CloudFront on purpose to test the backend
+      # independently) no longer works at all: the ALB is now internal, in
+      # private subnets with no public IP (ecs_alb.tf's VPC-origins
+      # migration) -- a deliberate tradeoff, not an oversight. The
+      # GitHub Actions runner has no path into the VPC to reach a private
+      # ALB directly. The CloudFront-based check below is now the only
+      # smoke test; see frontend.tf's wait_for_deployment comment for
       # why this needs its own (much longer) retry window: staging's
       # distribution is created from scratch every cycle with
       # wait_for_deployment = false, so `tofu apply` returns before global
@@ -218,7 +201,7 @@ jobs:
       # step. 90 attempts x 20s = 30 minutes of runway, matching this
       # workflow's existing "give real AWS propagation generous, not
       # padded-once, time" pattern (see the ECS-stabilize step above).
-      - name: Smoke test CloudFront
+      - name: Smoke test
         working-directory: terraform
         run: |
           CF_DOMAIN=$(tofu output -raw cloudfront_domain_name)
@@ -257,7 +240,6 @@ jobs:
             echo ""
             echo "URL: https://$(tofu output -raw cloudfront_domain_name)/"
             echo ""
-            echo "Allowlisted IPs (API/backend only -- CloudFront itself is not IP-restricted, see frontend.tf): ${{ env.TF_VAR_staging_allowed_cidrs }}"
             echo ""
             echo "Remove the \`deploy-staging\` label from this PR when done -- that tears it down (see teardown-on-unlabel)."
           } >> "$GITHUB_STEP_SUMMARY"
