@@ -30,7 +30,13 @@ env:
   AWS_REGION: us-east-1
   TF_VAR_environment: staging
   TF_VAR_acm_domain_name: ${{ vars.STAGING_ACM_DOMAIN }}
-  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+  # run_id + run_attempt, not just the commit SHA: ECR's repos are
+  # immutable-tag mode (ecs_ecr.tf), so a plain PR+SHA tag collides on
+  # retry -- both a same-run retry (run_attempt covers that alone) and a
+  # relabel-without-a-new-commit, which gets a fresh run_id with the
+  # identical PR number + SHA (run_attempt alone doesn't cover that
+  # second, equally real path to the same collision).
+  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   # Normal path: PR carries the label (either just added, or a new commit
@@ -136,6 +142,21 @@ jobs:
         working-directory: terraform
         run: tofu apply -auto-approve tfplan
 
+      # tofu apply only waits for the EC2 API to report the NAT instance
+      # exists, not for its user_data to finish installing/configuring
+      # iptables (ecs_networking.tf) -- real wall-clock time after that.
+      # Waited for explicitly here, same reasoning as the ECS-stabilize
+      # step below: ECS tasks that start before this finishes fail with
+      # ResourceInitializationError trying to reach Secrets Manager/ECR/
+      # CloudWatch Logs/Neon through a NAT path that isn't routing yet.
+      # See scripts/wait_for_nat_ready.sh for the actual check.
+      - name: Wait for NAT instance to be ready
+        working-directory: terraform
+        run: |
+          NAT_INSTANCE_ID=$(tofu output -raw nat_instance_id)
+          export NAT_INSTANCE_ID
+          bash ../scripts/wait_for_nat_ready.sh
+
       # tofu apply returns as soon as the ECS service/task-definition API
       # calls succeed, not once tasks are actually running and passing
       # the ALB's health check -- a real gap the manual runbook doesn't
@@ -143,21 +164,21 @@ jobs:
       # explicitly here so the smoke test below doesn't race a still-
       # starting deployment.
       # `aws ecs wait services-stable`'s own timeout is fixed (15s delay x
-      # 40 attempts = 10 minutes) and not configurable via a CLI flag --
-      # found too short by a real run (PR #94): on a fresh apply, the NAT
-      # instance is a brand-new EC2 instance that takes a couple of
-      # minutes to finish booting and configuring its NAT routing before
-      # api/worker's private-subnet tasks can reach Secrets Manager
-      # (no VPC endpoint for it, unlike S3) at all -- the first task
-      # placement attempts fail with a connection timeout, ECS retries
-      # with backoff, and the whole cycle can eat nearly the entire
-      # default 10-minute window before actually stabilizing on its own.
-      # Looped instead of widened via a single wait call: three attempts
-      # gives ~30 minutes of total runway while still failing loudly if
-      # something is genuinely broken, not just slow to boot once.
+      # 40 attempts = 10 minutes) and not configurable via a CLI flag.
+      # Originally three attempts (~30 min total runway): the NAT
+      # instance's cold-start-before-routing race (PR #94) used to eat
+      # most of a whole 10-minute window on its own before this step ever
+      # got a chance to stabilize. The step above now closes that race
+      # with a real, positive-confirmation check before this one even
+      # starts, so this loop's remaining job is a narrower one: the
+      # occasional, separate case of Fargate capacity being briefly
+      # unavailable in an AZ (also noted in the cleanup-cron design docs).
+      # Two attempts (~20 min) keeps real margin for that genuinely
+      # different failure mode without carrying the padding that was only
+      # ever there for the NAT race.
       - name: Wait for ECS services to stabilize
         run: |
-          for i in 1 2 3; do
+          for i in 1 2; do
             if aws ecs wait services-stable --cluster dumpster-staging --services api worker; then
               echo "services stable"
               exit 0
