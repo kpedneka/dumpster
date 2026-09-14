@@ -54,3 +54,25 @@ output "embed_sidecar_repository_url" {
   value       = data.aws_ecr_repository.embed_sidecar.repository_url
   description = "Push the sidecar image here (docker build -f Dockerfile.batch-embed-job --target sidecar ...), tagged by commit SHA."
 }
+
+# The metrics sidecar's image (Dockerfile.otel-collector) -- a thin layer
+# over AWS's own public ADOT Collector image with otel-collector-config.yaml
+# baked in, one shared image/config across api and worker and both
+# environments (see that config's own comments for how it tells them apart
+# at runtime). Same data-source-not-resource reasoning as the two repos
+# above: staging's routine destroy/recreate cycle must not delete the
+# repository itself.
+#
+# One-time bootstrap per environment, same commands as runtime/embed-sidecar
+# above, before the first `tofu apply` against that environment:
+#   aws ecr create-repository --repository-name dumpster-staging-otel-collector --image-tag-mutability IMMUTABLE
+#   aws ecr put-image-scanning-configuration --repository-name dumpster-staging-otel-collector --image-scanning-configuration scanOnPush=true
+# (substitute "production" as appropriate).
+data "aws_ecr_repository" "otel_collector" {
+  name = "${local.name_prefix}-otel-collector"
+}
+
+output "otel_collector_repository_url" {
+  value       = data.aws_ecr_repository.otel_collector.repository_url
+  description = "Push the metrics sidecar image here (docker build -f Dockerfile.otel-collector ...), tagged by commit SHA."
+}

@@ -30,7 +30,17 @@ env:
   AWS_REGION: us-east-1
   TF_VAR_environment: staging
   TF_VAR_acm_domain_name: ${{ vars.STAGING_ACM_DOMAIN }}
-  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+  # dns.tf's cloudflare_dns_record.staging repoints this domain at each
+  # cycle's fresh CloudFront distribution -- the Cloudflare provider reads
+  # this env var automatically (see dns.tf's provider block comment).
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  # run_id + run_attempt, not just the commit SHA: ECR's repos are
+  # immutable-tag mode (ecs_ecr.tf), so a plain PR+SHA tag collides on
+  # retry -- both a same-run retry (run_attempt covers that alone) and a
+  # relabel-without-a-new-commit, which gets a fresh run_id with the
+  # identical PR number + SHA (run_attempt alone doesn't cover that
+  # second, equally real path to the same collision).
+  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   # Normal path: PR carries the label (either just added, or a new commit
@@ -104,6 +114,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The metrics sidecar (see the "Push OTel metrics to CloudWatch" dev
+      # board card). No target platform override needed here unlike the two
+      # builds above: this Dockerfile has no build stage of its own, just
+      # COPYs a config file onto AWS's own public ADOT image, which already
+      # publishes real arm64 manifests.
+      - name: Build and push otel-collector image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.otel-collector
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/dumpster-staging-otel-collector:${{ env.TF_VAR_image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Init
         working-directory: terraform
         run: tofu init
@@ -120,6 +146,59 @@ jobs:
         working-directory: terraform
         run: tofu apply -auto-approve tfplan
 
+      # Real, pre-existing gap this pipeline had until now, found live:
+      # nothing ever built or synced the frontend to S3 for a staging
+      # deploy -- only the backend (api/worker/cleanup images) got
+      # deployed. The root path (`/`, CloudFront's S3 cache behavior --
+      # frontend.tf) has never actually served a real build; `/healthz`
+      # (routed straight to the ALB instead) was the only path anyone had
+      # ever actually verified. An empty, OAC-fronted bucket returns a
+      # generic S3 AccessDenied for any object, not a 404 -- a real, if
+      # confusing, AWS behavior (avoids leaking object-existence info to
+      # an unauthorized requester), which is what made this look like a
+      # permissions bug rather than "there's just nothing here yet."
+      #
+      # No env vars needed at build time (web/.env.example: the frontend
+      # only ever calls a same-origin, relative /api path -- see
+      # client.ts), so this build is identical regardless of environment.
+      # No CloudFront invalidation needed either: staging's distribution
+      # is destroyed and recreated every cycle (frontend.tf), so it never
+      # has a stale cached response to invalidate in the first place --
+      # unlike a long-lived distribution (production), this one's cache
+      # starts empty on every deploy.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci --legacy-peer-deps
+
+      - name: Build frontend
+        working-directory: web
+        run: npm run build
+
+      - name: Sync frontend to S3
+        working-directory: terraform
+        run: |
+          BUCKET=$(tofu output -raw frontend_bucket_name)
+          aws s3 sync ../web/dist/ "s3://$BUCKET/" --delete
+
+      # tofu apply only waits for the EC2 API to report the NAT instance
+      # exists, not for its user_data to finish installing/configuring
+      # iptables (ecs_networking.tf) -- real wall-clock time after that.
+      # Waited for explicitly here, same reasoning as the ECS-stabilize
+      # step below: ECS tasks that start before this finishes fail with
+      # ResourceInitializationError trying to reach Secrets Manager/ECR/
+      # CloudWatch Logs/Neon through a NAT path that isn't routing yet.
+      # See scripts/wait_for_nat_ready.sh for the actual check.
+      - name: Wait for NAT instance to be ready
+        working-directory: terraform
+        run: |
+          NAT_INSTANCE_ID=$(tofu output -raw nat_instance_id)
+          export NAT_INSTANCE_ID
+          bash ../scripts/wait_for_nat_ready.sh
+
       # tofu apply returns as soon as the ECS service/task-definition API
       # calls succeed, not once tasks are actually running and passing
       # the ALB's health check -- a real gap the manual runbook doesn't
@@ -127,21 +206,21 @@ jobs:
       # explicitly here so the smoke test below doesn't race a still-
       # starting deployment.
       # `aws ecs wait services-stable`'s own timeout is fixed (15s delay x
-      # 40 attempts = 10 minutes) and not configurable via a CLI flag --
-      # found too short by a real run (PR #94): on a fresh apply, the NAT
-      # instance is a brand-new EC2 instance that takes a couple of
-      # minutes to finish booting and configuring its NAT routing before
-      # api/worker's private-subnet tasks can reach Secrets Manager
-      # (no VPC endpoint for it, unlike S3) at all -- the first task
-      # placement attempts fail with a connection timeout, ECS retries
-      # with backoff, and the whole cycle can eat nearly the entire
-      # default 10-minute window before actually stabilizing on its own.
-      # Looped instead of widened via a single wait call: three attempts
-      # gives ~30 minutes of total runway while still failing loudly if
-      # something is genuinely broken, not just slow to boot once.
+      # 40 attempts = 10 minutes) and not configurable via a CLI flag.
+      # Originally three attempts (~30 min total runway): the NAT
+      # instance's cold-start-before-routing race (PR #94) used to eat
+      # most of a whole 10-minute window on its own before this step ever
+      # got a chance to stabilize. The step above now closes that race
+      # with a real, positive-confirmation check before this one even
+      # starts, so this loop's remaining job is a narrower one: the
+      # occasional, separate case of Fargate capacity being briefly
+      # unavailable in an AZ (also noted in the cleanup-cron design docs).
+      # Two attempts (~20 min) keeps real margin for that genuinely
+      # different failure mode without carrying the padding that was only
+      # ever there for the NAT race.
       - name: Wait for ECS services to stabilize
         run: |
-          for i in 1 2 3; do
+          for i in 1 2; do
             if aws ecs wait services-stable --cluster dumpster-staging --services api worker; then
               echo "services stable"
               exit 0
@@ -171,36 +250,46 @@ jobs:
       # step. 90 attempts x 20s = 30 minutes of runway, matching this
       # workflow's existing "give real AWS propagation generous, not
       # padded-once, time" pattern (see the ECS-stabilize step above).
+      #
+      # Tests via the real alias domain (dns.tf's STAGING_ACM_DOMAIN),
+      # resolved straight to CloudFront's own default-domain IP with
+      # --resolve, not through real DNS -- Cloudflare's record update
+      # (this same apply) is typically near-instant, but this check must
+      # not depend on that propagation timing at all. Found live: curling
+      # the plain *.cloudfront.net default domain directly, as this step
+      # used to, gets a real 502 from CloudFront itself -- the VPC origin
+      # (ecs_alb.tf) still does real TLS validation against the ALB's own
+      # certificate, which only covers the real alias, not the default
+      # domain, so the SNI/Host CloudFront forwards has to be the real
+      # alias for the handshake to succeed at all. Same `--resolve` trick
+      # already proven manually earlier in this migration for exactly this
+      # class of check, now made a permanent, automated part of this step.
       - name: Smoke test
         working-directory: terraform
         run: |
           CF_DOMAIN=$(tofu output -raw cloudfront_domain_name)
+          ALIAS_DOMAIN="${{ vars.STAGING_ACM_DOMAIN }}"
           for i in $(seq 1 90); do
-            if curl -s -o /dev/null -w '%{http_code}' "https://$CF_DOMAIN/healthz" | grep -q 200; then
-              echo "CloudFront healthz OK"
+            CF_IP=$(dig +short "$CF_DOMAIN" | head -1)
+            if [[ -n "$CF_IP" ]] && curl -s --resolve "$ALIAS_DOMAIN:443:$CF_IP" -o /dev/null -w '%{http_code}' "https://$ALIAS_DOMAIN/healthz" | grep -q 200; then
+              echo "CloudFront healthz OK (via $ALIAS_DOMAIN resolved to $CF_IP)"
               exit 0
             fi
-            echo "attempt $i: CloudFront not serving healthz yet, retrying..."
+            echo "attempt $i: not ready yet, retrying..."
             sleep 20
           done
           echo "::error::CloudFront never started serving /healthz"
           exit 1
 
-      # Prints the ALB URL and allowlisted CIDRs to the job summary --
-      # staging stays running after a successful run (see the Destroy
-      # step below), specifically so a human can look at it, and that's
-      # only useful if the URL is somewhere visible, not just implied.
-      # Points at CloudFront now, not the ALB directly: since the "Decouple
-      # SPA hosting from the API instance" card, the ALB only serves
-      # /api/* and /healthz (internal/server/server.go) -- the ALB's own
-      # URL no longer renders the app at all, only CloudFront does. The
-      # CloudFront default domain (*.cloudfront.net), not the real
-      # dumpster-staging.kpednekar.dev alias -- same reason the ALB check
-      # above uses -k against the raw ALB hostname: this workflow
-      # deliberately doesn't repoint the real DNS hostname per ephemeral
-      # run, and CloudFront's default domain always works over HTTPS with
-      # CloudFront's own cert regardless of the alias/custom viewer cert
-      # config.
+      # Prints the real alias URL, not CloudFront's default domain -- a
+      # human's browser can't do the --resolve trick the smoke test above
+      # uses, and it doesn't need to: dns.tf's cloudflare_dns_record.staging
+      # (this same apply) repoints dumpster-staging.kpednekar.dev at this
+      # cycle's fresh distribution for real, so the plain URL below now
+      # actually works. It didn't before this card -- that record was
+      # stale, pointing at a torn-down architecture from before the
+      # VPC-origins migration, silently broken for manual testing this
+      # whole time despite the smoke test above passing.
       - name: Staging is up
         if: success()
         working-directory: terraform
@@ -208,7 +297,7 @@ jobs:
           {
             echo "### Staging is up for manual testing"
             echo ""
-            echo "URL: https://$(tofu output -raw cloudfront_domain_name)/"
+            echo "URL: https://${{ vars.STAGING_ACM_DOMAIN }}/"
             echo ""
             echo ""
             echo "Remove the \`deploy-staging\` label from this PR when done -- that tears it down (see teardown-on-unlabel)."

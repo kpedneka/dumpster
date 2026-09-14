@@ -94,6 +94,25 @@ data "aws_iam_policy_document" "github_actions_assume" {
       values   = ["repo:kpedneka/dumpster:*"]
     }
   }
+
+  # Lets the admin SSO session assume this exact role for local IaC
+  # verification (see CLAUDE.md's "Testing infrastructure changes" section)
+  # -- `aws sts assume-role` against this role before `tofu plan`/`apply`,
+  # so a local test exercises the same permission boundary CI actually
+  # uses, not a broader personal identity that can mask a gap the deploy
+  # role really has (confirmed real: two of the IAM gaps tonight would
+  # have passed locally under plain admin credentials). A separate
+  # statement/action from the OIDC one above, not a broadened condition on
+  # it -- sts:AssumeRole (IAM principal) and sts:AssumeRoleWithWebIdentity
+  # (OIDC federation) are different actions with different principal
+  # types.
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_DumpsterAdmin_cb5e8cb8a8f76f46"]
+    }
+  }
 }
 
 resource "aws_iam_role" "github_actions_deploy" {
@@ -137,6 +156,13 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       # something caught by validation ahead of time.
       "acm:ListTagsForCertificate",
       "sts:GetCallerIdentity",
+      # frontend.tf manages real CloudFront distributions/OAC/VPC-origins/
+      # response-headers-policies -- missing entirely from this policy
+      # until this role's first real `tofu plan` against that file
+      # surfaced it as AccessDenied on cloudfront:ListCachePolicies, not
+      # anticipated ahead of time. Same story as acm:ListTagsForCertificate
+      # above.
+      "cloudfront:*",
     ]
     resources = ["*"]
   }
@@ -151,6 +177,34 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     sid       = "SSMPublicParameters"
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = ["arn:aws:ssm:${var.aws_region}::parameter/aws/service/ami-amazon-linux-latest/*"]
+  }
+
+  # scripts/wait_for_nat_ready.sh's readiness check (staging.yml, between
+  # `tofu apply` and the ECS-stabilize wait) -- SendCommand needs a grant
+  # on both the target document and the target instance; GetCommandInvocation/
+  # ListCommandInvocations/DescribeInstanceInformation don't support
+  # resource-level scoping at all (same story as LogsDescribe below), so
+  # those stay at resources = ["*"]. Instance-level scoping uses
+  # ec2:instance/*, not a fixed ID -- the NAT instance is destroyed and
+  # recreated every staging cycle (ecs_networking.tf), so there's no ID to
+  # name ahead of time; consistent with this policy's existing ec2:*
+  # BroadServiceAccess grant already covering the instance itself.
+  # AWS-RunShellScript's ARN has no account segment -- an AWS-owned public
+  # document, not something in this account, same reasoning as the AMI
+  # parameter above.
+  statement {
+    sid     = "NATInstanceSSMSend"
+    actions = ["ssm:SendCommand"]
+    resources = [
+      "arn:aws:ssm:${var.aws_region}::document/AWS-RunShellScript",
+      "arn:aws:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*",
+    ]
+  }
+
+  statement {
+    sid       = "NATInstanceSSMRead"
+    actions   = ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation"]
+    resources = ["*"]
   }
 
   # CloudWatch alarm ARNs use a colon before the alarm name (alarm:name),
@@ -192,7 +246,19 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "logs:UntagLogGroup",
       "logs:ListTagsLogGroup",
     ]
-    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/dumpster-*"]
+    # Scoped to two path prefixes, not one -- /ecs/dumpster-* is the
+    # original shared app log group; /aws/dumpster/* covers the newer
+    # otel-metrics groups (ecs_otel_collector.tf) added by a later card,
+    # which this statement didn't originally match at all (surfaced as
+    # AccessDenied on logs:CreateLogGroup during that card's first real
+    # apply). /aws/batch/job (imported, not created, by logs_batch.tf) is
+    # a third, unrelated prefix that also needs this same statement's
+    # actions.
+    resources = [
+      "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/dumpster-*",
+      "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/dumpster/*",
+      "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/batch/job",
+    ]
   }
 
   # DescribeLogGroups is a list-style call (optionally filtered by name

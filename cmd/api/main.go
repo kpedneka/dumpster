@@ -41,19 +41,14 @@ func main() {
 	cfg := config.Load()
 	logger := telemetry.NewLogger(os.Stdout, "api")
 
-	instruments, metricsHandler, err := telemetry.Setup(context.Background())
+	instruments, shutdownTelemetry, err := telemetry.Setup(context.Background(), "api")
 	if err != nil {
 		logger.Error("telemetry setup failed", "err", err)
 		os.Exit(1)
 	}
-
-	metricsMux := http.NewServeMux()
-	metricsMux.Handle("/metrics", metricsHandler)
-	go func() {
-		addr := fmt.Sprintf(":%s", cfg.MetricsPort)
-		logger.Info("metrics endpoint starting", "addr", addr+"/metrics")
-		if err := http.ListenAndServe(addr, metricsMux); err != nil {
-			logger.Error("metrics server error", "err", err)
+	defer func() {
+		if err := shutdownTelemetry(context.Background()); err != nil {
+			logger.Error("telemetry shutdown failed", "err", err)
 		}
 	}()
 

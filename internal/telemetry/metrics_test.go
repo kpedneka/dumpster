@@ -2,11 +2,8 @@ package telemetry_test
 
 import (
 	"context"
-	"fmt"
-	"net/http/httptest"
-	"regexp"
-	"strings"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -14,16 +11,8 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
-// hasMetricSample reports whether body contains a Prometheus exposition line
-// for name with the given outcome label and value, regardless of what other
-// labels (e.g. OTel's otel_scope_* resource attributes) are also present.
-func hasMetricSample(body, name, outcome string, value int) bool {
-	pattern := fmt.Sprintf(`%s\{[^}]*outcome="%s"[^}]*\}\s+%d`, regexp.QuoteMeta(name), regexp.QuoteMeta(outcome), value)
-	return regexp.MustCompile(pattern).MatchString(body)
-}
-
 func TestSetup_InstrumentsNonNil(t *testing.T) {
-	inst, handler, err := telemetry.Setup(context.Background())
+	inst, shutdown, err := telemetry.Setup(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -51,85 +40,54 @@ func TestSetup_InstrumentsNonNil(t *testing.T) {
 	if inst.JobDuration == nil {
 		t.Error("JobDuration is nil")
 	}
-	if handler == nil {
-		t.Error("metrics HTTP handler is nil")
+	if shutdown == nil {
+		t.Error("shutdown func is nil")
 	}
 }
 
-func TestSetup_MetricsScrapeable(t *testing.T) {
-	inst, handler, err := telemetry.Setup(context.Background())
+// TestSetup_InstrumentsRecordWithoutError exercises every instrument the way
+// the instrumented call sites do. otlpmetricgrpc.New dials lazily, so this
+// must succeed even with no collector sidecar listening on localhost:4317 --
+// true in this test environment and also true briefly in production before
+// the sidecar container finishes starting.
+func TestSetup_InstrumentsRecordWithoutError(t *testing.T) {
+	inst, _, err := telemetry.Setup(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	inst.SearchLatency.Record(context.Background(), 42.5,
-		metric.WithAttributes(attribute.String("status", "ok")),
-	)
-
-	req := httptest.NewRequest("GET", "/metrics", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("metrics handler: got %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !strings.Contains(body, "search_latency_ms") {
-		t.Errorf("metrics body does not contain search_latency_ms:\n%s", body)
-	}
+	ctx := context.Background()
+	inst.SearchLatency.Record(ctx, 42.5, metric.WithAttributes(attribute.String("status", "ok")))
+	inst.EmbeddingDuration.Record(ctx, 12.3)
+	inst.QueueDepth.Add(ctx, 1)
+	inst.JobFailureTotal.Add(ctx, 1)
+	inst.DocumentsUploadedTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "success")))
+	inst.DocumentsDeletedTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "failure")))
+	inst.JobDuration.Record(ctx, 123.4, metric.WithAttributes(attribute.String("outcome", "success")))
 }
 
-func TestSetup_DocumentMetricsScrapeable(t *testing.T) {
-	inst, handler, err := telemetry.Setup(context.Background())
+// TestSetup_ShutdownReturnsPromptly asserts the real production shape of a
+// best-effort push exporter: with no collector reachable, the final flush
+// attempt inside Shutdown may fail, but it must respect the caller's context
+// deadline rather than hang retrying a connection.
+func TestSetup_ShutdownReturnsPromptly(t *testing.T) {
+	_, shutdown, err := telemetry.Setup(context.Background(), "test")
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 
-	inst.DocumentsUploadedTotal.Add(context.Background(), 1,
-		metric.WithAttributes(attribute.String("outcome", "success")),
-	)
-	inst.DocumentsDeletedTotal.Add(context.Background(), 1,
-		metric.WithAttributes(attribute.String("outcome", "failure")),
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	req := httptest.NewRequest("GET", "/metrics", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	done := make(chan struct{})
+	go func() {
+		_ = shutdown(ctx)
+		close(done)
+	}()
 
-	if w.Code != 200 {
-		t.Fatalf("metrics handler: got %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	if !hasMetricSample(body, "documents_uploaded_total", "success", 1) {
-		t.Errorf("metrics body does not contain expected documents_uploaded_total sample:\n%s", body)
-	}
-	if !hasMetricSample(body, "documents_deleted_total", "failure", 1) {
-		t.Errorf("metrics body does not contain expected documents_deleted_total sample:\n%s", body)
-	}
-}
-
-func TestSetup_JobDurationScrapeable(t *testing.T) {
-	inst, handler, err := telemetry.Setup(context.Background())
-	if err != nil {
-		t.Fatalf("Setup: %v", err)
-	}
-
-	inst.JobDuration.Record(context.Background(), 123.4,
-		metric.WithAttributes(attribute.String("outcome", "success")),
-	)
-
-	req := httptest.NewRequest("GET", "/metrics", nil)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("metrics handler: got %d, want 200", w.Code)
-	}
-	body := w.Body.String()
-	// The Prometheus exporter inserts a unit suffix (e.g. "_milliseconds",
-	// from WithUnit("ms")) between the metric name and "_count".
-	pattern := regexp.MustCompile(`job_duration_ms[a-z_]*_count\{[^}]*outcome="success"[^}]*\}\s+1`)
-	if !pattern.MatchString(body) {
-		t.Errorf("metrics body does not contain expected job_duration_ms sample:\n%s", body)
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown did not return within the context deadline")
 	}
 }
