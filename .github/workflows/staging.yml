@@ -104,6 +104,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The metrics sidecar (see the "Push OTel metrics to CloudWatch" dev
+      # board card). No target platform override needed here unlike the two
+      # builds above: this Dockerfile has no build stage of its own, just
+      # COPYs a config file onto AWS's own public ADOT image, which already
+      # publishes real arm64 manifests.
+      - name: Build and push otel-collector image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.otel-collector
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/dumpster-staging-otel-collector:${{ env.TF_VAR_image_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
       - name: Init
         working-directory: terraform
         run: tofu init

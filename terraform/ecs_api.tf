@@ -170,6 +170,29 @@ resource "aws_ecs_task_definition" "api" {
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "embed-sidecar" })
       })
+    },
+    {
+      # The metrics sidecar -- see Dockerfile.otel-collector and
+      # otel-collector-config.yaml. internal/telemetry pushes OTLP over
+      # localhost:4317 to this container, which exports to CloudWatch (see
+      # the "Push OTel metrics to CloudWatch" dev board card).
+      #
+      # essential = false, deliberately unlike embed-sidecar above: this
+      # container dying degrades observability, not the ability to serve a
+      # real user request, so it must not take the whole task down with it.
+      name      = "otel-collector"
+      image     = "${data.aws_ecr_repository.otel_collector.repository_url}:${var.image_tag}"
+      essential = false
+      environment = [
+        { name = "DUMPSTER_ENV", value = var.environment },
+        { name = "DUMPSTER_SERVICE", value = "api" },
+      ]
+      portMappings = [
+        { containerPort = 4317, name = "otel-collector" }
+      ]
+      logConfiguration = merge(local.common_log_config, {
+        options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "otel-collector" })
+      })
     }
   ])
 }
