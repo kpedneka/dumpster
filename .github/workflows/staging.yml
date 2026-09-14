@@ -30,7 +30,16 @@ env:
   AWS_REGION: us-east-1
   TF_VAR_environment: staging
   TF_VAR_acm_domain_name: ${{ vars.STAGING_ACM_DOMAIN }}
-  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+  # Both run_id and run_attempt matter, not just one: run_attempt alone
+  # only covers a rerun of this same run (gh run rerun), but a relabel
+  # without a new commit produces a fresh run_id with the identical PR
+  # number + SHA -- the second real path to the same immutable-tag
+  # collision. Hit for real (run 34895777471, PR #109): a rerun after a
+  # transient tofu-plan provider fetch failure reused the un-suffixed
+  # pr-<PR#>-<sha> tag from the first attempt and got rejected outright,
+  # since dumpster-staging-runtime/-embed-sidecar are deliberately
+  # immutable-tagged.
+  TF_VAR_image_tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   # Normal path: PR carries the label (either just added, or a new commit
