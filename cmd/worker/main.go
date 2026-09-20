@@ -60,10 +60,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.ConnectDirect(ctx, cfg)
+	pool, err := connectDBWithRetry(ctx, logger, cfg)
 	if err != nil {
-		logger.Error("db connect failed", "err", err)
-		os.Exit(1)
+		logger.Info("shutdown requested while waiting for database")
+		return
 	}
 	defer pool.Close()
 
@@ -319,6 +319,45 @@ func runJobReclaimLoop(ctx context.Context, interval, staleAfter time.Duration, 
 			run()
 		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// connectDBMaxBackoff caps connectDBWithRetry's wait between attempts.
+const connectDBMaxBackoff = 30 * time.Second
+
+// connectDBWithRetry retries db.ConnectDirect with capped exponential
+// backoff until it succeeds or ctx is cancelled (a shutdown signal).
+//
+// Real incident: the worker used to os.Exit(1) on the very first failed
+// connection attempt, which was fine for a genuinely broken DSN but meant
+// that when the database was merely temporarily unreachable (down, or --
+// what actually happened in production -- a managed Postgres provider
+// auto-paused the project after its usage quota was hit), ECS just
+// crash-looped the whole task on every restart instead of the process
+// quietly waiting for the database to come back. Same "keep trying, less
+// and less often" philosophy as runLoop's own dequeue backoff
+// (internal/worker/worker.go) -- deliberately not specific to any one
+// failure cause, since a real outage and a paused/rate-limited database
+// both just show up as a connection error here too.
+func connectDBWithRetry(ctx context.Context, logger *slog.Logger, cfg *config.Config) (*pgxpool.Pool, error) {
+	backoff := time.Second
+	for {
+		pool, err := db.ConnectDirect(ctx, cfg)
+		if err == nil {
+			return pool, nil
+		}
+		logger.Error("db connect failed, retrying", "err", err, "retry_in", backoff)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > connectDBMaxBackoff {
+			backoff = connectDBMaxBackoff
 		}
 	}
 }
