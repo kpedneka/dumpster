@@ -29,6 +29,16 @@ type stubConsumer struct {
 	// call — used to prove Nack is invoked with a live context even when
 	// the job's own ctx was already cancelled by the time Handle returned.
 	lastNackCtxErr error
+	// dequeueErr, when dequeueErrCount is positive, is returned instead of
+	// ErrNoJobs/a job for that many Dequeue calls before falling back to
+	// normal job-serving behavior — simulating a database that's
+	// unreachable for a while (e.g. down, or, as in the real production
+	// incident this guards against, a managed Postgres provider that
+	// auto-paused the project after its usage quota was hit) before it
+	// recovers.
+	dequeueErr      error
+	dequeueErrCount int
+	dequeueCalls    int
 }
 
 func (c *stubConsumer) Heartbeat(_ context.Context, jobID uuid.UUID) error {
@@ -41,12 +51,23 @@ func (c *stubConsumer) Heartbeat(_ context.Context, jobID uuid.UUID) error {
 func (c *stubConsumer) Dequeue(_ context.Context) (*queue.Job, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.dequeueCalls++
+	if c.dequeueErrCount > 0 {
+		c.dequeueErrCount--
+		return nil, c.dequeueErr
+	}
 	if c.idx >= len(c.jobs) {
 		return nil, queue.ErrNoJobs
 	}
 	j := c.jobs[c.idx]
 	c.idx++
 	return j, nil
+}
+
+func (c *stubConsumer) dequeueCallCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.dequeueCalls
 }
 
 func (c *stubConsumer) Ack(_ context.Context, id uuid.UUID) error {
@@ -446,6 +467,63 @@ func TestWorker_ConcurrentJobsAcrossTenants_NoCorrectnessRegression(t *testing.T
 		if seen[j.ID] != 1 {
 			t.Errorf("job %s acked %d times, want exactly 1", j.ID, seen[j.ID])
 		}
+	}
+}
+
+// TestWorker_BacksOffOnPersistentDequeueError is a regression test for a
+// real production incident: when the database is unreachable for an
+// extended period (there, a managed Postgres provider auto-paused the
+// project after its free-tier usage quota was hit), a Dequeue error other
+// than ErrNoJobs must not spin the loop as fast as possible. Before this
+// fix it did — roughly 100 reconnect attempts/sec, each logging several
+// lines, which filled CloudWatch Logs at multiple GB/day and kept
+// hammering the database with reconnect attempts for the entire outage
+// instead of backing off and waiting it out.
+func TestWorker_BacksOffOnPersistentDequeueError(t *testing.T) {
+	consumer := &stubConsumer{
+		dequeueErr:      errors.New("dial tcp: connect: network is unreachable"),
+		dequeueErrCount: 1_000_000, // never recovers within this test's window
+	}
+	handler := &stubHandler{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	w := worker.New(consumer, handler, worker.Config{PollInterval: 5 * time.Millisecond})
+	_ = w.Run(ctx)
+
+	// With no backoff, this would be many thousands of calls in 300ms.
+	// Exponential backoff from a 5ms base keeps it in the single digits:
+	// 5+10+20+40+80+160ms already covers the whole window.
+	if got := consumer.dequeueCallCount(); got > 20 {
+		t.Errorf("Dequeue called %d times in 300ms of persistent errors, want a small bounded number — backoff isn't working", got)
+	}
+	if got := consumer.dequeueCallCount(); got < 2 {
+		t.Errorf("Dequeue called %d times, want at least a couple of retry attempts", got)
+	}
+}
+
+// TestWorker_RecoversAfterTransientDequeueError proves backoff doesn't get
+// in the way of recovery: once Dequeue starts succeeding again, the worker
+// processes the next job promptly rather than being stuck on an inflated
+// backoff delay from the earlier failures.
+func TestWorker_RecoversAfterTransientDequeueError(t *testing.T) {
+	job := &queue.Job{ID: uuid.New(), DocumentID: uuid.New(), UserID: uuid.New()}
+	consumer := &stubConsumer{
+		dequeueErr:      errors.New("dial tcp: connect: network is unreachable"),
+		dequeueErrCount: 3,
+		jobs:            []*queue.Job{job},
+	}
+	handler := &stubHandler{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	w := worker.New(consumer, handler, worker.Config{PollInterval: 5 * time.Millisecond})
+	_ = w.Run(ctx)
+
+	if len(handler.handledJobs) != 1 {
+		t.Fatalf("Handle calls: got %d, want 1 — worker should recover and process the job once Dequeue starts succeeding again", len(handler.handledJobs))
 	}
 }
 
