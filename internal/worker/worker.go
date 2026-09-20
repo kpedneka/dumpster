@@ -117,6 +117,11 @@ func (w *Worker) runLoop(ctx context.Context) error {
 	ticker := time.NewTicker(w.cfg.PollInterval)
 	defer ticker.Stop()
 
+	// consecutiveDequeueErrs drives dequeueBackoff's growing retry delay; it
+	// resets on any outcome other than an error (ErrNoJobs included, since
+	// that means the database itself answered fine).
+	var consecutiveDequeueErrs int
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -124,6 +129,7 @@ func (w *Worker) runLoop(ctx context.Context) error {
 
 		job, err := w.consumer.Dequeue(ctx)
 		if errors.Is(err, queue.ErrNoJobs) {
+			consecutiveDequeueErrs = 0
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -136,9 +142,17 @@ func (w *Worker) runLoop(ctx context.Context) error {
 				return ctx.Err()
 			}
 			log.Printf("worker: dequeue error: %v", err)
+			wait := dequeueBackoff(consecutiveDequeueErrs, w.cfg.PollInterval)
+			consecutiveDequeueErrs++
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
 			continue
 		}
 
+		consecutiveDequeueErrs = 0
 		w.process(ctx, job, time.Now())
 	}
 }
@@ -149,6 +163,47 @@ func (w *Worker) runLoop(ctx context.Context) error {
 // just reuse ctx. Generous for one DB write; short enough not to hang
 // shutdown indefinitely.
 const resolutionTimeout = 10 * time.Second
+
+// dequeueMaxBackoff caps how long runLoop waits between retries after a
+// non-ErrNoJobs Dequeue error, regardless of how many consecutive failures
+// have happened. Real incident: a managed Postgres provider auto-paused
+// the project after its usage quota was hit, and Dequeue errored on every
+// attempt for the entire outage. Without a cap on the retry delay, an
+// unbounded backoff would eventually make recovery slow to notice; capping
+// it at 30s bounds both the database's reconnect-attempt load and this
+// loop's log output to something negligible even across a multi-day
+// outage, while still noticing recovery promptly.
+const dequeueMaxBackoff = 30 * time.Second
+
+// dequeueBackoff returns how long runLoop should wait before its
+// (attempt+1)-th consecutive retry after a Dequeue error, doubling from
+// base each time and capping at dequeueMaxBackoff. attempt is the number
+// of consecutive failures observed so far (0 for the first).
+//
+// This applies identically whether the underlying cause is a genuine
+// outage or something like a paused database recovering on its own
+// schedule — the correct behavior ("keep trying, less and less often") is
+// the same in both cases, so runLoop doesn't need to tell them apart.
+func dequeueBackoff(attempt int, base time.Duration) time.Duration {
+	if base <= 0 {
+		base = time.Second
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	// 2^40 * base already exceeds dequeueMaxBackoff for any realistic base,
+	// so clamping the shift here keeps the multiplication below from ever
+	// overflowing time.Duration's int64 nanoseconds, regardless of how long
+	// an outage runs and how large attempt grows.
+	const maxShift = 40
+	if attempt > maxShift {
+		attempt = maxShift
+	}
+	if d := base * time.Duration(uint64(1)<<uint(attempt)); d > 0 && d < dequeueMaxBackoff {
+		return d
+	}
+	return dequeueMaxBackoff
+}
 
 func (w *Worker) process(ctx context.Context, job *queue.Job, started time.Time) {
 	handler, ok := w.handlers[job.Type]
