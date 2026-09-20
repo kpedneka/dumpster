@@ -203,8 +203,8 @@ resource "aws_instance" "nat" {
 
 variable "nat_instance_type" {
   type        = string
-  description = "Instance type for the NAT instance. t4g.nano is the cost baseline this was priced against; bump to t4g.micro/small if it can't keep up with real sustained traffic (Neon DB queries especially) -- cheap to resize, not worth over-provisioning up front."
-  default     = "t4g.nano"
+  description = "Instance type for the NAT instance. t4g.micro (1GiB), not the cheaper t4g.nano (512MB) this started on -- a real production boot hit the OOM killer mid-`dnf install` (user_data above): a cold instance has no repo-metadata cache yet, so resolving iptables-nft/iptables-services against the full AL2023 package set is a real, if brief, memory spike, made worse by everything else cloud-init runs concurrently at boot (SSH host-key generation, network setup, ...) on a box with no swap configured as a pressure-relief valve. Only ever hit at first boot -- this instance ran fine for days afterward -- but with no memory headroom at all, it's a real race every time this instance (or its replacement, e.g. after an AMI patch) boots cold, not a hypothetical. instance_type isn't a ForceNew attribute, so bumping this resizes the existing instance in place (AWS stops/modifies/starts it, same instance ID and ENI) rather than replacing it -- and user_data only ever runs on an instance's true first boot, so this resize does not re-run (and re-risk) the install step that failed."
+  default     = "t4g.micro"
 }
 
 # --- Private route table: 0.0.0.0/0 -> the NAT instance's network interface ---
