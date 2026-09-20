@@ -387,6 +387,56 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     ]
   }
 
+  # aws_iam_policy.bedrock_deny (bedrock_budget.tf) -- a distinct IAM
+  # resource type from the roles/instance-profiles IAMScoped already
+  # covers, with its own separate set of actions. Missing entirely until
+  # this role's first real production plan (this config has only ever
+  # been applied under a personal admin session before now) surfaced it
+  # as AccessDenied on iam:GetPolicy. GetPolicyVersion alongside it since
+  # a normal policy-document read needs both, not just the first.
+  statement {
+    sid       = "IAMPolicyScoped"
+    actions   = ["iam:GetPolicy", "iam:GetPolicyVersion"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/dumpster-*"]
+  }
+
+  # aws_bedrock_inference_profile.app (bedrock.tf) -- same "first real
+  # production plan" story as IAMPolicyScoped above. The profile ID itself
+  # (e.g. cm43ywd93mq1) is an opaque AWS-assigned value, not a
+  # dumpster-*-prefixed name this account controls, so this is scoped by
+  # resource type under this account/region rather than by name -- still
+  # materially tighter than resources = ["*"].
+  # ListTagsForResource alongside GetInferenceProfile -- a normal resource
+  # read also pulls its tags, surfaced as a second AccessDenied on the very
+  # next plan attempt after adding GetInferenceProfile alone.
+  statement {
+    sid       = "BedrockInferenceProfileRead"
+    actions   = ["bedrock:GetInferenceProfile", "bedrock:ListTagsForResource"]
+    resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"]
+  }
+
+  # aws_budgets_budget.bedrock (bedrock_budget.tf) -- same "first real
+  # production plan" story again, surfaced as AccessDenied on
+  # budgets:ViewBudget, then ListTagsForResource on the next attempt (same
+  # "normal read also pulls tags" pattern as Bedrock above). Budget ARNs
+  # have no region segment.
+  statement {
+    sid       = "BudgetsScoped"
+    actions   = ["budgets:ViewBudget", "budgets:ListTagsForResource"]
+    resources = ["arn:aws:budgets::${data.aws_caller_identity.current.account_id}:budget/dumpster-*"]
+  }
+
+  # aws_budgets_budget_action.bedrock_deny (bedrock_budget.tf) -- a Budget
+  # Action is a distinct sub-resource of a budget with its own ARN
+  # (.../budget/NAME/action/ID) and its own IAM action, not covered by
+  # BudgetsScoped above. Same "first real production plan" story, surfaced
+  # as AccessDenied on budgets:DescribeBudgetAction.
+  statement {
+    sid       = "BudgetsActionScoped"
+    actions   = ["budgets:DescribeBudgetAction"]
+    resources = ["arn:aws:budgets::${data.aws_caller_identity.current.account_id}:budget/dumpster-*/action/*"]
+  }
+
   # Defense-in-depth against the self-escalation path the header comment
   # already explains: this role's own name (dumpster-github-actions-
   # deploy) matches the dumpster-* wildcard IAMScoped grants above, so
