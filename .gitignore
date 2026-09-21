@@ -47,6 +47,11 @@ examples/
 /canonicalize
 /cleanup
 
+# Lambda deploy artifacts (terraform/lambda_stateless_jobs.tf's
+# archive_file source) -- built by the CI/deploy pipeline immediately
+# before `tofu apply`, never meant to be checked in.
+/build/
+
 # Terraform local state and provider cache -- machine-specific, never
 # checked in. terraform/.terraform.lock.hcl (the provider version lock
 # file) is NOT ignored -- that one is meant to be committed. Matches
