@@ -38,6 +38,15 @@ terraform {
       source  = "cloudflare/cloudflare"
       version = "~> 5.0"
     }
+    # Zips the Go binary lambda_stateless_jobs.tf's aws_lambda_function
+    # deploys -- Terraform can't compile Go itself, so this only packages
+    # a bootstrap binary the CI/deploy pipeline builds before `tofu apply`
+    # runs (same "built and pushed before apply" ordering the Docker
+    # images already follow).
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 }
 

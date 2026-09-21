@@ -130,6 +130,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # Built before `tofu apply`, same ordering reasoning as the three
+      # Docker images above: terraform/lambda_stateless_jobs.tf's
+      # archive_file just zips whatever's already on disk at this path,
+      # it can't compile Go itself.
+      #
+      # GOARCH=arm64, matching every other compute resource in this
+      # config (runtime_platform blocks, the NAT instance's Graviton
+      # instance type) -- and CGO_ENABLED=0 for a fully static binary,
+      # since Lambda's provided.al2023 runtime has no guarantee of the
+      # same shared libraries a `go build` might otherwise dynamically
+      # link against.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build lambda-stateless-jobs
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+
       - name: Init
         working-directory: terraform
         run: tofu init

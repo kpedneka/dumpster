@@ -163,6 +163,18 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       # anticipated ahead of time. Same story as acm:ListTagsForCertificate
       # above.
       "cloudfront:*",
+      # terraform/lambda_stateless_jobs.tf's aws_lambda_function and its
+      # two aws_lambda_event_source_mapping resources. Not scoped to a
+      # dumpster-* function ARN pattern the way ECR/S3/SQS are (see those
+      # statements below): an event source mapping's own ARN is an
+      # AWS-assigned UUID, not something nameable ahead of time the way a
+      # queue or bucket name is, so lambda:CreateEventSourceMapping et al
+      # need the same "no meaningful resource-level scoping" treatment as
+      # ecs/ec2/batch above, not a narrower one. PassRole to hand the
+      # execution role to the Lambda service is covered by IAMScoped
+      # below (that role's name matches the dumpster-* pattern), not
+      # repeated here.
+      "lambda:*",
     ]
     resources = ["*"]
   }
@@ -246,18 +258,22 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       "logs:UntagLogGroup",
       "logs:ListTagsLogGroup",
     ]
-    # Scoped to two path prefixes, not one -- /ecs/dumpster-* is the
+    # Scoped to several path prefixes, not one -- /ecs/dumpster-* is the
     # original shared app log group; /aws/dumpster/* covers the newer
     # otel-metrics groups (ecs_otel_collector.tf) added by a later card,
     # which this statement didn't originally match at all (surfaced as
     # AccessDenied on logs:CreateLogGroup during that card's first real
     # apply). /aws/batch/job (imported, not created, by logs_batch.tf) is
     # a third, unrelated prefix that also needs this same statement's
-    # actions.
+    # actions. /aws/lambda/dumpster-* is the fourth, added for
+    # terraform/lambda_stateless_jobs.tf's aws_cloudwatch_log_group --
+    # AWS's own fixed naming convention for a Lambda function's log
+    # group, not something this config chooses.
     resources = [
       "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/ecs/dumpster-*",
       "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/dumpster/*",
       "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/batch/job",
+      "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/dumpster-*",
     ]
   }
 
@@ -320,6 +336,15 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       # secret's resource policy, not just its metadata -- same "only
       # found by a real plan run" story as the two grants above.
       "secretsmanager:GetResourcePolicy",
+      # terraform/lambda_stateless_jobs.tf's two
+      # aws_secretsmanager_secret_version data sources -- unlike every
+      # other consumer of these secrets (ECS's `secrets` block resolves
+      # valueFrom at container start via the ECS agent, never through
+      # this role at all), a Lambda's environment variables are static
+      # values this config has to read itself at plan/apply time. See
+      # that file's comment on the tradeoff this implies for Terraform
+      # state.
+      "secretsmanager:GetSecretValue",
     ]
     resources = ["arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:dumpster/*"]
   }
