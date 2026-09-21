@@ -155,7 +155,10 @@ resource "aws_lambda_function" "stateless_jobs" {
 
   environment {
     variables = {
-      AWS_REGION          = var.aws_region
+      # AWS_REGION is a Lambda-reserved key the runtime sets automatically;
+      # explicitly setting it here fails CreateFunction with
+      # InvalidParameterValueException. Reads of AWS_REGION in Go still see
+      # the right value -- Lambda populates it either way.
       LLM_PROVIDER        = local.llm_provider
       BEDROCK_MODEL_ID    = local.bedrock_model_id
       ANTHROPIC_MODEL     = var.anthropic_model
