@@ -35,6 +35,8 @@
 provider "cloudflare" {}
 
 data "cloudflare_zone" "kpednekar_dev" {
+  count = var.environment == "staging" ? 1 : 0
+
   filter = {
     name = "kpednekar.dev"
   }
@@ -43,7 +45,7 @@ data "cloudflare_zone" "kpednekar_dev" {
 resource "cloudflare_dns_record" "staging" {
   count = var.environment == "staging" ? 1 : 0
 
-  zone_id = data.cloudflare_zone.kpednekar_dev.zone_id
+  zone_id = data.cloudflare_zone.kpednekar_dev[0].zone_id
   name    = var.acm_domain_name
   type    = "CNAME"
   content = aws_cloudfront_distribution.frontend.domain_name
