@@ -43,6 +43,17 @@ resource "aws_ecs_task_definition" "worker" {
         { name = "REGIONS_BATCH_JOB_QUEUE", value = aws_batch_job_queue.embedding.name },
         { name = "REGIONS_BATCH_JOB_DEFINITION", value = aws_batch_job_definition.region_extraction.name },
         { name = "WORKER_CONCURRENCY", value = "5" },
+        # TEMPORARY mitigation, not the real fix -- see internal/config's
+        # WorkerPollInterval doc. The worker's poll loop has no backoff on
+        # an empty queue, so its 1s default never gives Neon's auto-suspend
+        # (~5m of inactivity) a chance to fire, keeping the compute endpoint
+        # billed 24/7 regardless of real traffic -- the exact incident the
+        # "Event-Driven Job Orchestration" migration exists to fix for
+        # good. 1h buys real headroom while there's effectively no real
+        # traffic yet. Remove this, the config field, and this comment once
+        # that migration's cutover (workstream D) decommissions this
+        # worker entirely -- tracked as its own dev board card.
+        { name = "WORKER_POLL_INTERVAL", value = "1h" },
         { name = "ENTITY_EXTRACTION_BATCH_SIZE", value = "50" },
         # No S3_SCRATCH_ENDPOINT and no access-key secrets, same reasoning
         # as the documents bucket in ecs_api.tf's shared_environment: real
