@@ -185,6 +185,26 @@ type Config struct {
 	// embedding a warm Python subprocess in this process — see
 	// worker.Config.Concurrency's doc for why raising this used to be unsafe.
 	WorkerConcurrency int
+	// WorkerPollInterval overrides worker.Config.PollInterval (which
+	// otherwise defaults to a hardcoded 1s with no backoff on an empty
+	// queue -- see worker.go's runLoop). Zero means unset, leaving that
+	// 1s default in place, which is what every local/test run gets.
+	//
+	// TEMPORARY, stopgap mitigation -- not the real fix. The real fix is
+	// the "Event-Driven Job Orchestration" migration (workstream C/D on
+	// the dev board) replacing this poll loop with SQS + Lambda + Step
+	// Functions entirely, so nothing queries Postgres on a timer at all.
+	// Until that cutover lands, this knob is how staging/production are
+	// kept from re-exhausting Neon's free-tier compute-hour budget: a 1s
+	// poll never gives Neon's auto-suspend (default ~5m of inactivity) a
+	// chance to fire, so the compute endpoint stays billed 24/7 regardless
+	// of real traffic -- the exact incident the dev board's migration
+	// writeup describes. Set to something longer than that suspend
+	// threshold (e.g. 1h) in environments with near-zero real traffic so
+	// Neon can actually go idle between polls. Delete this field, its env
+	// var, and the terraform wiring once workstream D decommissions this
+	// worker -- tracked as its own dev board card so it isn't forgotten.
+	WorkerPollInterval time.Duration
 	// JobStaleTimeout is how long a job may sit claimed ("processing")
 	// before it's treated as orphaned and reclaimed back to "pending" on
 	// the same ticker as the session sweep. Guards against a job stuck
@@ -298,6 +318,7 @@ func Load() *Config {
 		QueueMetricsPublishInterval: getEnvDuration("QUEUE_METRICS_PUBLISH_INTERVAL", 60*time.Second),
 		JobStaleTimeout:             getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
 		WorkerConcurrency:           getEnvInt("WORKER_CONCURRENCY", 5),
+		WorkerPollInterval:          getEnvDuration("WORKER_POLL_INTERVAL", 0),
 
 		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
 		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),

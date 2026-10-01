@@ -111,3 +111,18 @@ func TestLoad_jobStaleTimeoutFromEnv(t *testing.T) {
 		t.Errorf("JobStaleTimeout: got %v, want 10m", c.JobStaleTimeout)
 	}
 }
+
+func TestLoad_workerPollIntervalDefault(t *testing.T) {
+	c := Load()
+	if c.WorkerPollInterval != 0 {
+		t.Errorf("WorkerPollInterval default: got %v, want 0 (unset -- worker.New falls back to its own 1s default)", c.WorkerPollInterval)
+	}
+}
+
+func TestLoad_workerPollIntervalFromEnv(t *testing.T) {
+	t.Setenv("WORKER_POLL_INTERVAL", "1h")
+	c := Load()
+	if c.WorkerPollInterval != time.Hour {
+		t.Errorf("WorkerPollInterval: got %v, want 1h", c.WorkerPollInterval)
+	}
+}

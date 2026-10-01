@@ -215,7 +215,7 @@ func main() {
 		WithAliasJudge(aliasJudge).
 		WithCrossLink(crosslinkRepo, crosslinkExtractor, 0)
 
-	w := worker.New(q, docHandler, worker.Config{Instruments: instruments, Concurrency: cfg.WorkerConcurrency})
+	w := worker.New(q, docHandler, worker.Config{Instruments: instruments, Concurrency: cfg.WorkerConcurrency, PollInterval: cfg.WorkerPollInterval})
 	w.RegisterHandler(queue.JobTypeRegionClassification, regionHandler)
 	w.RegisterHandler(queue.JobTypeEntityExtraction, entityHandler)
 	w.RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler)
