@@ -180,6 +180,9 @@ func TestTenantIsolation(t *testing.T) {
 	if active := activeFor(t, s, other, docID); len(active) != 0 {
 		t.Errorf("another user sees %+v, want nothing", active)
 	}
+	if _, err := s.Enqueue(ctx, key(other, docID, queue.JobTypeDocumentIndexing)); !errors.Is(err, jobstatus.ErrNotFound) {
+		t.Errorf("another user's Enqueue err = %v, want ErrNotFound", err)
+	}
 	if err := s.MarkFailed(ctx, key(other, docID, queue.JobTypeDocumentIndexing), 1, "x"); !errors.Is(err, jobstatus.ErrNotFound) {
 		t.Errorf("another user's MarkFailed err = %v, want ErrNotFound", err)
 	}
