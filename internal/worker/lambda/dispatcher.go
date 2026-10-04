@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 
+	"github.com/kunalpednekar/dumpster/internal/jobstatus"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
@@ -33,11 +34,21 @@ type message struct {
 	UserID     uuid.UUID     `json:"user_id"`
 }
 
+// StatusWriter is the part of jobstatus.Writer the dispatcher uses.
+type StatusWriter interface {
+	MarkProcessing(ctx context.Context, key jobstatus.Key, attempt int) error
+	MarkSucceeded(ctx context.Context, key jobstatus.Key, attempt int) error
+	MarkFailed(ctx context.Context, key jobstatus.Key, attempt int, reason string) error
+}
+
 // Dispatcher routes each SQS record to the worker.Handler registered for
 // its JobType.
 type Dispatcher struct {
 	handlers map[queue.JobType]worker.Handler
 }
+
+// WithStatus records job status (stub).
+func (d *Dispatcher) WithStatus(status StatusWriter, maxReceiveCount int) *Dispatcher { return d }
 
 // NewDispatcher returns a Dispatcher with no handlers registered; use
 // RegisterHandler to add one per queue.JobType this Lambda should process.

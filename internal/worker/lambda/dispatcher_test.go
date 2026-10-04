@@ -22,12 +22,18 @@ type fakeHandler struct {
 	handleErr   error
 	handledJobs []*queue.Job
 	failedJobs  []*queue.Job
+	// onHandle, when set, runs inside Handle, so a test can observe state
+	// while the job is running.
+	onHandle func()
 }
 
 func (h *fakeHandler) Handle(_ context.Context, job *queue.Job) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.handledJobs = append(h.handledJobs, job)
+	if h.onHandle != nil {
+		h.onHandle()
+	}
 	return h.handleErr
 }
 
