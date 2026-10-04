@@ -333,7 +333,12 @@ func Load() *Config {
 		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
 		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),
 
-		EntityExtractionBatchSize: getEnvInt("ENTITY_EXTRACTION_BATCH_SIZE", 50),
+		EntityExtractionBatchSize:           getEnvInt("ENTITY_EXTRACTION_BATCH_SIZE", 50),
+		DocumentIndexingStateMachineARN:     getEnv("DOCUMENT_INDEXING_STATE_MACHINE_ARN", ""),
+		EntityExtractionStateMachineARN:     getEnv("ENTITY_EXTRACTION_STATE_MACHINE_ARN", ""),
+		RegionClassificationStateMachineARN: getEnv("REGION_CLASSIFICATION_STATE_MACHINE_ARN", ""),
+		EdgeExtractionQueueURL:              getEnv("EDGE_EXTRACTION_QUEUE_URL", ""),
+		CanonicalizationQueueURL:            getEnv("CANONICALIZATION_QUEUE_URL", ""),
 	}
 }
 
