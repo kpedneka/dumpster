@@ -12,6 +12,8 @@ package pipeline
 
 import (
 	"errors"
+
+	"github.com/kunalpednekar/dumpster/internal/jobstatus"
 )
 
 // TransientErrorName is the error name a state machine's Retry lists to
@@ -57,4 +59,48 @@ func ForLambda(err error) error {
 		return err
 	}
 	return &TransientError{Err: err}
+}
+
+// MaxReasonLen caps the failure reason a step stores in Postgres; a Batch
+// or Lambda Cause can carry a long stack trace.
+const MaxReasonLen = 2000
+
+// StepError is what a state's Catch records at $.error: the error name
+// (e.g. States.TaskFailed, TransientError) and its cause.
+type StepError struct {
+	Error string `json:"Error"`
+	Cause string `json:"Cause"`
+}
+
+// Reason formats e as the failure reason to store, "<Error>: <Cause>",
+// capped at MaxReasonLen. A nil e reads as an unknown failure.
+func (e *StepError) Reason() string {
+	if e == nil {
+		return "unknown failure"
+	}
+	reason := e.Error + ": " + e.Cause
+	if len(reason) > MaxReasonLen {
+		reason = reason[:MaxReasonLen]
+	}
+	return reason
+}
+
+// Superseded reports whether err, from a jobstatus.Writer call, means the
+// step's attempt is no longer the current one or has already finished. A
+// step that sees this should stop without changing anything, since a
+// newer attempt owns the document now.
+func Superseded(err error) bool {
+	return errors.Is(err, jobstatus.ErrAttemptSuperseded) || errors.Is(err, jobstatus.ErrNotActive)
+}
+
+// TransientUnless marks err transient unless it is one of the given
+// deterministic errors, such as a record that no longer exists, which
+// would fail the same way on every retry.
+func TransientUnless(err error, deterministic ...error) error {
+	for _, d := range deterministic {
+		if errors.Is(err, d) {
+			return err
+		}
+	}
+	return Transient(err)
 }

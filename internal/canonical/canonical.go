@@ -85,7 +85,9 @@ type Repository interface {
 	// the document's existing mentions, decrements MentionCount by that
 	// document's mention count for it and DocumentCount by 1, deleting the
 	// canonical row if MentionCount reaches zero. It is a no-op for a
-	// document with no canonicalized mentions (e.g. a first-ever run).
+	// document with no canonicalized mentions (e.g. a first-ever run), and
+	// it unlinks the document's mentions as it goes, so calling it again
+	// before they're deleted is also a no-op rather than a double count.
 	//
 	// Must be called before the document's entities are deleted (explicit
 	// document delete, or entity-extraction re-run) — the mention →

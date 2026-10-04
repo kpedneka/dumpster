@@ -118,10 +118,7 @@ type Prepared struct {
 }
 
 // StepError is what a state's Catch records at $.error.
-type StepError struct {
-	Error string `json:"Error"`
-	Cause string `json:"Cause"`
-}
+type StepError = pipeline.StepError
 
 // Deps are the Handler's collaborators. Stats is optional.
 type Deps struct {
@@ -166,10 +163,6 @@ type embedResponse struct {
 	Embeddings [][]float32 `json:"embeddings"`
 }
 
-// maxReasonLen caps the failure reason stored in Postgres; a Batch or
-// Lambda Cause can carry a long stack trace.
-const maxReasonLen = 2000
-
 // Handle routes ev to its step. It's the Lambda handler's body: errors
 // come back through pipeline.ForLambda, so transient ones reach the state
 // machine as TransientError.
@@ -193,12 +186,6 @@ func (in Input) key() jobstatus.Key {
 	return jobstatus.Key{UserID: in.UserID, DocumentID: in.DocumentID, JobType: queue.JobTypeDocumentIndexing}
 }
 
-// superseded reports whether err means this attempt is no longer the
-// current one, or has already finished.
-func superseded(err error) bool {
-	return errors.Is(err, jobstatus.ErrAttemptSuperseded) || errors.Is(err, jobstatus.ErrNotActive)
-}
-
 // Prepare marks the attempt processing, splits the document into chunks,
 // persists them without embeddings, publishes entity extraction, and
 // stages the chunk texts for the embedding job.
@@ -206,15 +193,15 @@ func (h *Handler) Prepare(ctx context.Context, in Input) (Prepared, error) {
 	ctx = auth.WithUserID(ctx, in.UserID)
 
 	if err := h.deps.Status.MarkProcessing(ctx, in.key(), in.Attempt); err != nil {
-		if superseded(err) {
+		if pipeline.Superseded(err) {
 			return Prepared{Stale: true}, nil
 		}
-		return Prepared{}, fmt.Errorf("docindex: prepare: mark processing: %w", transientUnless(err, jobstatus.ErrNotFound))
+		return Prepared{}, fmt.Errorf("docindex: prepare: mark processing: %w", pipeline.TransientUnless(err, jobstatus.ErrNotFound))
 	}
 
 	doc, err := h.deps.Docs.Get(ctx, in.UserID, in.DocumentID)
 	if err != nil {
-		return Prepared{}, fmt.Errorf("docindex: prepare: get document %s: %w", in.DocumentID, transientUnless(err, document.ErrNotFound))
+		return Prepared{}, fmt.Errorf("docindex: prepare: get document %s: %w", in.DocumentID, pipeline.TransientUnless(err, document.ErrNotFound))
 	}
 	if doc.Status == document.StatusIndexed {
 		return Prepared{AlreadyIndexed: true}, nil
@@ -334,8 +321,8 @@ func (h *Handler) Finalize(ctx context.Context, in Input) error {
 		}
 	}
 
-	if err := h.deps.Status.MarkSucceeded(ctx, in.key(), in.Attempt); err != nil && !superseded(err) {
-		return fmt.Errorf("docindex: finalize: mark succeeded: %w", transientUnless(err, jobstatus.ErrNotFound))
+	if err := h.deps.Status.MarkSucceeded(ctx, in.key(), in.Attempt); err != nil && !pipeline.Superseded(err) {
+		return fmt.Errorf("docindex: finalize: mark succeeded: %w", pipeline.TransientUnless(err, jobstatus.ErrNotFound))
 	}
 
 	h.deleteStaged(ctx, p)
@@ -378,7 +365,7 @@ func (h *Handler) backfillEmbeddings(ctx context.Context, in Input, p *Prepared)
 func (h *Handler) markIndexed(ctx context.Context, in Input) error {
 	doc, err := h.deps.Docs.Get(ctx, in.UserID, in.DocumentID)
 	if err != nil {
-		return fmt.Errorf("get document %s: %w", in.DocumentID, transientUnless(err, document.ErrNotFound))
+		return fmt.Errorf("get document %s: %w", in.DocumentID, pipeline.TransientUnless(err, document.ErrNotFound))
 	}
 	if doc.Status == document.StatusIndexed {
 		return nil
@@ -401,17 +388,9 @@ func (h *Handler) markIndexed(ctx context.Context, in Input) error {
 func (h *Handler) RecordFailure(ctx context.Context, in Input) error {
 	ctx = auth.WithUserID(ctx, in.UserID)
 
-	reason := "unknown failure"
-	if in.Error != nil {
-		reason = in.Error.Error + ": " + in.Error.Cause
-	}
-	if len(reason) > maxReasonLen {
-		reason = reason[:maxReasonLen]
-	}
-
-	err := h.deps.Status.MarkFailed(ctx, in.key(), in.Attempt, reason)
+	err := h.deps.Status.MarkFailed(ctx, in.key(), in.Attempt, in.Error.Reason())
 	switch {
-	case superseded(err):
+	case pipeline.Superseded(err):
 		return nil
 	case err != nil && !errors.Is(err, jobstatus.ErrNotFound):
 		return fmt.Errorf("docindex: record failure: mark attempt failed: %w", pipeline.Transient(err))
@@ -437,15 +416,4 @@ func (h *Handler) deleteStaged(ctx context.Context, p *Prepared) {
 			_ = h.deps.Objects.Delete(ctx, key)
 		}
 	}
-}
-
-// transientUnless marks err transient unless it is one of the given
-// deterministic errors, e.g. a record that no longer exists.
-func transientUnless(err error, deterministic ...error) error {
-	for _, d := range deterministic {
-		if errors.Is(err, d) {
-			return err
-		}
-	}
-	return pipeline.Transient(err)
 }
