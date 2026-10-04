@@ -1,0 +1,178 @@
+{
+  "Comment": "Extracts entities from one document's chunks: plan the batches, run one AWS Batch job per batch in parallel, persist each batch's entities as it finishes, then queue edge extraction and canonicalization. Started by internal/queue/dispatch with input {type, document_id, user_id, attempt}; the Lambda steps are internal/pipeline/entityextract.",
+  "StartAt": "Plan",
+  "States": {
+    "Plan": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "plan",
+        "run.$": "$"
+      },
+      "ResultPath": "$.plan",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "TransientError"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "ExtractBatches"
+    },
+    "ExtractBatches": {
+      "Type": "Map",
+      "ItemsPath": "$.plan.batches",
+      "ItemSelector": {
+        "run": {
+          "type.$": "$.type",
+          "document_id.$": "$.document_id",
+          "user_id.$": "$.user_id",
+          "attempt.$": "$.attempt"
+        },
+        "batch.$": "$$.Map.Item.Value"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "PresignBatch",
+        "States": {
+          "PresignBatch": {
+            "Type": "Task",
+            "Resource": "${lambda_arn}",
+            "Parameters": {
+              "step": "presign_batch",
+              "run.$": "$.run",
+              "batch.$": "$.batch"
+            },
+            "ResultPath": "$.urls",
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "TransientError"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "ExtractBatch"
+          },
+          "ExtractBatch": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobName.$": "$.urls.job_name",
+              "JobQueue": "${entity_job_queue}",
+              "JobDefinition": "${entity_job_definition}",
+              "ContainerOverrides": {
+                "Environment": [
+                  {
+                    "Name": "CHUNKS_URL",
+                    "Value.$": "$.urls.chunks_url"
+                  },
+                  {
+                    "Name": "RESULT_URL",
+                    "Value.$": "$.urls.result_url"
+                  }
+                ]
+              }
+            },
+            "ResultPath": null,
+            "Retry": [
+              {
+                "ErrorEquals": ["Batch.ServerException", "Batch.AWSBatchException"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "PersistBatch"
+          },
+          "PersistBatch": {
+            "Type": "Task",
+            "Resource": "${lambda_arn}",
+            "Parameters": {
+              "step": "persist_batch",
+              "run.$": "$.run",
+              "batch.$": "$.batch"
+            },
+            "ResultPath": null,
+            "Retry": [
+              {
+                "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "TransientError"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "Finalize"
+    },
+    "Finalize": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "finalize",
+        "run.$": "$"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "TransientError"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "End": true
+    },
+    "RecordFailure": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "record_failure",
+        "run.$": "$"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException", "TransientError"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "EntityExtractionFailed",
+      "Cause": "The failure is recorded in document_job_status."
+    }
+  }
+}
