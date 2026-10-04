@@ -100,12 +100,12 @@ func (h *CanonicalizationHandler) Handle(ctx context.Context, job *queue.Job) er
 
 	doc, err := h.docs.Get(ctx, job.UserID, job.DocumentID)
 	if err != nil {
-		return fmt.Errorf("canonicalizationhandler: get document %s: %w", job.DocumentID, err)
+		return fmt.Errorf("canonicalizationhandler: get document %s: %w", job.DocumentID, retryable(err))
 	}
 
 	mentions, err := h.entities.ListByDocument(ctx, job.UserID, job.DocumentID)
 	if err != nil {
-		return fmt.Errorf("canonicalizationhandler: list entities for document %s: %w", job.DocumentID, err)
+		return fmt.Errorf("canonicalizationhandler: list entities for document %s: %w", job.DocumentID, retryable(err))
 	}
 	if len(mentions) == 0 {
 		return nil
@@ -113,18 +113,18 @@ func (h *CanonicalizationHandler) Handle(ctx context.Context, job *queue.Job) er
 
 	resolved, err := canonical.ResolveNew(ctx, h.canonical, h.entities, job.UserID, mentions)
 	if err != nil {
-		return fmt.Errorf("canonicalizationhandler: resolve document %s: %w", job.DocumentID, err)
+		return fmt.Errorf("canonicalizationhandler: resolve document %s: %w", job.DocumentID, retryable(err))
 	}
 
 	if h.aliasJudge != nil && len(resolved) > 0 {
 		if err := canonical.ResolveAliases(ctx, h.canonical, job.UserID, doc.KBID, resolved, h.aliasJudge); err != nil {
-			return fmt.Errorf("canonicalizationhandler: resolve aliases for document %s: %w", job.DocumentID, err)
+			return fmt.Errorf("canonicalizationhandler: resolve aliases for document %s: %w", job.DocumentID, retryable(err))
 		}
 	}
 
 	if h.crossLinkRepo != nil && h.crossLinker != nil {
 		if err := h.runCrossLink(ctx, job.UserID, doc.KBID); err != nil {
-			return fmt.Errorf("canonicalizationhandler: cross-chunk linking for document %s: %w", job.DocumentID, err)
+			return fmt.Errorf("canonicalizationhandler: cross-chunk linking for document %s: %w", job.DocumentID, retryable(err))
 		}
 	}
 

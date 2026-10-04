@@ -55,12 +55,12 @@ func (h *EdgeHandler) Handle(ctx context.Context, job *queue.Job) error {
 
 	doc, err := h.docs.Get(ctx, job.UserID, job.DocumentID)
 	if err != nil {
-		return fmt.Errorf("edgehandler: get document %s: %w", job.DocumentID, err)
+		return fmt.Errorf("edgehandler: get document %s: %w", job.DocumentID, retryable(err))
 	}
 
 	allEntities, err := h.entities.ListByDocument(ctx, job.UserID, job.DocumentID)
 	if err != nil {
-		return fmt.Errorf("edgehandler: list entities for document %s: %w", job.DocumentID, err)
+		return fmt.Errorf("edgehandler: list entities for document %s: %w", job.DocumentID, retryable(err))
 	}
 
 	// Group entities by their source chunk.
@@ -89,7 +89,7 @@ func (h *EdgeHandler) Handle(ctx context.Context, job *queue.Job) error {
 	}
 
 	if err := h.edges.DeleteByDocument(ctx, job.UserID, job.DocumentID); err != nil {
-		return fmt.Errorf("edgehandler: clear existing edges: %w", err)
+		return fmt.Errorf("edgehandler: clear existing edges: %w", retryable(err))
 	}
 
 	if len(edges) == 0 {
@@ -97,7 +97,7 @@ func (h *EdgeHandler) Handle(ctx context.Context, job *queue.Job) error {
 	}
 
 	if err := h.edges.BulkCreate(ctx, edges); err != nil {
-		return fmt.Errorf("edgehandler: persist edges: %w", err)
+		return fmt.Errorf("edgehandler: persist edges: %w", retryable(err))
 	}
 
 	return nil

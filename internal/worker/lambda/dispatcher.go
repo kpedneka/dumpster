@@ -14,11 +14,18 @@ package lambda
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
+	"strconv"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 
+	"github.com/kunalpednekar/dumpster/internal/auth"
+
+	"github.com/kunalpednekar/dumpster/internal/jobstatus"
+	"github.com/kunalpednekar/dumpster/internal/pipeline"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/worker"
 )
@@ -31,12 +38,37 @@ type message struct {
 	Type       queue.JobType `json:"type"`
 	DocumentID uuid.UUID     `json:"document_id"`
 	UserID     uuid.UUID     `json:"user_id"`
+	// Attempt is the job's attempt number in the status store; 0 for a
+	// message published before attempts existed, which runs untracked.
+	Attempt int `json:"attempt"`
+}
+
+// StatusWriter is the part of jobstatus.Writer the dispatcher uses.
+type StatusWriter interface {
+	MarkProcessing(ctx context.Context, key jobstatus.Key, attempt int) error
+	MarkSucceeded(ctx context.Context, key jobstatus.Key, attempt int) error
+	MarkFailed(ctx context.Context, key jobstatus.Key, attempt int, reason string) error
 }
 
 // Dispatcher routes each SQS record to the worker.Handler registered for
 // its JobType.
 type Dispatcher struct {
-	handlers map[queue.JobType]worker.Handler
+	handlers        map[queue.JobType]worker.Handler
+	status          StatusWriter
+	maxReceiveCount int
+}
+
+// maxReasonLen caps the failure reason stored in the status record.
+const maxReasonLen = 2000
+
+// WithStatus makes the dispatcher record each job's progress in status
+// (see HandleSQSEvent). maxReceiveCount must match the queues' redrive
+// policy (terraform/queue_sqs.tf), so the dispatcher knows which delivery
+// is the last one SQS will make.
+func (d *Dispatcher) WithStatus(status StatusWriter, maxReceiveCount int) *Dispatcher {
+	d.status = status
+	d.maxReceiveCount = maxReceiveCount
+	return d
 }
 
 // NewDispatcher returns a Dispatcher with no handlers registered; use
@@ -62,15 +94,20 @@ func (d *Dispatcher) RegisterHandler(jobType queue.JobType, handler worker.Handl
 // the whole invocation, so only the records that actually failed go back
 // on the queue for redelivery, not the ones that already succeeded.
 //
-// OnFailed is deliberately never called from here: the ECS worker calls
-// it after Postgres Nack exhausts MaxAttempts, a decision made inside
-// that same call. SQS's equivalent (a message exhausting its redrive
-// policy and landing in the DLQ) happens entirely outside this Lambda's
-// invocation, with no hook back into the code that ran — there is
-// nothing here to call OnFailed from. See the "Event-Driven Job
-// Orchestration" dev board for the known gap this leaves (low-stakes
-// today: every handler registered by this package's current callers
-// only logs in OnFailed, never touches persisted state).
+// With a status store (WithStatus) and a message carrying an attempt, each
+// job's progress is recorded the same way the state machines record theirs:
+//   - processing before the handler runs, succeeded after;
+//   - a message for an attempt the user has since retried is acknowledged
+//     without running;
+//   - a failure is redelivered only if it's transient (pipeline.Transient)
+//     and SQS has deliveries left. Otherwise it's recorded as failed (the
+//     UI's retry button acts on that), OnFailed runs, and the message is
+//     acknowledged, so a failure that can't improve isn't retried.
+//   - A failed status write is redelivered, so it gets recorded.
+//
+// The dead-letter queue remains the backstop for messages that never reach
+// a handler (a malformed body, an unregistered job type) and for messages
+// without an attempt.
 func (d *Dispatcher) HandleSQSEvent(ctx context.Context, event events.SQSEvent) (events.SQSEventResponse, error) {
 	var resp events.SQSEventResponse
 	for _, record := range event.Records {
@@ -94,9 +131,62 @@ func (d *Dispatcher) handleRecord(ctx context.Context, record events.SQSMessage)
 		return fmt.Errorf("worker/lambda: no handler registered for job type %q (message %s)", msg.Type, record.MessageId)
 	}
 
-	job := &queue.Job{Type: msg.Type, DocumentID: msg.DocumentID, UserID: msg.UserID}
-	if err := handler.Handle(ctx, job); err != nil {
-		return fmt.Errorf("worker/lambda: handle %s job for document %s: %w", msg.Type, msg.DocumentID, err)
+	ctx = auth.WithUserID(ctx, msg.UserID)
+	key := jobstatus.Key{UserID: msg.UserID, DocumentID: msg.DocumentID, JobType: msg.Type}
+	tracked := d.status != nil && msg.Attempt > 0
+	if tracked {
+		err := d.status.MarkProcessing(ctx, key, msg.Attempt)
+		switch {
+		case superseded(err):
+			log.Printf("worker/lambda: skipping %s for document %s: attempt %d is no longer current", msg.Type, msg.DocumentID, msg.Attempt)
+			return nil
+		case errors.Is(err, jobstatus.ErrNotFound):
+			tracked = false // the publisher never recorded this job; run it untracked
+		case err != nil:
+			return fmt.Errorf("worker/lambda: mark %s processing for document %s: %w", msg.Type, msg.DocumentID, err)
+		}
 	}
+
+	job := &queue.Job{Type: msg.Type, DocumentID: msg.DocumentID, UserID: msg.UserID}
+	handleErr := handler.Handle(ctx, job)
+	if handleErr == nil {
+		if tracked {
+			if err := d.status.MarkSucceeded(ctx, key, msg.Attempt); err != nil && !superseded(err) {
+				return fmt.Errorf("worker/lambda: mark %s succeeded for document %s: %w", msg.Type, msg.DocumentID, err)
+			}
+		}
+		return nil
+	}
+
+	handleErr = fmt.Errorf("worker/lambda: handle %s job for document %s: %w", msg.Type, msg.DocumentID, handleErr)
+	if !tracked || (pipeline.IsTransient(handleErr) && receiveCount(record) < d.maxReceiveCount) {
+		return handleErr
+	}
+
+	reason := handleErr.Error()
+	if len(reason) > maxReasonLen {
+		reason = reason[:maxReasonLen]
+	}
+	if err := d.status.MarkFailed(ctx, key, msg.Attempt, reason); err != nil && !superseded(err) {
+		return errors.Join(handleErr, fmt.Errorf("worker/lambda: record failure: %w", err))
+	}
+	handler.OnFailed(ctx, job)
+	log.Printf("worker/lambda: %v (attempt %d failed permanently)", handleErr, msg.Attempt)
 	return nil
+}
+
+// superseded reports whether err means the attempt is no longer current or
+// has already finished.
+func superseded(err error) bool {
+	return errors.Is(err, jobstatus.ErrAttemptSuperseded) || errors.Is(err, jobstatus.ErrNotActive)
+}
+
+// receiveCount is how many times SQS has delivered record, counting this
+// delivery. It defaults to 1 if the attribute is missing.
+func receiveCount(record events.SQSMessage) int {
+	n, err := strconv.Atoi(record.Attributes["ApproximateReceiveCount"])
+	if err != nil || n < 1 {
+		return 1
+	}
+	return n
 }
