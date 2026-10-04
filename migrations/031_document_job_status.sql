@@ -13,7 +13,7 @@
 CREATE TABLE document_job_status (
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     job_type    TEXT NOT NULL,
-    user_id     UUID NOT NULL REFERENCES users(id)     ON DELETE CASCADE,
+    user_id     UUID NOT NULL REFERENCES sessions(id)  ON DELETE CASCADE,
     status      TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'succeeded', 'failed')),
     phase       TEXT,
     attempt     INT  NOT NULL CHECK (attempt >= 1),
