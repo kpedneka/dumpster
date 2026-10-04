@@ -100,7 +100,10 @@ func (s *Store) Canonicalize(ctx context.Context, mentions []*entity.Entity) (ma
 
 // DecrementForDocument reverses documentID's current contribution to
 // canonical entity stats, deleting any canonical row whose mention_count
-// reaches zero as a result.
+// reaches zero as a result. It also unlinks the document's mentions from
+// their canonical entities in the same transaction, so a second call
+// before the mentions are deleted (a retried entity-extraction reset)
+// finds nothing to reverse instead of decrementing twice.
 func (s *Store) DecrementForDocument(ctx context.Context, userID, documentID uuid.UUID) error {
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
@@ -116,6 +119,13 @@ func (s *Store) DecrementForDocument(ctx context.Context, userID, documentID uui
 			     updated_at     = now()
 			 FROM doc_mentions
 			 WHERE ce.id = doc_mentions.canonical_entity_id AND ce.user_id = $2`,
+			documentID, userID,
+		); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`UPDATE entities SET canonical_entity_id = NULL
+			 WHERE document_id = $1 AND user_id = $2 AND canonical_entity_id IS NOT NULL`,
 			documentID, userID,
 		); err != nil {
 			return err
