@@ -58,3 +58,21 @@ func ForLambda(err error) error {
 	}
 	return &TransientError{Err: err}
 }
+
+// MaxReasonLen caps a stored failure reason.
+const MaxReasonLen = 2000
+
+// StepError is what a Catch records.
+type StepError struct {
+	Error string `json:"Error"`
+	Cause string `json:"Cause"`
+}
+
+// Reason formats e for storage.
+func (e *StepError) Reason() string { return "" }
+
+// Superseded reports whether err means the attempt is no longer current.
+func Superseded(err error) bool { return false }
+
+// TransientUnless marks err transient unless it is a listed error.
+func TransientUnless(err error, deterministic ...error) error { return err }

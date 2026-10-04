@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/kunalpednekar/dumpster/internal/jobstatus"
 	"github.com/kunalpednekar/dumpster/internal/pipeline"
 )
 
@@ -69,5 +71,42 @@ func TestForLambda_DeterministicErrorIsNotRetryable(t *testing.T) {
 func TestForLambda_Nil(t *testing.T) {
 	if pipeline.ForLambda(nil) != nil {
 		t.Error("ForLambda(nil) should be nil")
+	}
+}
+
+func TestSuperseded(t *testing.T) {
+	cases := map[error]bool{
+		jobstatus.ErrAttemptSuperseded:                            true,
+		fmt.Errorf("mark processing: %w", jobstatus.ErrNotActive): true,
+		jobstatus.ErrNotFound:                                     false,
+		errors.New("connection reset"):                            false,
+		nil:                                                       false,
+	}
+	for err, want := range cases {
+		if got := pipeline.Superseded(err); got != want {
+			t.Errorf("Superseded(%v) = %v, want %v", err, got, want)
+		}
+	}
+}
+
+func TestTransientUnless(t *testing.T) {
+	gone := errors.New("not found")
+	if err := pipeline.TransientUnless(fmt.Errorf("get: %w", gone), gone); pipeline.IsTransient(err) {
+		t.Error("a listed deterministic error must not be marked transient")
+	}
+	if err := pipeline.TransientUnless(errors.New("timeout"), gone); !pipeline.IsTransient(err) {
+		t.Error("any other error must be marked transient")
+	}
+}
+
+func TestStepError_Reason(t *testing.T) {
+	var none *pipeline.StepError
+	if got := none.Reason(); got != "unknown failure" {
+		t.Errorf("nil Reason() = %q", got)
+	}
+	e := &pipeline.StepError{Error: "States.TaskFailed", Cause: strings.Repeat("x", 5000)}
+	got := e.Reason()
+	if !strings.HasPrefix(got, "States.TaskFailed: x") || len(got) != pipeline.MaxReasonLen {
+		t.Errorf("Reason() is %d chars, want %d starting with the error name", len(got), pipeline.MaxReasonLen)
 	}
 }
