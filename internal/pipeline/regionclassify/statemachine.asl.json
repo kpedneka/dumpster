@@ -1,0 +1,242 @@
+{
+  "Comment": "Indexes one PDF or image: classify its layout regions on AWS Batch (PDFs only), build region-tagged chunks, embed them on AWS Batch, backfill the embeddings. Started by internal/queue/dispatch with input {type, document_id, user_id, attempt}; the Lambda steps are internal/pipeline/regionclassify.",
+  "StartAt": "StageLayout",
+  "States": {
+    "StageLayout": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "stage_layout",
+        "run.$": "$"
+      },
+      "ResultPath": "$.layout",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "TransientError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "NeedsLayout"
+    },
+    "NeedsLayout": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.layout.needs_layout",
+          "BooleanEquals": true,
+          "Next": "Layout"
+        }
+      ],
+      "Default": "BuildChunks"
+    },
+    "Layout": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobName.$": "$.layout.job_name",
+        "JobQueue": "${layout_job_queue}",
+        "JobDefinition": "${layout_job_definition}",
+        "ContainerOverrides": {
+          "Environment": [
+            {
+              "Name": "PDF_URL",
+              "Value.$": "$.layout.pdf_url"
+            },
+            {
+              "Name": "RESULT_URL",
+              "Value.$": "$.layout.result_url"
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Batch.ServerException",
+            "Batch.AWSBatchException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "BuildChunks"
+    },
+    "BuildChunks": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "build_chunks",
+        "run.$": "$"
+      },
+      "ResultPath": "$.prepare",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "TransientError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "NeedsEmbedding"
+    },
+    "NeedsEmbedding": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.prepare.embed",
+          "BooleanEquals": true,
+          "Next": "Embed"
+        }
+      ],
+      "Default": "Finalize"
+    },
+    "Embed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobName.$": "$.prepare.job_name",
+        "JobQueue": "${embed_job_queue}",
+        "JobDefinition": "${embed_job_definition}",
+        "ContainerOverrides": {
+          "Environment": [
+            {
+              "Name": "TEXTS_URL",
+              "Value.$": "$.prepare.texts_url"
+            },
+            {
+              "Name": "RESULT_URL",
+              "Value.$": "$.prepare.result_url"
+            }
+          ]
+        }
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Batch.ServerException",
+            "Batch.AWSBatchException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "Next": "Finalize"
+    },
+    "Finalize": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "finalize",
+        "run.$": "$"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "TransientError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "End": true
+    },
+    "RecordFailure": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "record_failure",
+        "run.$": "$"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "TransientError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "RegionClassificationFailed",
+      "Cause": "The failure is recorded on the document and in document_job_status."
+    }
+  }
+}

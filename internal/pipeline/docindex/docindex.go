@@ -20,10 +20,8 @@
 package docindex
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +37,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/jobstatus"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
 	"github.com/kunalpednekar/dumpster/internal/pipeline"
+	"github.com/kunalpednekar/dumpster/internal/pipeline/embedtail"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/stats"
 )
@@ -122,8 +121,11 @@ type StepError = pipeline.StepError
 
 // Deps are the Handler's collaborators. Stats is optional.
 type Deps struct {
-	Docs     document.Repository
-	Objects  objectstore.ObjectStore
+	Docs document.Repository
+	// Uploads is the store user documents are read from.
+	Uploads objectstore.ObjectStore
+	// Scratch holds the embedding job's input and result objects.
+	Scratch  objectstore.ObjectStore
 	Chunks   chunk.Repository
 	Splitter chunk.Splitter
 	// Publisher publishes entity extraction once chunks exist.
@@ -142,25 +144,14 @@ type Config struct {
 // Handler runs the document indexing state machine's Lambda steps.
 type Handler struct {
 	deps Deps
-	cfg  Config
+	tail *embedtail.Tail
 }
 
 // New returns a Handler.
 func New(deps Deps, cfg Config) *Handler {
-	if cfg.PresignTTL <= 0 {
-		cfg.PresignTTL = time.Hour
-	}
-	return &Handler{deps: deps, cfg: cfg}
-}
-
-// embedRequest and embedResponse match scripts/batch_embed_job.py's
-// protocol, the same one internal/llm/awsbatch uses.
-type embedRequest struct {
-	Texts []string `json:"texts"`
-}
-
-type embedResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
+	return &Handler{deps: deps, tail: embedtail.New(embedtail.Deps{
+		Docs: deps.Docs, Chunks: deps.Chunks, Scratch: deps.Scratch, Status: deps.Status, Stats: deps.Stats,
+	}, cfg.PresignTTL)}
 }
 
 // Handle routes ev to its step. It's the Lambda handler's body: errors
@@ -182,8 +173,19 @@ func (h *Handler) Handle(ctx context.Context, ev Event) (any, error) {
 	return out, pipeline.ForLambda(err)
 }
 
-func (in Input) key() jobstatus.Key {
-	return jobstatus.Key{UserID: in.UserID, DocumentID: in.DocumentID, JobType: queue.JobTypeDocumentIndexing}
+func (in Input) run() embedtail.Run {
+	return embedtail.Run{JobType: queue.JobTypeDocumentIndexing, DocumentID: in.DocumentID, UserID: in.UserID, Attempt: in.Attempt}
+}
+
+// staged returns p's embedding job objects, or nil if nothing was staged.
+func (p *Prepared) staged() *embedtail.Staged {
+	if p == nil || !p.Embed {
+		return nil
+	}
+	return &embedtail.Staged{
+		ChunkCount: p.ChunkCount, JobName: p.JobName, TextsURL: p.TextsURL,
+		ResultURL: p.ResultURL, InputKey: p.InputKey, ResultKey: p.ResultKey,
+	}
 }
 
 // Prepare marks the attempt processing, splits the document into chunks,
@@ -192,7 +194,7 @@ func (in Input) key() jobstatus.Key {
 func (h *Handler) Prepare(ctx context.Context, in Input) (Prepared, error) {
 	ctx = auth.WithUserID(ctx, in.UserID)
 
-	if err := h.deps.Status.MarkProcessing(ctx, in.key(), in.Attempt); err != nil {
+	if err := h.deps.Status.MarkProcessing(ctx, in.run().Key(), in.Attempt); err != nil {
 		if pipeline.Superseded(err) {
 			return Prepared{Stale: true}, nil
 		}
@@ -236,15 +238,18 @@ func (h *Handler) Prepare(ctx context.Context, in Input) (Prepared, error) {
 
 	h.publishEntityExtraction(ctx, doc)
 
-	p, err := h.stageEmbedInput(ctx, in, texts)
+	st, err := h.tail.Stage(ctx, in.run(), texts)
 	if err != nil {
 		return Prepared{}, fmt.Errorf("docindex: prepare: %w", err)
 	}
-	return p, nil
+	return Prepared{
+		Embed: true, ChunkCount: st.ChunkCount, JobName: st.JobName, TextsURL: st.TextsURL,
+		ResultURL: st.ResultURL, InputKey: st.InputKey, ResultKey: st.ResultKey,
+	}, nil
 }
 
 func (h *Handler) readObject(ctx context.Context, key string) ([]byte, error) {
-	rc, err := h.deps.Objects.Get(ctx, key)
+	rc, err := h.deps.Uploads.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("read object %s: %w", key, pipeline.Transient(err))
 	}
@@ -254,34 +259,6 @@ func (h *Handler) readObject(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("read object %s: %w", key, pipeline.Transient(err))
 	}
 	return data, nil
-}
-
-// stageEmbedInput uploads texts for the Batch job and presigns its input
-// and result URLs. Keys and the job name include the attempt, so a retry
-// never reads a previous attempt's result.
-func (h *Handler) stageEmbedInput(ctx context.Context, in Input, texts []string) (Prepared, error) {
-	body, err := json.Marshal(embedRequest{Texts: texts})
-	if err != nil {
-		return Prepared{}, fmt.Errorf("marshal embed request: %w", err)
-	}
-	prefix := fmt.Sprintf("batch-jobs/embeddings/%s-%d", in.DocumentID, in.Attempt)
-	p := Prepared{
-		Embed:      true,
-		ChunkCount: len(texts),
-		JobName:    fmt.Sprintf("embedding-%s-%d", in.DocumentID, in.Attempt),
-		InputKey:   prefix + "/input.json",
-		ResultKey:  prefix + "/result.json",
-	}
-	if err := h.deps.Objects.Put(ctx, p.InputKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
-		return Prepared{}, fmt.Errorf("upload embed input: %w", pipeline.Transient(err))
-	}
-	if p.TextsURL, err = h.deps.Objects.PresignedURL(ctx, p.InputKey, h.cfg.PresignTTL); err != nil {
-		return Prepared{}, fmt.Errorf("presign embed input: %w", pipeline.Transient(err))
-	}
-	if p.ResultURL, err = h.deps.Objects.PresignedPutURL(ctx, p.ResultKey, h.cfg.PresignTTL); err != nil {
-		return Prepared{}, fmt.Errorf("presign embed result: %w", pipeline.Transient(err))
-	}
-	return p, nil
 }
 
 // publishEntityExtraction queues entity extraction for doc. A failure is
@@ -297,8 +274,6 @@ func (h *Handler) publishEntityExtraction(ctx context.Context, doc *document.Doc
 
 // Finalize backfills the chunks' embeddings from the Batch job's result
 // (if one ran), marks the document indexed, and marks the job succeeded.
-// The staged objects are deleted last, so a retry after a partial failure
-// can still read the result.
 func (h *Handler) Finalize(ctx context.Context, in Input) error {
 	ctx = auth.WithUserID(ctx, in.UserID)
 	p := in.Prepare
@@ -308,112 +283,19 @@ func (h *Handler) Finalize(ctx context.Context, in Input) error {
 	if p.Stale {
 		return nil
 	}
-
-	if p.Embed {
-		if err := h.backfillEmbeddings(ctx, in, p); err != nil {
-			return fmt.Errorf("docindex: finalize: %w", err)
-		}
-	}
-
-	if !p.AlreadyIndexed {
-		if err := h.markIndexed(ctx, in); err != nil {
-			return fmt.Errorf("docindex: finalize: %w", err)
-		}
-	}
-
-	if err := h.deps.Status.MarkSucceeded(ctx, in.key(), in.Attempt); err != nil && !pipeline.Superseded(err) {
-		return fmt.Errorf("docindex: finalize: mark succeeded: %w", pipeline.TransientUnless(err, jobstatus.ErrNotFound))
-	}
-
-	h.deleteStaged(ctx, p)
-	return nil
-}
-
-func (h *Handler) backfillEmbeddings(ctx context.Context, in Input, p *Prepared) error {
-	body, err := h.readObject(ctx, p.ResultKey)
-	if err != nil {
-		return fmt.Errorf("embed result: %w", err)
-	}
-	var resp embedResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return fmt.Errorf("unmarshal embed result: %w", err)
-	}
-	if len(resp.Embeddings) != p.ChunkCount {
-		return fmt.Errorf("embed job returned %d embeddings for %d chunks", len(resp.Embeddings), p.ChunkCount)
-	}
-
-	// Chunks come back in ordinal order, the same order Prepare staged
-	// their texts in. BulkCreate doesn't return generated IDs, so this is
-	// how each vector finds its row.
-	persisted, err := h.deps.Chunks.ListByDocument(ctx, in.UserID, in.DocumentID)
-	if err != nil {
-		return fmt.Errorf("list chunks: %w", pipeline.Transient(err))
-	}
-	if len(persisted) != len(resp.Embeddings) {
-		return fmt.Errorf("%d persisted chunks for %d embeddings", len(persisted), len(resp.Embeddings))
-	}
-	for i, c := range persisted {
-		if err := h.deps.Chunks.UpdateEmbedding(ctx, in.UserID, c.ID, resp.Embeddings[i]); err != nil {
-			return fmt.Errorf("update embedding for chunk %s: %w", c.ID, pipeline.Transient(err))
-		}
-	}
-	return nil
-}
-
-// markIndexed marks the document indexed and records it in the usage
-// stats, unless an earlier, partly failed Finalize already did both.
-func (h *Handler) markIndexed(ctx context.Context, in Input) error {
-	doc, err := h.deps.Docs.Get(ctx, in.UserID, in.DocumentID)
-	if err != nil {
-		return fmt.Errorf("get document %s: %w", in.DocumentID, pipeline.TransientUnless(err, document.ErrNotFound))
-	}
-	if doc.Status == document.StatusIndexed {
-		return nil
-	}
-	if err := h.deps.Docs.UpdateStatus(ctx, in.UserID, in.DocumentID, document.StatusIndexed); err != nil {
-		return fmt.Errorf("mark document indexed: %w", pipeline.Transient(err))
-	}
-	if h.deps.Stats != nil {
-		if err := h.deps.Stats.RecordDocumentIndexed(ctx, doc.SizeBytes); err != nil {
-			log.Printf("docindex: failed to record usage stats for document %s: %v", in.DocumentID, err)
-		}
+	if err := h.tail.Finalize(ctx, in.run(), p.staged(), p.AlreadyIndexed); err != nil {
+		return fmt.Errorf("docindex: finalize: %w", err)
 	}
 	return nil
 }
 
 // RecordFailure marks the job attempt and the document failed, then
 // deletes any staged objects. If the attempt was superseded by a retry,
-// the document belongs to the newer attempt and is left alone. A document
-// deleted mid-run is not an error.
+// the document belongs to the newer attempt and is left alone.
 func (h *Handler) RecordFailure(ctx context.Context, in Input) error {
 	ctx = auth.WithUserID(ctx, in.UserID)
-
-	err := h.deps.Status.MarkFailed(ctx, in.key(), in.Attempt, in.Error.Reason())
-	switch {
-	case pipeline.Superseded(err):
-		return nil
-	case err != nil && !errors.Is(err, jobstatus.ErrNotFound):
-		return fmt.Errorf("docindex: record failure: mark attempt failed: %w", pipeline.Transient(err))
-	}
-
-	err = h.deps.Docs.UpdateStatus(ctx, in.UserID, in.DocumentID, document.StatusFailed)
-	if err != nil && !errors.Is(err, document.ErrNotFound) {
-		return fmt.Errorf("docindex: record failure: mark document failed: %w", pipeline.Transient(err))
-	}
-
-	if in.Prepare != nil {
-		h.deleteStaged(ctx, in.Prepare)
+	if err := h.tail.RecordFailure(ctx, in.run(), in.Error, in.Prepare.staged()); err != nil {
+		return fmt.Errorf("docindex: record failure: %w", err)
 	}
 	return nil
-}
-
-// deleteStaged removes the embed job's input and result objects.
-// Best-effort: a leaked object costs pennies and isn't worth failing a
-// finished run over.
-func (h *Handler) deleteStaged(ctx context.Context, p *Prepared) {
-	for _, key := range []string{p.InputKey, p.ResultKey} {
-		if key != "" {
-			_ = h.deps.Objects.Delete(ctx, key)
-		}
-	}
 }

@@ -137,7 +137,9 @@ type Deps struct {
 	Chunks    chunk.Repository
 	Entities  entity.Repository
 	Canonical canonical.Repository
-	Objects   objectstore.ObjectStore
+	// Scratch holds each batch's input and result objects (the scratch
+	// bucket, not the uploads bucket).
+	Scratch objectstore.ObjectStore
 	// Publisher queues edge extraction and canonicalization.
 	Publisher queue.Publisher
 	Status    jobstatus.Writer
@@ -287,7 +289,7 @@ func (h *Handler) stageBatch(ctx context.Context, in Input, index int, chunks []
 	}
 	prefix := fmt.Sprintf("batch-jobs/entities/%s-%d/batch-%d", in.DocumentID, in.Attempt, index)
 	b := Batch{Index: index, InputKey: prefix + "/input.json", ResultKey: prefix + "/result.json"}
-	if err := h.deps.Objects.Put(ctx, b.InputKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
+	if err := h.deps.Scratch.Put(ctx, b.InputKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
 		return Batch{}, fmt.Errorf("upload batch %d input: %w", index, pipeline.Transient(err))
 	}
 	return b, nil
@@ -299,10 +301,10 @@ func (h *Handler) stageBatch(ctx context.Context, in Input, index int, chunks []
 func (h *Handler) PresignBatch(ctx context.Context, in Input, b Batch) (BatchURLs, error) {
 	urls := BatchURLs{JobName: fmt.Sprintf("entity-extraction-%s-%d-batch-%d", in.DocumentID, in.Attempt, b.Index)}
 	var err error
-	if urls.ChunksURL, err = h.deps.Objects.PresignedURL(ctx, b.InputKey, h.cfg.PresignTTL); err != nil {
+	if urls.ChunksURL, err = h.deps.Scratch.PresignedURL(ctx, b.InputKey, h.cfg.PresignTTL); err != nil {
 		return BatchURLs{}, fmt.Errorf("entityextract: presign batch %d input: %w", b.Index, pipeline.Transient(err))
 	}
-	if urls.ResultURL, err = h.deps.Objects.PresignedPutURL(ctx, b.ResultKey, h.cfg.PresignTTL); err != nil {
+	if urls.ResultURL, err = h.deps.Scratch.PresignedPutURL(ctx, b.ResultKey, h.cfg.PresignTTL); err != nil {
 		return BatchURLs{}, fmt.Errorf("entityextract: presign batch %d result: %w", b.Index, pipeline.Transient(err))
 	}
 	return urls, nil
@@ -380,7 +382,7 @@ func (h *Handler) PersistBatch(ctx context.Context, in Input, b Batch) error {
 // readJSON decodes the object at key into v. A read failure is transient;
 // a decode failure isn't, since the same bytes would fail again.
 func (h *Handler) readJSON(ctx context.Context, key string, v any) error {
-	rc, err := h.deps.Objects.Get(ctx, key)
+	rc, err := h.deps.Scratch.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", key, pipeline.Transient(err))
 	}
@@ -449,7 +451,7 @@ func (h *Handler) RecordFailure(ctx context.Context, in Input) error {
 // finished run over.
 func (h *Handler) deleteStaged(ctx context.Context, p *Plan) {
 	for _, b := range p.Batches {
-		_ = h.deps.Objects.Delete(ctx, b.InputKey)
-		_ = h.deps.Objects.Delete(ctx, b.ResultKey)
+		_ = h.deps.Scratch.Delete(ctx, b.InputKey)
+		_ = h.deps.Scratch.Delete(ctx, b.ResultKey)
 	}
 }

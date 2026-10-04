@@ -73,7 +73,7 @@ func newFixture(t *testing.T, nChunks int) *fixture {
 	}
 	f.handler = entityextract.New(entityextract.Deps{
 		Docs: f.docs, Chunks: f.chunks, Entities: f.entities, Canonical: f.canonical,
-		Objects: f.objects, Publisher: f.publisher, Status: f.status,
+		Scratch: f.objects, Publisher: f.publisher, Status: f.status,
 	}, entityextract.Config{AllowedTypes: allowedTypes, BatchSize: 2})
 
 	userID := uuid.New()
