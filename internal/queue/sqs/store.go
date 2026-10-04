@@ -1,13 +1,12 @@
-// Package sqs provides an SQS-backed implementation of queue.Publisher —
-// the publish half of the event-driven job orchestration replacing the ECS
-// worker's Postgres-poll loop (see the "Event-Driven Job Orchestration"
-// System Architecture page and its dev board for the full design and why).
+// Package sqs sends jobs to the SQS queues that feed the stateless-jobs
+// Lambda: edge extraction and canonicalization, the two job types that are
+// pure Go computation with no AWS Batch hop. The Batch-backed job types
+// start Step Functions executions directly instead (internal/queue/
+// stepfunctions), so they have no queue here.
 //
-// Consumer is deliberately not implemented here: Lambda's own SQS event
-// source mapping replaces explicit Dequeue polling entirely, so there is no
-// SQS-backed Consumer to write. Ack/Nack/Heartbeat/SetPhase's equivalents
-// (message deletion, visibility-timeout extension) belong inside the
-// Lambda handlers that consume these queues, not in this package.
+// There is no consumer half: Lambda's SQS event source mapping does the
+// polling, and the Lambda's dispatcher (internal/worker/lambda) reads the
+// messages this package sends.
 package sqs
 
 import (
@@ -27,84 +26,63 @@ type Client interface {
 	SendMessage(ctx context.Context, queueURL, body string) error
 }
 
-// Config maps each queue.JobType this Store publishes to its own SQS queue
-// URL — one queue per job type, matching the Postgres jobs table's
-// per-job-type rows today. Explicit named fields rather than a
-// map[queue.JobType]string, so a queue left unconfigured is a compile-time
-// question at the call site building Config, not a runtime map-lookup miss.
+// Config maps each job type Store sends to its queue URL. Named fields
+// rather than a map, so a missing one is visible where Config is built.
 type Config struct {
-	DocumentUploadedQueueURL     string
-	EntityExtractionQueueURL     string
-	EdgeExtractionQueueURL       string
-	RegionClassificationQueueURL string
-	CanonicalizationQueueURL     string
+	EdgeExtractionQueueURL   string
+	CanonicalizationQueueURL string
 }
 
-// Store publishes queue events to SQS. It implements queue.Publisher only
-// — see the package doc for why there is no Consumer half.
+// Store sends job runs to SQS.
 type Store struct {
 	client Client
 	cfg    Config
 }
 
-// New returns a Store that publishes through client, routing each event to
-// the queue URL cfg names for its job type.
+// New returns a Store that sends through client, routing each run to the
+// queue cfg names for its job type.
 func New(client Client, cfg Config) *Store {
 	return &Store{client: client, cfg: cfg}
 }
 
-// message is the JSON envelope published to SQS. The eventual Lambda
-// consumer (workstream B/C of the Event-Driven Job Orchestration dev
-// board) unmarshals this to reconstruct the equivalent of a queue.Job.
-// Deliberately not queue.Job itself: Job carries Attempts/MaxAttempts,
-// which are jobs-table/Postgres-retry concepts with no meaning here — SQS
-// redrive policies (maxReceiveCount, configured per queue in Terraform)
-// are what replace that, not a field on the message.
+// message is the JSON body of every message. The Lambda dispatcher
+// unmarshals it; attempt identifies which status-store attempt the run
+// reports progress against.
 type message struct {
 	Type       queue.JobType `json:"type"`
 	DocumentID uuid.UUID     `json:"document_id"`
 	UserID     uuid.UUID     `json:"user_id"`
+	Attempt    int           `json:"attempt"`
 }
 
-func (s *Store) PublishDocumentUploaded(ctx context.Context, evt queue.DocumentUploaded) error {
-	return s.publish(ctx, s.cfg.DocumentUploadedQueueURL, message{
-		Type: queue.JobTypeDocumentIndexing, DocumentID: evt.DocumentID, UserID: evt.UserID,
-	})
-}
-
-func (s *Store) PublishEntityExtraction(ctx context.Context, evt queue.EntityExtractionRequested) error {
-	return s.publish(ctx, s.cfg.EntityExtractionQueueURL, message{
-		Type: queue.JobTypeEntityExtraction, DocumentID: evt.DocumentID, UserID: evt.UserID,
-	})
-}
-
-func (s *Store) PublishEdgeExtraction(ctx context.Context, evt queue.EdgeExtractionRequested) error {
-	return s.publish(ctx, s.cfg.EdgeExtractionQueueURL, message{
-		Type: queue.JobTypeEdgeExtraction, DocumentID: evt.DocumentID, UserID: evt.UserID,
-	})
-}
-
-func (s *Store) PublishRegionClassification(ctx context.Context, evt queue.RegionClassificationRequested) error {
-	return s.publish(ctx, s.cfg.RegionClassificationQueueURL, message{
-		Type: queue.JobTypeRegionClassification, DocumentID: evt.DocumentID, UserID: evt.UserID,
-	})
-}
-
-func (s *Store) PublishCanonicalization(ctx context.Context, evt queue.CanonicalizationRequested) error {
-	return s.publish(ctx, s.cfg.CanonicalizationQueueURL, message{
-		Type: queue.JobTypeCanonicalization, DocumentID: evt.DocumentID, UserID: evt.UserID,
-	})
-}
-
-func (s *Store) publish(ctx context.Context, queueURL string, msg message) error {
-	body, err := json.Marshal(msg)
+// Dispatch sends run to its job type's queue.
+func (s *Store) Dispatch(ctx context.Context, run queue.JobRun) error {
+	queueURL, err := s.queueFor(run.Type)
 	if err != nil {
-		return fmt.Errorf("queue/sqs: marshal %s message for document %s: %w", msg.Type, msg.DocumentID, err)
+		return err
+	}
+	body, err := json.Marshal(message{Type: run.Type, DocumentID: run.DocumentID, UserID: run.UserID, Attempt: run.Attempt})
+	if err != nil {
+		return fmt.Errorf("queue/sqs: marshal %s message for document %s: %w", run.Type, run.DocumentID, err)
 	}
 	if err := s.client.SendMessage(ctx, queueURL, string(body)); err != nil {
-		return fmt.Errorf("queue/sqs: publish %s for document %s: %w", msg.Type, msg.DocumentID, err)
+		return fmt.Errorf("queue/sqs: send %s for document %s: %w", run.Type, run.DocumentID, err)
 	}
 	return nil
 }
 
-var _ queue.Publisher = (*Store)(nil)
+func (s *Store) queueFor(jobType queue.JobType) (string, error) {
+	var url string
+	switch jobType {
+	case queue.JobTypeEdgeExtraction:
+		url = s.cfg.EdgeExtractionQueueURL
+	case queue.JobTypeCanonicalization:
+		url = s.cfg.CanonicalizationQueueURL
+	default:
+		return "", fmt.Errorf("queue/sqs: no queue for job type %q", jobType)
+	}
+	if url == "" {
+		return "", fmt.Errorf("queue/sqs: queue URL for %q is not configured", jobType)
+	}
+	return url, nil
+}
