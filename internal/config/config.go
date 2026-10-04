@@ -246,6 +246,16 @@ type Config struct {
 	// operation, no deploy/restart involved (see the production ingestion
 	// incident writeup). Defaults to 50.
 	EntityExtractionBatchSize int
+
+	// Where the event-driven pipeline sends each job type (see
+	// internal/queue/dispatch): a Step Functions state machine for the
+	// Batch-backed job types, an SQS queue for the two the stateless-jobs
+	// Lambda runs.
+	DocumentIndexingStateMachineARN     string
+	EntityExtractionStateMachineARN     string
+	RegionClassificationStateMachineARN string
+	EdgeExtractionQueueURL              string
+	CanonicalizationQueueURL            string
 }
 
 func Load() *Config {
