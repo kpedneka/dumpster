@@ -13,7 +13,7 @@ import (
 // top-level Go type name), which is what a state machine's Retry matches.
 func lambdaErrorType(err error) string {
 	t := reflect.TypeOf(err)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		return t.Elem().Name()
 	}
 	return t.Name()

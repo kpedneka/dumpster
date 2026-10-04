@@ -153,13 +153,11 @@ func lambdaTasks(t *testing.T, def aslDefinition) map[string]string {
 
 func TestDefinition_LambdaStepsMatchTheHandler(t *testing.T) {
 	def := renderDefinition(t)
-	var got, want []string
+	var got []string
 	for step := range lambdaTasks(t, def) {
 		got = append(got, step)
 	}
-	for _, step := range []string{docindex.StepPrepare, docindex.StepFinalize, docindex.StepRecordFailure} {
-		want = append(want, step)
-	}
+	want := []string{docindex.StepPrepare, docindex.StepFinalize, docindex.StepRecordFailure}
 	sort.Strings(got)
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
