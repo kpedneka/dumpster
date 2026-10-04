@@ -64,7 +64,7 @@ func newFixture(t *testing.T, content string) *fixture {
 		status: statusmem.New(), stats: statsmem.New(), publisher: &recordingPublisher{},
 	}
 	f.handler = docindex.New(docindex.Deps{
-		Docs: f.docs, Objects: f.objects, Chunks: f.chunks, Splitter: chunk.DefaultFixedWindow(),
+		Docs: f.docs, Uploads: f.objects, Scratch: f.objects, Chunks: f.chunks, Splitter: chunk.DefaultFixedWindow(),
 		Publisher: f.publisher, Status: f.status, Stats: f.stats,
 	}, docindex.Config{})
 
@@ -501,5 +501,37 @@ func TestHandle_TransientErrorsReachTheStateMachineAsTransientError(t *testing.T
 	var te *pipeline.TransientError
 	if !errors.As(err, &te) || reflect.TypeOf(err) != reflect.TypeOf(te) {
 		t.Errorf("err = %T %v, want a top-level *pipeline.TransientError", err, err)
+	}
+}
+
+// The upload is read from the uploads store, and the embedding job's
+// files go to the scratch store, never the uploads bucket.
+func TestPrepareAndFinalize_UseTheScratchStoreForBatchFiles(t *testing.T) {
+	f := newFixture(t, longText)
+	scratch := objmock.New()
+	f.handler = docindex.New(docindex.Deps{
+		Docs: f.docs, Uploads: f.objects, Scratch: scratch, Chunks: f.chunks, Splitter: chunk.DefaultFixedWindow(),
+		Publisher: f.publisher, Status: f.status, Stats: f.stats,
+	}, docindex.Config{})
+
+	p := f.prepare(1)
+	if f.objectExists(p.InputKey) {
+		t.Error("embed input was staged in the uploads store")
+	}
+	if _, err := scratch.Get(f.ctx, p.InputKey); err != nil {
+		t.Errorf("embed input not in the scratch store: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{"embeddings": make([][]float32, p.ChunkCount)})
+	if err := scratch.Put(f.ctx, p.ResultKey, bytes.NewReader(body), int64(len(body)), "application/json"); err != nil {
+		t.Fatalf("put result: %v", err)
+	}
+	in := f.input(1)
+	in.Prepare = &p
+	if err := f.handler.Finalize(context.Background(), in); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	if _, err := scratch.Get(f.ctx, p.ResultKey); err == nil {
+		t.Error("scratch result not cleaned up")
 	}
 }
