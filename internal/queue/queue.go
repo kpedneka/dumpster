@@ -100,6 +100,17 @@ type Job struct {
 // ErrNoJobs is returned by Consumer.Dequeue when no work is available.
 var ErrNoJobs = errors.New("queue: no jobs available")
 
+// JobRun is one attempt at one job, as handed to whatever runs it: an SQS
+// queue feeding a Lambda, or a Step Functions state machine. Attempt is
+// the job's attempt number from the status store (internal/jobstatus),
+// so a run can report progress against exactly the attempt it belongs to.
+type JobRun struct {
+	Type       JobType
+	DocumentID uuid.UUID
+	UserID     uuid.UUID
+	Attempt    int
+}
+
 // RegionClassificationRequested is published for PDF and image documents
 // in place of DocumentUploaded, since those file types require region
 // classification before chunking and embedding can proceed.
