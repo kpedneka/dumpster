@@ -29,6 +29,7 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
+	statuspg "github.com/kunalpednekar/dumpster/internal/jobstatus/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
@@ -38,6 +39,11 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/worker"
 	worklambda "github.com/kunalpednekar/dumpster/internal/worker/lambda"
 )
+
+// queueMaxReceiveCount must match both queues' redrive policy
+// (maxReceiveCount in terraform/queue_sqs.tf), so the dispatcher knows
+// which delivery is the last one before a message goes to its DLQ.
+const queueMaxReceiveCount = 3
 
 func main() {
 	cfg := config.Load()
@@ -93,7 +99,8 @@ func main() {
 
 	dispatcher := worklambda.NewDispatcher().
 		RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler).
-		RegisterHandler(queue.JobTypeCanonicalization, canonicalizationHandler)
+		RegisterHandler(queue.JobTypeCanonicalization, canonicalizationHandler).
+		WithStatus(statuspg.New(txRunner), queueMaxReceiveCount)
 
 	slog.SetDefault(logger)
 	lambda.Start(dispatcher.HandleSQSEvent)
