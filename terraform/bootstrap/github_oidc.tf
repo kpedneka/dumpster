@@ -307,6 +307,36 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["arn:aws:sqs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:dumpster-*"]
   }
 
+  # terraform/modules/pipeline's three aws_sfn_state_machine resources
+  # (document indexing, entity extraction, region classification). Their
+  # role is passed via IAMScoped's PassRole (dumpster-* roles).
+  statement {
+    sid = "StepFunctions"
+    actions = [
+      "states:CreateStateMachine",
+      "states:UpdateStateMachine",
+      "states:DeleteStateMachine",
+      "states:DescribeStateMachine",
+      "states:ListStateMachineVersions",
+      "states:ListStateMachineAliases",
+      "states:TagResource",
+      "states:UntagResource",
+      "states:ListTagsForResource",
+    ]
+    resources = ["arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:stateMachine:dumpster-*"]
+  }
+
+  # The AWS provider validates every definition before creating or updating
+  # a state machine, and IAM evaluates ValidateStateMachineDefinition
+  # against the wildcard stateMachine:* resource, not the machine's own ARN,
+  # so the dumpster-* scope above can't cover it. Validation has no side
+  # effects. Found by the first local apply as this role.
+  statement {
+    sid       = "StepFunctionsValidate"
+    actions   = ["states:ValidateStateMachineDefinition"]
+    resources = ["arn:aws:states:${var.aws_region}:${data.aws_caller_identity.current.account_id}:stateMachine:*"]
+  }
+
   statement {
     sid       = "S3"
     actions   = ["s3:*"]
