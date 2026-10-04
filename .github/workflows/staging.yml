@@ -81,12 +81,14 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Build lambda-stateless-jobs
+      - name: Build Lambda binaries
         env:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: 0
-        run: go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+        run: |
+          go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+          go build -o build/lambda-pipeline/bootstrap ./cmd/lambda-pipeline
 
       - uses: opentofu/setup-opentofu@v1
         with:
@@ -379,12 +381,14 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Build lambda-stateless-jobs
+      - name: Build Lambda binaries
         env:
           GOOS: linux
           GOARCH: arm64
           CGO_ENABLED: 0
-        run: go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+        run: |
+          go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+          go build -o build/lambda-pipeline/bootstrap ./cmd/lambda-pipeline
 
       - name: Destroy staging
         working-directory: terraform

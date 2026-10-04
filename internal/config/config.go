@@ -246,6 +246,16 @@ type Config struct {
 	// operation, no deploy/restart involved (see the production ingestion
 	// incident writeup). Defaults to 50.
 	EntityExtractionBatchSize int
+
+	// Where the event-driven pipeline sends each job type (see
+	// internal/queue/dispatch): a Step Functions state machine for the
+	// Batch-backed job types, an SQS queue for the two the stateless-jobs
+	// Lambda runs.
+	DocumentIndexingStateMachineARN     string
+	EntityExtractionStateMachineARN     string
+	RegionClassificationStateMachineARN string
+	EdgeExtractionQueueURL              string
+	CanonicalizationQueueURL            string
 }
 
 func Load() *Config {
@@ -323,7 +333,12 @@ func Load() *Config {
 		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
 		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),
 
-		EntityExtractionBatchSize: getEnvInt("ENTITY_EXTRACTION_BATCH_SIZE", 50),
+		EntityExtractionBatchSize:           getEnvInt("ENTITY_EXTRACTION_BATCH_SIZE", 50),
+		DocumentIndexingStateMachineARN:     getEnv("DOCUMENT_INDEXING_STATE_MACHINE_ARN", ""),
+		EntityExtractionStateMachineARN:     getEnv("ENTITY_EXTRACTION_STATE_MACHINE_ARN", ""),
+		RegionClassificationStateMachineARN: getEnv("REGION_CLASSIFICATION_STATE_MACHINE_ARN", ""),
+		EdgeExtractionQueueURL:              getEnv("EDGE_EXTRACTION_QUEUE_URL", ""),
+		CanonicalizationQueueURL:            getEnv("CANONICALIZATION_QUEUE_URL", ""),
 	}
 }
 

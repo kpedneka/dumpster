@@ -126,3 +126,29 @@ func TestLoad_workerPollIntervalFromEnv(t *testing.T) {
 		t.Errorf("WorkerPollInterval: got %v, want 1h", c.WorkerPollInterval)
 	}
 }
+
+func TestLoad_pipelineTargetsFromEnv(t *testing.T) {
+	want := map[string]string{
+		"DOCUMENT_INDEXING_STATE_MACHINE_ARN":     "arn:aws:states:us-east-1:1:stateMachine:doc",
+		"ENTITY_EXTRACTION_STATE_MACHINE_ARN":     "arn:aws:states:us-east-1:1:stateMachine:entity",
+		"REGION_CLASSIFICATION_STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:region",
+		"EDGE_EXTRACTION_QUEUE_URL":               "https://sqs.us-east-1.amazonaws.com/1/edge",
+		"CANONICALIZATION_QUEUE_URL":              "https://sqs.us-east-1.amazonaws.com/1/canon",
+	}
+	for k, v := range want {
+		t.Setenv(k, v)
+	}
+	c := Load()
+	got := map[string]string{
+		"DOCUMENT_INDEXING_STATE_MACHINE_ARN":     c.DocumentIndexingStateMachineARN,
+		"ENTITY_EXTRACTION_STATE_MACHINE_ARN":     c.EntityExtractionStateMachineARN,
+		"REGION_CLASSIFICATION_STATE_MACHINE_ARN": c.RegionClassificationStateMachineARN,
+		"EDGE_EXTRACTION_QUEUE_URL":               c.EdgeExtractionQueueURL,
+		"CANONICALIZATION_QUEUE_URL":              c.CanonicalizationQueueURL,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: got %q, want %q", k, got[k], v)
+		}
+	}
+}
