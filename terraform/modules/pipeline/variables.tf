@@ -21,6 +21,27 @@ variable "lambda_zip_hash" {
   description = "base64 SHA-256 of lambda_zip_path, so a code change redeploys the function."
 }
 
+variable "stateless_lambda_zip_path" {
+  type        = string
+  description = "Path to the zipped cmd/lambda-stateless-jobs bootstrap binary (linux/arm64)."
+}
+
+variable "stateless_lambda_zip_hash" {
+  type = string
+}
+
+variable "stateless_lambda_environment" {
+  type        = map(string)
+  sensitive   = true
+  description = "Environment for the stateless-jobs Lambda (database URL, LLM provider settings and keys)."
+}
+
+variable "bedrock_model_arns" {
+  type        = list(string)
+  default     = []
+  description = "Bedrock models/inference profiles the stateless-jobs Lambda may invoke. Empty when it uses the Anthropic API instead."
+}
+
 variable "lambda_environment" {
   type        = map(string)
   sensitive   = true
@@ -29,22 +50,13 @@ variable "lambda_environment" {
 
 variable "uploads_bucket_arn" {
   type        = string
-  description = "Bucket user documents live in. The Lambda reads uploads and presigns them for the layout job."
+  default     = null
+  description = "AWS bucket user documents live in, if they're on AWS S3: the pipeline Lambda reads uploads and presigns them for the layout job. Null when uploads are elsewhere (local dev uses Cloudflare R2 with keys in lambda_environment)."
 }
 
 variable "scratch_bucket_arn" {
   type        = string
   description = "Bucket for Batch jobs' input/result handoff objects."
-}
-
-variable "downstream_queues" {
-  type = object({
-    edge_extraction_arn  = string
-    edge_extraction_url  = string
-    canonicalization_arn = string
-    canonicalization_url = string
-  })
-  description = "The SQS queues the pipeline publishes edge extraction and canonicalization to."
 }
 
 variable "batch" {

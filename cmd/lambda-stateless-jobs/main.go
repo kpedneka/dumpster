@@ -41,7 +41,7 @@ import (
 )
 
 // queueMaxReceiveCount must match both queues' redrive policy
-// (maxReceiveCount in terraform/queue_sqs.tf), so the dispatcher knows
+// (maxReceiveCount in terraform/modules/pipeline/queues.tf), so the dispatcher knows
 // which delivery is the last one before a message goes to its DLQ.
 const queueMaxReceiveCount = 3
 

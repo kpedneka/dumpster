@@ -63,7 +63,7 @@ const maxReasonLen = 2000
 
 // WithStatus makes the dispatcher record each job's progress in status
 // (see HandleSQSEvent). maxReceiveCount must match the queues' redrive
-// policy (terraform/queue_sqs.tf), so the dispatcher knows which delivery
+// policy (terraform/modules/pipeline/queues.tf), so the dispatcher knows which delivery
 // is the last one SQS will make.
 func (d *Dispatcher) WithStatus(status StatusWriter, maxReceiveCount int) *Dispatcher {
 	d.status = status

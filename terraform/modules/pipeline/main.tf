@@ -1,9 +1,14 @@
-# The event-driven ingestion pipeline: one Lambda (cmd/lambda-pipeline) and
-# three Step Functions Standard state machines -- document indexing, entity
-# extraction, region classification -- whose definitions are the same
-# .asl.json files the Go tests check against the handlers
-# (internal/pipeline/*/statemachine.asl.json). Used by the main stack and by
-# the pipeline-only dev stack, so both run exactly the same thing.
+# The event-driven ingestion pipeline, everything that runs a job once it's
+# published:
+#   - three Step Functions Standard state machines -- document indexing,
+#     entity extraction, region classification -- whose definitions are the
+#     same .asl.json files the Go tests check against the handlers
+#     (internal/pipeline/*/statemachine.asl.json), and the one Lambda behind
+#     them (cmd/lambda-pipeline), in this file;
+#   - the edge extraction and canonicalization queues (queues.tf) and the
+#     stateless-jobs Lambda that consumes them (stateless.tf).
+# Used by the main stack (staging, production) and the pipeline-only dev
+# stack (terraform/dev), so every environment runs exactly the same thing.
 #
 # The Lambda publishes follow-on jobs to these state machines, and the state
 # machines invoke the Lambda. Referencing each other's resources would be a
@@ -73,10 +78,15 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
 }
 
 data "aws_iam_policy_document" "lambda" {
-  statement {
-    sid       = "ReadUploads"
-    actions   = ["s3:GetObject"]
-    resources = ["${var.uploads_bucket_arn}/*"]
+  # Only when uploads live in an AWS bucket. Local dev's uploads are on
+  # Cloudflare R2, reached with static keys in the Lambda's environment.
+  dynamic "statement" {
+    for_each = var.uploads_bucket_arn == null ? [] : [var.uploads_bucket_arn]
+    content {
+      sid       = "ReadUploads"
+      actions   = ["s3:GetObject"]
+      resources = ["${statement.value}/*"]
+    }
   }
   statement {
     sid       = "ScratchHandoff"
@@ -89,12 +99,9 @@ data "aws_iam_policy_document" "lambda" {
     resources = values(local.state_machine_arns)
   }
   statement {
-    sid     = "PublishToQueues"
-    actions = ["sqs:SendMessage"]
-    resources = [
-      var.downstream_queues.edge_extraction_arn,
-      var.downstream_queues.canonicalization_arn,
-    ]
+    sid       = "PublishToQueues"
+    actions   = ["sqs:SendMessage"]
+    resources = [for q in aws_sqs_queue.job : q.arn]
   }
 }
 
@@ -124,8 +131,8 @@ resource "aws_lambda_function" "pipeline" {
       DOCUMENT_INDEXING_STATE_MACHINE_ARN     = local.state_machine_arns.document_indexing
       ENTITY_EXTRACTION_STATE_MACHINE_ARN     = local.state_machine_arns.entity_extraction
       REGION_CLASSIFICATION_STATE_MACHINE_ARN = local.state_machine_arns.region_classification
-      EDGE_EXTRACTION_QUEUE_URL               = var.downstream_queues.edge_extraction_url
-      CANONICALIZATION_QUEUE_URL              = var.downstream_queues.canonicalization_url
+      EDGE_EXTRACTION_QUEUE_URL               = aws_sqs_queue.job["edge_extraction"].url
+      CANONICALIZATION_QUEUE_URL              = aws_sqs_queue.job["canonicalization"].url
     })
   }
 

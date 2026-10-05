@@ -163,7 +163,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       # anticipated ahead of time. Same story as acm:ListTagsForCertificate
       # above.
       "cloudfront:*",
-      # terraform/lambda_stateless_jobs.tf's aws_lambda_function and its
+      # terraform/modules/pipeline/stateless.tf's aws_lambda_function and its
       # two aws_lambda_event_source_mapping resources. Not scoped to a
       # dumpster-* function ARN pattern the way ECR/S3/SQS are (see those
       # statements below): an event source mapping's own ARN is an
@@ -266,7 +266,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     # apply). /aws/batch/job (imported, not created, by logs_batch.tf) is
     # a third, unrelated prefix that also needs this same statement's
     # actions. /aws/lambda/dumpster-* is the fourth, added for
-    # terraform/lambda_stateless_jobs.tf's aws_cloudwatch_log_group --
+    # terraform/modules/pipeline/stateless.tf's aws_cloudwatch_log_group --
     # AWS's own fixed naming convention for a Lambda function's log
     # group, not something this config chooses.
     resources = [
@@ -366,7 +366,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
       # secret's resource policy, not just its metadata -- same "only
       # found by a real plan run" story as the two grants above.
       "secretsmanager:GetResourcePolicy",
-      # terraform/lambda_stateless_jobs.tf's two
+      # terraform/modules/pipeline/stateless.tf's two
       # aws_secretsmanager_secret_version data sources -- unlike every
       # other consumer of these secrets (ECS's `secrets` block resolves
       # valueFrom at container start via the ECS agent, never through
