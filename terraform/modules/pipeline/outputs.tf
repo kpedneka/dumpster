@@ -6,3 +6,12 @@ output "state_machine_arns" {
 output "lambda_function_name" {
   value = aws_lambda_function.pipeline.function_name
 }
+
+output "job_queue_urls" {
+  value       = { for k, q in aws_sqs_queue.job : k => q.url }
+  description = "SQS queue URL per Lambda job type (edge_extraction, canonicalization)."
+}
+
+output "job_queue_arns" {
+  value = { for k, q in aws_sqs_queue.job : k => q.arn }
+}

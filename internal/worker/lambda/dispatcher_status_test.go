@@ -18,7 +18,7 @@ import (
 )
 
 // maxReceives matches the redrive policy's maxReceiveCount for both
-// Lambda queues (terraform/queue_sqs.tf).
+// Lambda queues (terraform/modules/pipeline/queues.tf).
 const maxReceives = 3
 
 // statusFixture is one edge-extraction job, enqueued as attempt 1 the way

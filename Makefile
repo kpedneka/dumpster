@@ -1,4 +1,4 @@
-.PHONY: build test lint run migrate hooks licenses
+.PHONY: build test lint run migrate hooks licenses lambdas dev-plan dev-deploy dev-env
 
 COVERAGE_THRESHOLD := 80
 
@@ -56,6 +56,47 @@ lint:
 
 run:
 	docker compose up --build
+
+# Builds both Lambda binaries (linux/arm64, static) where Terraform's
+# archive_file expects them: build/lambda-pipeline/ and
+# build/lambda-stateless-jobs/. CI does the same before any tofu step.
+lambdas:
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/lambda-pipeline/bootstrap ./cmd/lambda-pipeline
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+
+# Reads .env.local and hands its settings to terraform/dev as TF_VAR_*,
+# so secrets live in one place. Any AWS keys .env.local sets are cleared,
+# so your own AWS profile is what plans and deploys.
+DEV_STACK_ENV = set -a && . ./.env.local && set +a && \
+	unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN && \
+	export TF_VAR_database_url_pooled="$$DATABASE_URL_POOLED" \
+	       TF_VAR_anthropic_api_key="$$ANTHROPIC_API_KEY" \
+	       TF_VAR_anthropic_model="$$ANTHROPIC_MODEL" \
+	       TF_VAR_entity_types="$$ENTITY_TYPES" \
+	       TF_VAR_uploads_endpoint="$$S3_ENDPOINT" \
+	       TF_VAR_uploads_region="$${S3_REGION:-auto}" \
+	       TF_VAR_uploads_bucket="$$S3_BUCKET" \
+	       TF_VAR_uploads_access_key="$$S3_ACCESS_KEY" \
+	       TF_VAR_uploads_secret_key="$$S3_SECRET_KEY" \
+	       TF_VAR_uploads_use_path_style="$${S3_USE_PATH_STYLE:-true}" && \
+	tofu -chdir=terraform/dev init -input=false >/dev/null &&
+
+# Shows what dev-deploy would change.
+dev-plan: lambdas
+	@$(DEV_STACK_ENV) tofu -chdir=terraform/dev plan
+
+# Deploys the pipeline-only dev stack (terraform/dev): the state machines
+# and Lambdas local development publishes jobs to. Uses your own AWS
+# profile (e.g. AWS_PROFILE=dumpster-admin make dev-deploy), never CI.
+dev-deploy: lambdas
+	@$(DEV_STACK_ENV) tofu -chdir=terraform/dev apply
+	@echo "Add these to .env.local so the local API publishes to the dev stack:"
+	@$(MAKE) --no-print-directory dev-env
+
+# Prints the .env.local lines for the deployed dev stack again.
+dev-env:
+	@unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN && \
+	tofu -chdir=terraform/dev output -raw dotenv
 
 migrate:
 	goose -dir migrations postgres "host=$(DB_HOST) port=$(DB_PORT) dbname=$(DB_NAME) user=$(DB_USER) password=$(DB_PASSWORD) sslmode=$(DB_SSLMODE)" up
