@@ -33,7 +33,7 @@ type Config struct {
 	DBSSL      string
 	// DatabaseURL is a full Postgres connection string (e.g. from Neon).
 	// When set it takes precedence over the individual DB_* fields.
-	// Use the direct (non-pooled) endpoint for the worker and migrations.
+	// Use the direct (non-pooled) endpoint for migrations and one-off tools.
 	DatabaseURL string
 	// DatabaseURLPooled is the PgBouncer connection string for the API.
 	// When set it takes precedence over DatabaseURL for pooled access.
@@ -73,8 +73,8 @@ type Config struct {
 	// LLM
 	AnthropicAPIKey string
 	AnthropicModel  string
-	// LLMProvider selects which llm.Generator implementation cmd/api and
-	// cmd/worker construct: "anthropic" (default, direct Anthropic API,
+	// LLMProvider selects which llm.Generator implementation cmd/api and the
+	// stateless-jobs Lambda construct: "anthropic" (default, direct Anthropic API,
 	// billed against AnthropicAPIKey's account) or "bedrock" (AWS Bedrock's
 	// Converse API, billed through AWS, authenticated via the ECS task
 	// role -- no API key at all). Production launches on Bedrock from day
@@ -97,58 +97,30 @@ type Config struct {
 	// or remove a type by changing ENTITY_TYPES, no migration required.
 	EntityTypes []string
 	// InferenceServiceURL is the base URL of the consolidated ML inference
-	// service, called over HTTP: PDF region classification (both cmd/api
-	// and cmd/worker) and query-time embeddings (cmd/api only — see
-	// internal/llm/inference.NewQueryEmbedder). Ingestion-time (document)
-	// embeddings do NOT go through this any more — see
-	// internal/llm/awsbatch and EmbedBatchJobQueue/EmbedBatchJobDefinition
-	// below for why (Fly's shared-cpu tier throttled that CPU-bound work
-	// severely; a live search query still can't tolerate a Batch cold
-	// start, so it stays here). Entity extraction never went through this
-	// either — see internal/entity/awsbatch and AWSRegion/BatchJobQueue/
-	// BatchJobDefinition below. Defaults to the docker-compose service
-	// name; override for local dev without Docker or to point at a
-	// different deployment.
+	// service, called over HTTP for query-time embeddings (cmd/api; see
+	// internal/llm/inference.NewQueryEmbedder) -- a live search can't wait
+	// for a Batch cold start. Ingestion-time embeddings, region
+	// classification and entity extraction run as AWS Batch jobs from the
+	// pipeline state machines instead (internal/pipeline). Defaults to the
+	// docker-compose service name; override for local dev without Docker or
+	// to point at a different deployment.
 	InferenceServiceURL string
 
-	// AWSRegion is the region cmd/worker's AWS Batch/CloudWatch Logs calls
-	// target, for both entity extraction (internal/entity/awsbatch) and
-	// ingestion-time embedding (internal/llm/awsbatch). Credentials
-	// themselves come from the standard AWS SDK chain
-	// (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars in this app's
-	// deployments), not a dedicated config field.
+	// AWSRegion is the region AWS SDK clients target: the pipeline publisher
+	// (Step Functions, SQS) and cmd/reembed's AWS Batch embedding.
+	// Credentials come from the standard AWS SDK chain, not a config field.
 	AWSRegion string
-	// BatchJobQueue and BatchJobDefinition identify the AWS Batch resources
-	// entity extraction submits jobs against. Required — cmd/worker exits
-	// at startup if either is empty.
-	BatchJobQueue      string
-	BatchJobDefinition string
 	// EmbedBatchJobQueue and EmbedBatchJobDefinition identify the separate
-	// AWS Batch resources ingestion-time embedding submits jobs against
-	// (internal/llm/awsbatch) — a distinct, CPU-only Fargate compute
-	// environment from entity extraction's GPU one above, since the two
-	// have nothing in common but "runs on AWS Batch." Required —
-	// cmd/worker and cmd/reembed exit at startup if either is empty.
+	// AWS Batch resources cmd/reembed submits embedding jobs against
+	// (internal/llm/awsbatch). Required by cmd/reembed, which exits at
+	// startup if either is empty.
 	EmbedBatchJobQueue      string
 	EmbedBatchJobDefinition string
-	// RegionsBatchJobQueue and RegionsBatchJobDefinition identify a third,
-	// independent AWS Batch resource pair for PDF region extraction
-	// (internal/manifest/awsbatch) -- required, same as the two pairs
-	// above; cmd/worker exits at startup if either is empty. No HTTP
-	// fallback to the old always-on inference service: that path existed
-	// briefly while these Batch resources hadn't been provisioned yet,
-	// but was removed once Fly deploys stopped entirely, since keeping a
-	// fallback this process would never actually use is just dead code.
-	RegionsBatchJobQueue      string
-	RegionsBatchJobDefinition string
-	// BatchPollInterval is how often the awsbatch extractor/embedder
-	// checks a submitted job's status. Defaults to 5s (their own default)
-	// when unset. Shared between entity extraction and embedding — both
-	// poll AWS Batch the same way, no reason for two separate knobs.
+	// BatchPollInterval is how often cmd/reembed's Batch embedder checks a
+	// submitted job's status. Defaults to 5s (its own default) when unset.
 	BatchPollInterval time.Duration
 	// BatchPresignTTL is how long the input URL handed to a Batch job stays
-	// valid. Defaults to 15m (their own default) when unset. Shared for
-	// the same reason as BatchPollInterval.
+	// valid. Defaults to 15m (its own default) when unset.
 	BatchPresignTTL time.Duration
 
 	// CookieSecure controls the Secure attribute on the session cookie.
@@ -169,55 +141,6 @@ type Config struct {
 	// RateLimitWindow is the sliding window over which RateLimitRequests is
 	// counted.
 	RateLimitWindow time.Duration
-	// SweepInterval is how often the always-on worker runs the session sweep.
-	// Defaults to 5 minutes; lower it in staging to verify cleanup quickly.
-	SweepInterval time.Duration
-	// QueueMetricsPublishInterval is how often cmd/worker publishes queue
-	// backlog depth to CloudWatch (internal/queuemetrics) for the worker's
-	// queue-depth ECS auto-scaling policy. A much shorter cadence than
-	// SweepInterval on purpose: CloudWatch evaluates standard-resolution
-	// alarms roughly once a minute, so a slower publish cadence would make
-	// the scaling signal lag real backlog changes. Defaults to 60s.
-	QueueMetricsPublishInterval time.Duration
-	// WorkerConcurrency is how many jobs the worker processes at once.
-	// Defaults to 5. Safe to run above 1 now that entity extraction and
-	// region classification call the inference service over HTTP instead of
-	// embedding a warm Python subprocess in this process — see
-	// worker.Config.Concurrency's doc for why raising this used to be unsafe.
-	WorkerConcurrency int
-	// WorkerPollInterval overrides worker.Config.PollInterval (which
-	// otherwise defaults to a hardcoded 1s with no backoff on an empty
-	// queue -- see worker.go's runLoop). Zero means unset, leaving that
-	// 1s default in place, which is what every local/test run gets.
-	//
-	// TEMPORARY, stopgap mitigation -- not the real fix. The real fix is
-	// the "Event-Driven Job Orchestration" migration (workstream C/D on
-	// the dev board) replacing this poll loop with SQS + Lambda + Step
-	// Functions entirely, so nothing queries Postgres on a timer at all.
-	// Until that cutover lands, this knob is how staging/production are
-	// kept from re-exhausting Neon's free-tier compute-hour budget: a 1s
-	// poll never gives Neon's auto-suspend (default ~5m of inactivity) a
-	// chance to fire, so the compute endpoint stays billed 24/7 regardless
-	// of real traffic -- the exact incident the dev board's migration
-	// writeup describes. Set to something longer than that suspend
-	// threshold (e.g. 1h) in environments with near-zero real traffic so
-	// Neon can actually go idle between polls. Delete this field, its env
-	// var, and the terraform wiring once workstream D decommissions this
-	// worker -- tracked as its own dev board card so it isn't forgotten.
-	WorkerPollInterval time.Duration
-	// JobStaleTimeout is how long a job may sit claimed ("processing")
-	// before it's treated as orphaned and reclaimed back to "pending" on
-	// the same ticker as the session sweep. Guards against a job stuck
-	// forever if the worker that claimed it dies or restarts mid-run —
-	// nothing else detects that: Dequeue's claim-then-commit transaction is
-	// short, so a crash mid-Handle() never touches the jobs table again,
-	// and Nack (which normally dead-letters after enough failures) only
-	// fires when Handle() actually returns, which a killed process never
-	// gets the chance to do. Defaults to 15 minutes, generous enough that a
-	// legitimately slow job (cold GLiNER model load plus many chunks has
-	// been observed taking several minutes) isn't reclaimed out from under
-	// a worker still actively running it.
-	JobStaleTimeout time.Duration
 
 	// MaxCommunityGraphEntities caps how many canonical entities a KB may
 	// have before POST /kbs/{id}/communities refuses to run Louvain
@@ -309,26 +232,17 @@ func Load() *Config {
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),
 		InferenceServiceURL: getEnv("INFERENCE_SERVICE_URL", "http://inference:8000"),
 
-		AWSRegion:                 getEnv("AWS_REGION", "us-east-1"),
-		BatchJobQueue:             getEnv("BATCH_JOB_QUEUE", ""),
-		BatchJobDefinition:        getEnv("BATCH_JOB_DEFINITION", ""),
-		EmbedBatchJobQueue:        getEnv("EMBED_BATCH_JOB_QUEUE", ""),
-		EmbedBatchJobDefinition:   getEnv("EMBED_BATCH_JOB_DEFINITION", ""),
-		RegionsBatchJobQueue:      getEnv("REGIONS_BATCH_JOB_QUEUE", ""),
-		RegionsBatchJobDefinition: getEnv("REGIONS_BATCH_JOB_DEFINITION", ""),
-		BatchPollInterval:         getEnvDuration("BATCH_POLL_INTERVAL", 0),
-		BatchPresignTTL:           getEnvDuration("BATCH_PRESIGN_TTL", 0),
+		AWSRegion:               getEnv("AWS_REGION", "us-east-1"),
+		EmbedBatchJobQueue:      getEnv("EMBED_BATCH_JOB_QUEUE", ""),
+		EmbedBatchJobDefinition: getEnv("EMBED_BATCH_JOB_DEFINITION", ""),
+		BatchPollInterval:       getEnvDuration("BATCH_POLL_INTERVAL", 0),
+		BatchPresignTTL:         getEnvDuration("BATCH_PRESIGN_TTL", 0),
 
 		CookieSecure: getEnv("COOKIE_SECURE", "true") == "true",
 
-		MaxDocumentsPerSession:      getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
-		RateLimitRequests:           getEnvInt("RATE_LIMIT_REQUESTS", 100),
-		RateLimitWindow:             getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
-		SweepInterval:               getEnvDuration("SWEEP_INTERVAL", 5*time.Minute),
-		QueueMetricsPublishInterval: getEnvDuration("QUEUE_METRICS_PUBLISH_INTERVAL", 60*time.Second),
-		JobStaleTimeout:             getEnvDuration("JOB_STALE_TIMEOUT", 15*time.Minute),
-		WorkerConcurrency:           getEnvInt("WORKER_CONCURRENCY", 5),
-		WorkerPollInterval:          getEnvDuration("WORKER_POLL_INTERVAL", 0),
+		MaxDocumentsPerSession: getEnvInt("MAX_DOCUMENTS_PER_SESSION", 20),
+		RateLimitRequests:      getEnvInt("RATE_LIMIT_REQUESTS", 100),
+		RateLimitWindow:        getEnvDuration("RATE_LIMIT_WINDOW", time.Minute),
 
 		MaxCommunityGraphEntities: getEnvInt("MAX_COMMUNITY_GRAPH_ENTITIES", 5000),
 		CommunityDetectionTimeout: getEnvDuration("COMMUNITY_DETECTION_TIMEOUT", 30*time.Second),

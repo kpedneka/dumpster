@@ -16,23 +16,10 @@ services:
     ports:
       - "8080:8080"
 
-  worker:
-    build:
-      context: .
-      target: runtime
-    command: ["/bin/worker"]
-    env_file:
-      - path: .env
-        required: false
-      - path: .env.local
-        required: false
-    depends_on:
-      - inference
-
-  # inference is the consolidated, always-on ML service: entity
-  # extraction, PDF region classification, and local embeddings behind one
-  # HTTP API. api and worker both call it over the network instead of
-  # embedding their own warm Python subprocess (the pattern this replaces).
+  # inference serves query-time embeddings to the api over HTTP. Ingestion
+  # (chunking, embedding, entity extraction, region classification) runs on
+  # the pipeline-only dev stack in AWS instead: `make dev-deploy`, then
+  # `make dev-env` for the .env.local lines.
   inference:
     build:
       context: .
