@@ -15,6 +15,7 @@ import (
 	inquirypg "github.com/kunalpednekar/dumpster/internal/inquiry/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/intrusion"
 	intrusionpg "github.com/kunalpednekar/dumpster/internal/intrusion/pgstore"
+	statuspg "github.com/kunalpednekar/dumpster/internal/jobstatus/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/llm"
 	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
@@ -23,7 +24,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/llm/instrumented"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
-	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/queue/dispatch/dispatchaws"
 	ratelimitpg "github.com/kunalpednekar/dumpster/internal/ratelimit/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
@@ -106,13 +107,22 @@ func main() {
 		search.WithGraphRetriever(graphRetriever),
 	)
 
-	jobs := qpg.New(pool)
+	// Jobs run on the event-driven pipeline (terraform/modules/pipeline):
+	// uploads and retries publish through dispatch, which records each job
+	// in document_job_status, and the progress checklist and delete/retry
+	// guards read that same table.
+	jobStatus := statuspg.New(txRunner)
+	publisher, err := dispatchaws.New(context.Background(), cfg, jobStatus)
+	if err != nil {
+		logger.Error("pipeline publisher setup failed", "err", err)
+		os.Exit(1)
+	}
 	deps := server.Deps{
 		KBs:                       kbpg.New(txRunner),
 		Docs:                      docpg.New(txRunner),
 		Objects:                   obj,
-		Publisher:                 jobs,
-		JobStatusReader:           jobs,
+		Publisher:                 publisher,
+		JobStatusReader:           jobStatus,
 		Manifest:                  manifestpg.New(txRunner),
 		Canonical:                 canonicalpg.New(txRunner),
 		Communities:               communitypg.New(txRunner),
