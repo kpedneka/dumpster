@@ -8,14 +8,13 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/session"
 )
 
-// IdleTimeout is the period of inactivity after which a session is hard-deleted.
-// Exported so other packages (e.g. the in-app banner endpoint) can compute the
-// same expiry boundary the sweep uses, rather than duplicating the value.
-const IdleTimeout = 6 * time.Hour
-
-// HardCap is the maximum session lifetime, anchored at CreatedAt, regardless
-// of activity. Exported for the same reason as IdleTimeout.
-const HardCap = 24 * time.Hour
+// IdleTimeout and HardCap are the session expiry limits, defined with the
+// expiry rule in internal/session. Re-exported here for the in-app banner
+// endpoint and the warning logic below.
+const (
+	IdleTimeout = session.IdleTimeout
+	HardCap     = session.HardCap
+)
 
 // WarningLeadTime is how far before either expiry clock fires that a session
 // receives its one pre-deletion warning.
@@ -63,7 +62,7 @@ func (s *Sweep) Run(ctx context.Context) (SweepResult, error) {
 		hardAge := now.Sub(sess.CreatedAt)
 		idleAge := now.Sub(sess.LastActiveAt)
 
-		if hardAge >= HardCap || idleAge >= IdleTimeout {
+		if sess.Expired(now) {
 			if err := s.deleter.Delete(ctx, sess); err != nil {
 				result.Errors = append(result.Errors, fmt.Errorf("delete session %s: %w", sess.ID, err))
 				continue

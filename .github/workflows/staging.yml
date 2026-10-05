@@ -112,8 +112,8 @@ jobs:
       # real ECS task actually failing to start (PR #94):
       # docker/build-push-action defaults to the runner's own platform
       # when this isn't set, which is amd64 on every GitHub-hosted
-      # runner, not the arm64 these task definitions require (ecs_api.tf/
-      # ecs_worker.tf's runtime_platform block, matching the image
+      # runner, not the arm64 these task definitions require (ecs_api.tf's
+      # runtime_platform block, matching the image
       # previously built on Apple Silicon). The resulting manifest had no
       # arm64 descriptor at all -- confirmed directly via `docker buildx
       # imagetools inspect` -- not a base-image limitation (python:3.11-
@@ -250,7 +250,7 @@ jobs:
       - name: Wait for ECS services to stabilize
         run: |
           for i in 1 2; do
-            if aws ecs wait services-stable --cluster dumpster-staging --services api worker; then
+            if aws ecs wait services-stable --cluster dumpster-staging --services api; then
               echo "services stable"
               exit 0
             fi

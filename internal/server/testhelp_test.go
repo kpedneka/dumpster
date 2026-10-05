@@ -72,7 +72,7 @@ func defaultDeps() (Deps, *kbmem.Repository, *docmem.Repository, *objmock.Store,
 func authedRequest(t *testing.T, deps Deps, method, target string, body io.Reader, sessionID uuid.UUID) *http.Request {
 	t.Helper()
 	if store, ok := deps.Sessions.(*sessionmock.Store); ok {
-		store.Seed(&session.Session{ID: sessionID, CreatedAt: time.Now()})
+		store.Seed(&session.Session{ID: sessionID, CreatedAt: time.Now(), LastActiveAt: time.Now()})
 	}
 	req := httptest.NewRequest(method, "/api"+target, body)
 	req.AddCookie(&http.Cookie{Name: "session_id", Value: sessionID.String()})

@@ -8,8 +8,6 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /bin/api ./cmd/api
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -o /bin/worker ./cmd/worker
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /bin/cleanup ./cmd/cleanup
 
 # web-builder compiles the React SPA so the api binary can serve it.
@@ -22,7 +20,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY web/ ./
 RUN npm run build
 
-# runtime is cmd/api + cmd/worker + cmd/cleanup's production image: just
+# runtime is cmd/api + cmd/cleanup's production image: just
 # the Go binaries and the built SPA. No Python here — entity extraction,
 # PDF region classification, and embeddings all go out over HTTP to the
 # inference image below instead of running as a subprocess embedded in
@@ -39,13 +37,11 @@ RUN npm run build
 # was already its own main package by the time this got built.
 #
 # WORKDIR /app ensures the Go API resolves "web/dist" relative to /app.
-# Fly.io [processes] commands (/bin/api, /bin/worker) inherit this
-# workdir; ECS's cleanup RunTask overrides command to ["/bin/cleanup"].
+# ECS's cleanup RunTask overrides command to ["/bin/cleanup"].
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /bin/api     /bin/api
-COPY --from=builder /bin/worker  /bin/worker
 COPY --from=builder /bin/cleanup /bin/cleanup
 COPY --from=web-builder /app/web/dist /app/web/dist
 

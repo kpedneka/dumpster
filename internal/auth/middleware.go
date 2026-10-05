@@ -59,7 +59,8 @@ func Middleware(sessions session.SessionStore, secure bool, statsRepo stats.Repo
 }
 
 // resolveSession looks up the session cookie and returns the live session, or
-// nil if the cookie is absent, malformed, or the session has been swept.
+// nil if the cookie is absent, malformed, or the session has expired or been
+// swept.
 func resolveSession(r *http.Request, sessions session.SessionStore) *session.Session {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
@@ -71,6 +72,13 @@ func resolveSession(r *http.Request, sessions session.SessionStore) *session.Ses
 	}
 	sess, err := sessions.GetByID(r.Context(), id)
 	if err != nil {
+		return nil
+	}
+	// An expired session is treated as gone, not revived: the account sweep
+	// runs only daily (cmd/cleanup), so this is where the idle timeout and
+	// hard cap take effect for the visitor. It's left untouched for the
+	// sweep to delete.
+	if sess.Expired(time.Now()) {
 		return nil
 	}
 	if touchErr := sessions.Touch(r.Context(), sess.ID, time.Now()); touchErr != nil {

@@ -4,7 +4,6 @@ import (
 	"os"
 	"reflect"
 	"testing"
-	"time"
 )
 
 func TestLoad_defaults(t *testing.T) {
@@ -24,9 +23,6 @@ func TestLoad_defaults(t *testing.T) {
 	}
 	if c.InferenceServiceURL != "http://inference:8000" {
 		t.Errorf("InferenceServiceURL: got %q, want %q", c.InferenceServiceURL, "http://inference:8000")
-	}
-	if c.WorkerConcurrency != 5 {
-		t.Errorf("WorkerConcurrency: got %d, want %d", c.WorkerConcurrency, 5)
 	}
 }
 
@@ -79,51 +75,6 @@ func TestGetEnv_fallback(t *testing.T) {
 	}
 	if got := getEnv("NONEXISTENT_VAR", "default"); got != "default" {
 		t.Errorf("got %q, want %q", got, "default")
-	}
-}
-
-func TestLoad_sweepIntervalDefault(t *testing.T) {
-	c := Load()
-	if c.SweepInterval != 5*time.Minute {
-		t.Errorf("SweepInterval default: got %v, want 5m", c.SweepInterval)
-	}
-}
-
-func TestLoad_sweepIntervalFromEnv(t *testing.T) {
-	t.Setenv("SWEEP_INTERVAL", "2m")
-	c := Load()
-	if c.SweepInterval != 2*time.Minute {
-		t.Errorf("SweepInterval: got %v, want 2m", c.SweepInterval)
-	}
-}
-
-func TestLoad_jobStaleTimeoutDefault(t *testing.T) {
-	c := Load()
-	if c.JobStaleTimeout != 15*time.Minute {
-		t.Errorf("JobStaleTimeout default: got %v, want 15m", c.JobStaleTimeout)
-	}
-}
-
-func TestLoad_jobStaleTimeoutFromEnv(t *testing.T) {
-	t.Setenv("JOB_STALE_TIMEOUT", "10m")
-	c := Load()
-	if c.JobStaleTimeout != 10*time.Minute {
-		t.Errorf("JobStaleTimeout: got %v, want 10m", c.JobStaleTimeout)
-	}
-}
-
-func TestLoad_workerPollIntervalDefault(t *testing.T) {
-	c := Load()
-	if c.WorkerPollInterval != 0 {
-		t.Errorf("WorkerPollInterval default: got %v, want 0 (unset -- worker.New falls back to its own 1s default)", c.WorkerPollInterval)
-	}
-}
-
-func TestLoad_workerPollIntervalFromEnv(t *testing.T) {
-	t.Setenv("WORKER_POLL_INTERVAL", "1h")
-	c := Load()
-	if c.WorkerPollInterval != time.Hour {
-		t.Errorf("WorkerPollInterval: got %v, want 1h", c.WorkerPollInterval)
 	}
 }
 

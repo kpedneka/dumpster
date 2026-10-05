@@ -18,6 +18,7 @@ import (
 	ratelimitpg "github.com/kunalpednekar/dumpster/internal/ratelimit/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
+	statspg "github.com/kunalpednekar/dumpster/internal/stats/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
 
@@ -61,6 +62,14 @@ func main() {
 	logger.Info("sweep complete", "warned", result.Warned, "deleted", result.Deleted, "errors", len(result.Errors))
 	for _, sweepErr := range result.Errors {
 		logger.Error("sweep: per-session error", "err", sweepErr)
+	}
+	// The usage counter the worker's sweep loop used to record; this daily
+	// task is the only sweep now. usage_stats has no RLS policy, so a plain
+	// TxRunner, as in cmd/lambda-pipeline.
+	if result.Deleted > 0 {
+		if err := statspg.New(db.NewTxRunner(pool)).RecordSessionsSwept(ctx, result.Deleted); err != nil {
+			logger.Error("sweep: record sessions swept", "err", err)
+		}
 	}
 
 	// rate_limit_counters (internal/ratelimit/pgstore) grows by one

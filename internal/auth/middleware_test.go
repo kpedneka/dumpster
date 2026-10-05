@@ -8,8 +8,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/kunalpednekar/dumpster/internal/auth"
+	"github.com/kunalpednekar/dumpster/internal/session"
 	sessionmock "github.com/kunalpednekar/dumpster/internal/session/mock"
 	statsmem "github.com/kunalpednekar/dumpster/internal/stats/memory"
+	"time"
 )
 
 const sessionCookie = "session_id"
@@ -236,5 +238,43 @@ func TestMiddleware_recordsSessionCreated_onlyOnMint(t *testing.T) {
 	}
 	if snap.SessionsCreated != 1 {
 		t.Errorf("SessionsCreated after resuming an existing session: got %d, want still 1", snap.SessionsCreated)
+	}
+}
+
+// An expired session (past its idle timeout or hard cap) must not be
+// revived by a request -- with the session sweep running only daily, the
+// request is where expiry is enforced. The visitor gets a fresh session;
+// the old one is left for the sweep to delete, untouched.
+func TestMiddleware_expiredSession_mintsFreshWithoutReviving(t *testing.T) {
+	cases := map[string]session.Session{
+		"idle past the timeout": {CreatedAt: time.Now().Add(-8 * time.Hour), LastActiveAt: time.Now().Add(-session.IdleTimeout - time.Minute)},
+		"past the hard cap":     {CreatedAt: time.Now().Add(-session.HardCap - time.Minute), LastActiveAt: time.Now().Add(-time.Minute)},
+	}
+	for name, expired := range cases {
+		t.Run(name, func(t *testing.T) {
+			sessions := sessionmock.New()
+			expired.ID = uuid.New()
+			sessions.Seed(&expired)
+
+			var gotID uuid.UUID
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotID, _ = auth.UserIDFromContext(r.Context())
+			})
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.AddCookie(&http.Cookie{Name: sessionCookie, Value: expired.ID.String()})
+			w := httptest.NewRecorder()
+			auth.Middleware(sessions, true, nil, handler).ServeHTTP(w, req)
+
+			if gotID == expired.ID || gotID == uuid.Nil {
+				t.Errorf("request ran as %v, want a fresh session, not the expired %v", gotID, expired.ID)
+			}
+			old, err := sessions.GetByID(context.TODO(), expired.ID)
+			if err != nil {
+				t.Fatalf("GetByID: %v", err)
+			}
+			if !old.LastActiveAt.Equal(expired.LastActiveAt) {
+				t.Errorf("expired session was touched (LastActiveAt %v -> %v); it must stay expired for the sweep", expired.LastActiveAt, old.LastActiveAt)
+			}
+		})
 	}
 }
