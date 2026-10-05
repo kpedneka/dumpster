@@ -103,7 +103,7 @@ func TestCanonicalizationHandler_Handle_UnknownDocument(t *testing.T) {
 
 	h := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo)
 	userID := uuid.New()
-	job := &queue.Job{ID: uuid.New(), Type: queue.JobTypeCanonicalization, DocumentID: uuid.New(), UserID: userID}
+	job := &queue.Job{Type: queue.JobTypeCanonicalization, DocumentID: uuid.New(), UserID: userID}
 
 	if err := h.Handle(auth.WithUserID(context.Background(), userID), job); err == nil {
 		t.Fatal("expected error for unknown document")
@@ -116,7 +116,7 @@ func TestCanonicalizationHandler_OnFailed_DoesNotErrorOrPanic(t *testing.T) {
 	canonicalRepo := canonicalmem.New()
 	h := worker.NewCanonicalizationHandler(docs, entities, canonicalRepo)
 
-	job := &queue.Job{ID: uuid.New(), Type: queue.JobTypeCanonicalization, DocumentID: uuid.New(), UserID: uuid.New()}
+	job := &queue.Job{Type: queue.JobTypeCanonicalization, DocumentID: uuid.New(), UserID: uuid.New()}
 	h.OnFailed(context.Background(), job) // must not panic
 }
 

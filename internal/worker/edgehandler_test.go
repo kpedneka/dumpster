@@ -60,12 +60,9 @@ func seedEdgeJob(t *testing.T, docs *docmem.Repository, entities *entitymem.Repo
 	}
 
 	return &queue.Job{
-		ID:          uuid.New(),
-		Type:        queue.JobTypeEdgeExtraction,
-		DocumentID:  doc.ID,
-		UserID:      userID,
-		Attempts:    0,
-		MaxAttempts: 3,
+		Type:       queue.JobTypeEdgeExtraction,
+		DocumentID: doc.ID,
+		UserID:     userID,
 	}, userID
 }
 
@@ -273,7 +270,7 @@ func TestEdgeHandler_Handle_UnknownDocument(t *testing.T) {
 
 	h := worker.NewEdgeHandler(docs, entities, edges)
 	userID := uuid.New()
-	job := &queue.Job{ID: uuid.New(), Type: queue.JobTypeEdgeExtraction, DocumentID: uuid.New(), UserID: userID}
+	job := &queue.Job{Type: queue.JobTypeEdgeExtraction, DocumentID: uuid.New(), UserID: userID}
 
 	if err := h.Handle(auth.WithUserID(context.Background(), userID), job); err == nil {
 		t.Fatal("expected error for unknown document")
@@ -286,7 +283,7 @@ func TestEdgeHandler_OnFailed_DoesNotErrorOrPanic(t *testing.T) {
 	edges := graphedgemem.New()
 	h := worker.NewEdgeHandler(docs, entities, edges)
 
-	job := &queue.Job{ID: uuid.New(), Type: queue.JobTypeEdgeExtraction, DocumentID: uuid.New(), UserID: uuid.New()}
+	job := &queue.Job{Type: queue.JobTypeEdgeExtraction, DocumentID: uuid.New(), UserID: uuid.New()}
 	h.OnFailed(context.Background(), job) // must not panic
 }
 

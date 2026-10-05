@@ -13,9 +13,9 @@ type DisplayStage struct {
 // PhaseEmbedding is the only phase value any handler writes today.
 // region_classification is the first (and so far only) job type whose
 // job_type alone isn't a fine enough signal: it runs region analysis and
-// embedding back-to-back inside one job, with no intervening jobs-table
-// update between them otherwise. Every other job type maps to exactly
-// one DisplayStage regardless of phase and never calls SetPhase at all.
+// embedding back-to-back inside one job, with no other status change
+// between them. Every other job type maps to exactly one DisplayStage
+// regardless of phase and never sets one at all.
 const PhaseEmbedding = "embedding"
 
 // StageKeyComplete is the terminal stage a document sits on forever once
@@ -96,7 +96,7 @@ func StagesForDocument(hasRegionClassification bool) []DisplayStage {
 // StagesForDocument returns). More than one can come back at once now
 // that entity extraction can start before a document's own indexing job
 // (region_classification/document_indexing) finishes -- see
-// worker.RegionClassificationHandler.process's doc: while
+// internal/pipeline/regionclassify's BuildChunks step: while
 // region_classification is still embedding (phase=embedding) and
 // entity_extraction is already processing, both are genuinely active for
 // the same document simultaneously, and collapsing that down to a single

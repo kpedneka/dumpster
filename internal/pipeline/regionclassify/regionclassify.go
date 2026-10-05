@@ -1,7 +1,6 @@
 // Package regionclassify implements the Lambda steps of the region
 // classification state machine (statemachine.asl.json in this package),
-// which replaces the worker's RegionClassificationHandler for PDF and
-// image uploads:
+// which processes PDF and image uploads:
 //
 //  1. StageLayout: mark the attempt processing (the progress checklist's
 //     "Analyzing" stage) and, for a PDF, presign the original upload and a
@@ -18,8 +17,8 @@
 //     result.
 //
 // Regions the layered classifier can't resolve on its own (figures,
-// suspected scans) are recorded as skipped, as in the worker; there's no
-// VLM follow-up call.
+// suspected scans) are recorded as skipped; there's no VLM follow-up
+// call.
 package regionclassify
 
 import (

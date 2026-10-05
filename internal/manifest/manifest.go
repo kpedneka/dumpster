@@ -32,7 +32,7 @@ const (
 	RegionTypeNativeTable RegionType = "native_table"
 	// RegionTypeFigure is an image/diagram detected by the layout model.
 	// Marked skipped, not dropped: there is no text description to index
-	// for it (see RegionClassificationHandler's type doc for why).
+	// for it (see internal/pipeline/regionclassify's package doc).
 	RegionTypeFigure RegionType = "figure"
 	// RegionTypeScannedText is text that the layout model suspects is
 	// rasterized/scanned and so cannot be reliably extracted this pass.

@@ -76,7 +76,7 @@ type Record struct {
 	Key
 	Status Status
 	// Phase is an optional sub-stage within the job type (see
-	// queue.Consumer.SetPhase); empty when the job type has none.
+	// queue.PhaseEmbedding); empty when the job type has none.
 	Phase string
 	// Attempt starts at 1 and increments each time a finished job is
 	// enqueued again. It is part of the Step Functions execution name

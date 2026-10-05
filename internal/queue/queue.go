@@ -5,7 +5,6 @@ package queue
 
 import (
 	"context"
-	"errors"
 
 	"github.com/google/uuid"
 )
@@ -43,20 +42,6 @@ const (
 	JobTypeCanonicalization JobType = "canonicalization"
 )
 
-// SingleShotMaxAttempts overrides the jobs table's default max_attempts
-// (3) for job types whose failures are deterministic rather than
-// transient: entity_extraction and region_classification are, end to end,
-// thin wrappers around a single AWS Batch job submission — the same
-// input hitting the same code produces the same outcome every time, so a
-// failure here (a code bug, a malformed response, bad input) will
-// reproduce identically on retry, not resolve itself. Retrying 3x in that
-// case only triples the compute cost and the time before the failure
-// becomes visible, for a job type where retrying essentially never helps
-// the way it might for something genuinely flaky (a transient network
-// blip on an HTTP call, momentary DB contention). See
-// internal/queue/pgstore's Publish* functions for where this is applied.
-const SingleShotMaxAttempts = 1
-
 // DocumentUploaded is published once a document's bytes land in object storage
 // and a documents row has been created at status "pending".
 type DocumentUploaded struct {
@@ -86,19 +71,13 @@ type CanonicalizationRequested struct {
 	UserID     uuid.UUID
 }
 
-// Job is a unit of work dequeued for processing. Type determines which
-// registered Handler the worker dispatches it to.
+// Job is one job handed to a worker.Handler by the stateless-jobs Lambda.
+// Type determines which registered Handler it is dispatched to.
 type Job struct {
-	ID          uuid.UUID
-	Type        JobType
-	DocumentID  uuid.UUID
-	UserID      uuid.UUID
-	Attempts    int
-	MaxAttempts int
+	Type       JobType
+	DocumentID uuid.UUID
+	UserID     uuid.UUID
 }
-
-// ErrNoJobs is returned by Consumer.Dequeue when no work is available.
-var ErrNoJobs = errors.New("queue: no jobs available")
 
 // JobRun is one attempt at one job, as handed to whatever runs it: an SQS
 // queue feeding a Lambda, or a Step Functions state machine. Attempt is
@@ -140,47 +119,9 @@ type Publisher interface {
 	PublishCanonicalization(ctx context.Context, evt CanonicalizationRequested) error
 }
 
-// Consumer pulls jobs from the queue for processing.
-type Consumer interface {
-	// Dequeue claims the next available job. Returns ErrNoJobs when the queue
-	// is empty; the caller should back off before retrying.
-	Dequeue(ctx context.Context) (*Job, error)
-	// Ack marks a job as successfully completed and removes it from the queue.
-	Ack(ctx context.Context, jobID uuid.UUID) error
-	// Nack records a processing failure. If the job has exhausted its retries
-	// it is dead-lettered and the function returns (true, nil); otherwise the
-	// job is rescheduled with exponential backoff and the function returns
-	// (false, nil).
-	Nack(ctx context.Context, jobID uuid.UUID, reason error) (deadLettered bool, err error)
-	// Heartbeat touches jobID's updated_at so ReclaimStale doesn't mistake
-	// a job that's actively making progress for one that's stuck. Intended
-	// for a long-running Handle call that internally makes incremental
-	// progress (e.g. EntityHandler's per-batch persistence) to call between
-	// steps — without it, a job whose total processing time exceeds
-	// JOB_STALE_TIMEOUT gets reclaimed and its attempt count burned even
-	// though nothing was actually wrong with it.
-	Heartbeat(ctx context.Context, jobID uuid.UUID) error
-	// SetPhase records an optional sub-stage within the current job_type,
-	// for job types where job_type alone isn't granular enough to say
-	// what's actually happening (see JobStatus's doc). Most handlers never
-	// call this -- their job_type already maps to exactly one display
-	// stage. region_classification is the first that does, since it runs
-	// region analysis and embedding back-to-back inside one job with no
-	// intervening jobs-table update otherwise.
-	SetPhase(ctx context.Context, jobID uuid.UUID, phase string) error
-}
-
-// Queue combines publishing and consuming into a single interface.
-type Queue interface {
-	Publisher
-	Consumer
-}
-
 // JobStatus is one active job's current state, for read-only display
-// purposes (the upload progress UI) -- distinct from Job, which
-// Consumer.Dequeue returns for claiming/processing work and so never
-// carries Status/LastError (Dequeue only ever returns jobs that were
-// pending).
+// purposes (the upload progress UI) -- distinct from Job, which is what a
+// handler receives to run and carries no status.
 type JobStatus struct {
 	Type      JobType
 	Phase     string // empty when this job type has no explicit phase override in play
@@ -188,43 +129,27 @@ type JobStatus struct {
 	LastError string
 }
 
-// JobStatusReader exposes read-only job status to the API layer, kept
-// separate from Consumer (the worker-side claim/ack/nack contract) since
-// nothing about display needs the ability to mutate a job.
+// JobStatusReader exposes read-only job status to the API layer
+// (implemented by internal/jobstatus/pgstore), kept separate from the
+// status writes the pipeline makes since nothing about display needs the
+// ability to mutate a job.
 type JobStatusReader interface {
 	// ActiveJobsForDocuments returns every currently pending/processing
 	// job for each document ID in documentIDs, keyed by DocumentID. A
 	// document ID with no entry (or an empty slice) has no active job --
 	// either every pipeline stage already completed successfully, or
-	// (rarer) is momentarily between one stage's job being deleted and
-	// the next one's insert committing. A dead-lettered ("failed") job
-	// is never included: its row is never deleted (see Consumer.Nack's
-	// doc), and treating it as active would misrepresent a permanently
-	// stuck job as still-in-progress forever.
+	// (rarer) is momentarily between one stage finishing and the next
+	// one being published. A failed job is never included: treating it
+	// as active would misrepresent a permanently stuck job as
+	// still-in-progress forever.
 	//
 	// More than one job can be active for the same document at once now
 	// that entity extraction can start before a document's own indexing
 	// job (region_classification/document_indexing) finishes -- see
-	// worker.RegionClassificationHandler.process's doc. Callers that need
+	// internal/pipeline/regionclassify's BuildChunks step. Callers that need
 	// a single "what stage is this document on" answer should pick the
 	// job representing the *least* progress (queue.EarliestActiveStage),
 	// not just the first or most-recently-created one: which job happens
 	// to exist is not the same question as which one is the bottleneck.
 	ActiveJobsForDocuments(ctx context.Context, userID uuid.UUID, documentIDs []uuid.UUID) (map[uuid.UUID][]JobStatus, error)
-}
-
-// PendingCounter reports queue backlog depth, grouped by job type -- the
-// signal internal/queuemetrics publishes to CloudWatch for the worker's
-// queue-depth-based ECS auto-scaling policy (see the "Design a
-// queue-depth-based autoscaling signal for the worker" dev board card).
-// Deliberately not folded into JobStatusReader: that interface answers
-// "what's happening for these specific documents," a per-tenant, per-request
-// question; this answers "how backlogged is the queue overall," a
-// cross-tenant, periodic-polling question with a different caller and a
-// different cadence.
-type PendingCounter interface {
-	// CountPending returns the number of jobs in status "pending", grouped
-	// by JobType. A job type with zero pending jobs is simply absent from
-	// the map, not present with a zero value.
-	CountPending(ctx context.Context) (map[JobType]int, error)
 }

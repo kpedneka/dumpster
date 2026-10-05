@@ -30,8 +30,8 @@ type Repository interface {
 	// RecordDocumentIndexed increments the documents-indexed counter and
 	// adds sizeBytes to the running size total. Called once a document
 	// successfully reaches the indexed state, regardless of which
-	// ingestion path (DocumentHandler or RegionClassificationHandler) got
-	// it there.
+	// ingestion path (the document indexing or region classification
+	// state machine) got it there.
 	RecordDocumentIndexed(ctx context.Context, sizeBytes int64) error
 	// RecordQueryExecuted increments the queries-executed counter and adds
 	// durationMs to the running duration total. Called once per completed
