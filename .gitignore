@@ -59,6 +59,7 @@ examples/
 # that directory's github_oidc.tf), not just terraform/.terraform/ itself.
 terraform/.terraform/
 terraform/bootstrap/.terraform/
+terraform/dev/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
