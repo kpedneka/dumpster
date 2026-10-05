@@ -148,3 +148,39 @@ module "pipeline" {
     entity_job_definition_name = var.entity_job_definition
   }
 }
+
+# --- Local API access ---
+#
+# After cutover the local API (`make run`) publishes jobs to this stack
+# with the AWS keys in .env.local, which belong to an existing IAM user
+# that isn't managed here. Grant that user exactly what publishing needs,
+# the same two actions the deployed API's task role has.
+data "aws_iam_user" "local" {
+  user_name = var.local_iam_user
+}
+
+data "aws_iam_policy_document" "local_publish" {
+  statement {
+    sid       = "StartPipelineExecutions"
+    actions   = ["states:StartExecution"]
+    resources = values(module.pipeline.state_machine_arns)
+  }
+  statement {
+    sid       = "SendToLambdaQueues"
+    actions   = ["sqs:SendMessage"]
+    resources = values(module.pipeline.job_queue_arns)
+  }
+}
+
+# A managed policy, not an inline one: IAM caps a user's inline policies at
+# 2,048 bytes combined, and this user's existing Batch access already uses
+# most of that.
+resource "aws_iam_policy" "local_publish" {
+  name   = "${local.name_prefix}-local-publish"
+  policy = data.aws_iam_policy_document.local_publish.json
+}
+
+resource "aws_iam_user_policy_attachment" "local_publish" {
+  user       = data.aws_iam_user.local.user_name
+  policy_arn = aws_iam_policy.local_publish.arn
+}

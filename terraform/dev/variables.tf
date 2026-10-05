@@ -84,3 +84,9 @@ variable "entity_job_definition" {
   type    = string
   default = "dumpster-entity-extraction"
 }
+
+variable "local_iam_user" {
+  type        = string
+  default     = "dumpster-worker-batch"
+  description = "The IAM user whose keys are in .env.local; the local API publishes jobs with them."
+}
