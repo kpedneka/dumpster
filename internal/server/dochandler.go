@@ -311,9 +311,9 @@ type documentProgress struct {
 	// right now, in canonical stage order -- more than one when e.g. a
 	// document's own indexing job is still embedding while its (already
 	// started) entity-extraction job is also running (see
-	// worker.RegionClassificationHandler.process's doc). Empty when the
+	// internal/pipeline/regionclassify's BuildChunks step). Empty when the
 	// document is queued but no job has started processing it yet (i.e.
-	// still on the first stage, not yet picked up by a worker).
+	// still on the first stage).
 	// Permanently [queue.StageKeyComplete] once the whole pipeline --
 	// including background entity extraction -- has finished.
 	ActiveStages []string `json:"active_stages,omitempty"`
@@ -672,7 +672,7 @@ func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
 // pure wasted latency -- observed in practice at over 2 minutes for
 // embedding alone on a modest document.
 //
-// EntityHandler's own idempotent cleanup (job.Attempts == 0: reverse this
+// The entity extraction state machine's idempotent cleanup (reverse this
 // document's canonical entity contribution, delete its existing entities)
 // makes this safe to call repeatedly -- each run fully replaces the last,
 // it never accumulates duplicates.

@@ -1,14 +1,12 @@
 // Package lambda adapts worker.Handler dispatch to AWS Lambda's SQS event
 // shape — the vendor-specific seam that keeps internal/worker itself
 // Lambda-agnostic, matching this project's "no vendor SDK imports outside
-// a dedicated adapter package" convention (see internal/llm/awsbatch,
-// internal/entity/awsbatch for the same pattern applied to AWS Batch).
+// a dedicated adapter package" convention (see internal/llm/awsbatch for
+// the same pattern applied to AWS Batch).
 //
 // This package's only job is translating between an SQS event and the
 // existing, already-tested Handler interface — the handlers it dispatches
-// to (EdgeHandler, CanonicalizationHandler, ...) are unmodified and run
-// identically whether invoked from here or from the ECS worker's
-// Consumer.Dequeue loop.
+// to (EdgeHandler, CanonicalizationHandler) know nothing about SQS.
 package lambda
 
 import (

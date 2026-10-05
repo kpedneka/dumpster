@@ -2,8 +2,8 @@
 
 // Integration tests for ratelimit/pgstore -- the shared-store rate limiter
 // that replaces internal/ratelimit/memory once the API runs more than one
-// replica. rate_limit_counters has no RLS (see migrations/030, and jobs for
-// the existing precedent): a rate-limit decision happens before any tenant
+// replica. rate_limit_counters has no RLS (see migrations/030): a
+// rate-limit decision happens before any tenant
 // identity exists, so these tests connect with a plain pool, not the
 // RLS-aware rls.TxRunner other pgstore integration tests use.
 //
@@ -44,7 +44,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 // configuration for cmd/api (pgx.QueryExecModeSimpleProtocol, required for
 // Neon's PgBouncer in transaction mode). Allow's own params are plain
 // scalars (text, float8), not the array type that broke a different query
-// under this mode once already (see queue/pgstore's integration test) --
+// under this mode once already --
 // this still exercises the real production connection mode directly rather
 // than assuming scalar params are safe.
 func testSimpleProtocolPool(t *testing.T) *pgxpool.Pool {

@@ -159,8 +159,7 @@ func (s *Store) ActiveJobsForDocuments(ctx context.Context, userID uuid.UUID, do
 	}
 	// []string with an explicit ::uuid[] cast, not []uuid.UUID: cmd/api's
 	// pool uses pgx's simple protocol (PgBouncer transaction mode), which
-	// has no encode plan for a bare []uuid.UUID. Same workaround as
-	// internal/queue/pgstore.
+	// has no encode plan for a bare []uuid.UUID.
 	idStrings := make([]string, len(documentIDs))
 	for i, id := range documentIDs {
 		idStrings[i] = id.String()
