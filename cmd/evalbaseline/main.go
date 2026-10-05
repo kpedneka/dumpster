@@ -34,9 +34,10 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/db"
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/evalcorpus"
+	statuspg "github.com/kunalpednekar/dumpster/internal/jobstatus/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
-	qpg "github.com/kunalpednekar/dumpster/internal/queue/pgstore"
+	"github.com/kunalpednekar/dumpster/internal/queue/dispatch/dispatchaws"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	sessionpg "github.com/kunalpednekar/dumpster/internal/session/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
@@ -75,7 +76,11 @@ func main() {
 	txRunner := rls.New(pool)
 	kbs := kbpg.New(txRunner)
 	docs := docpg.New(txRunner)
-	q := qpg.New(pool)
+	publisher, err := dispatchaws.New(ctx, cfg, statuspg.New(txRunner))
+	if err != nil {
+		logger.Error("pipeline publisher setup failed", "err", err)
+		os.Exit(1)
+	}
 	obj, err := s3store.New(ctx, s3store.Config{
 		Endpoint:     cfg.S3Endpoint,
 		Region:       cfg.S3Region,
@@ -103,7 +108,7 @@ func main() {
 	}
 	logger.Info("created benchmark kb", "kb_id", kb.ID, "name", kb.Name)
 
-	ing := &evalcorpus.Ingester{Objects: obj, Documents: docs, Publisher: q}
+	ing := &evalcorpus.Ingester{Objects: obj, Documents: docs, Publisher: publisher}
 	results, err := ing.IngestAll(ctx, userID, kb.ID, files)
 	if err != nil {
 		logger.Error("ingest failed partway through", "err", err, "kb_id", kb.ID)

@@ -84,13 +84,18 @@ func (s *Store) BulkCreate(ctx context.Context, chunks []*chunk.Chunk) error {
 			placeholders := make([]string, len(group))
 			args := make([]any, 0, len(group)*chunkBulkCreateColumnCount)
 			for i, c := range group {
-				var bboxJSON []byte
+				// A string, not the []byte json.Marshal returns: under the
+				// simple protocol (db.Connect's pooled DSN) pgx encodes
+				// []byte as a bytea hex literal, which the jsonb column
+				// rejects; a string goes as a plain text literal Postgres
+				// parses as JSON under either protocol. nil stays SQL NULL.
+				var bboxJSON any
 				if c.BoundingBox != nil {
-					var err error
-					bboxJSON, err = json.Marshal(c.BoundingBox)
+					b, err := json.Marshal(c.BoundingBox)
 					if err != nil {
 						return fmt.Errorf("marshal bounding_box: %w", err)
 					}
+					bboxJSON = string(b)
 				}
 				base := i * chunkBulkCreateColumnCount
 				placeholders[i] = fmt.Sprintf(

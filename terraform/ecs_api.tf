@@ -108,6 +108,14 @@ resource "aws_ecs_task_definition" "api" {
         { name = "MAX_DOCUMENTS_PER_SESSION", value = tostring(var.max_documents_per_session) },
         { name = "RATE_LIMIT_REQUESTS", value = tostring(var.rate_limit_requests) },
         { name = "MAX_COMMUNITY_GRAPH_ENTITIES", value = "5000" },
+        # Where uploads and retries publish jobs (internal/queue/dispatch):
+        # the pipeline's state machines and its two Lambda queues. The task
+        # role's StartExecution/SendMessage grant is in pipeline.tf.
+        { name = "DOCUMENT_INDEXING_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["document_indexing"] },
+        { name = "ENTITY_EXTRACTION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["entity_extraction"] },
+        { name = "REGION_CLASSIFICATION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["region_classification"] },
+        { name = "EDGE_EXTRACTION_QUEUE_URL", value = module.pipeline.job_queue_urls["edge_extraction"] },
+        { name = "CANONICALIZATION_QUEUE_URL", value = module.pipeline.job_queue_urls["canonicalization"] },
       ])
       secrets = concat(local.shared_secrets, [
         { name = "DATABASE_URL_POOLED", valueFrom = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn },

@@ -33,9 +33,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/pipeline/regionclassify"
 	"github.com/kunalpednekar/dumpster/internal/pipeline/router"
 	"github.com/kunalpednekar/dumpster/internal/queue"
-	"github.com/kunalpednekar/dumpster/internal/queue/dispatch"
-	"github.com/kunalpednekar/dumpster/internal/queue/sqs"
-	"github.com/kunalpednekar/dumpster/internal/queue/stepfunctions"
+	"github.com/kunalpednekar/dumpster/internal/queue/dispatch/dispatchaws"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	statspg "github.com/kunalpednekar/dumpster/internal/stats/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
@@ -76,32 +74,16 @@ func main() {
 		fail("scratch object store setup failed", err)
 	}
 
-	sqsClient, err := sqs.NewClient(ctx, cfg.AWSRegion)
-	if err != nil {
-		fail("sqs client setup failed", err)
-	}
-	sfnClient, err := stepfunctions.NewClient(ctx, cfg.AWSRegion)
-	if err != nil {
-		fail("step functions client setup failed", err)
-	}
-
 	docs := docpg.New(txRunner)
 	chunks := chunkpg.New(txRunner)
 	status := statuspg.New(txRunner)
 	// usage_stats has no RLS policy, so it uses a plain TxRunner, as in
 	// cmd/worker.
 	stats := statspg.New(db.NewTxRunner(pool))
-	publisher := dispatch.New(status,
-		sqs.New(sqsClient, sqs.Config{
-			EdgeExtractionQueueURL:   cfg.EdgeExtractionQueueURL,
-			CanonicalizationQueueURL: cfg.CanonicalizationQueueURL,
-		}),
-		stepfunctions.New(sfnClient, stepfunctions.Config{
-			DocumentIndexingStateMachineARN:     cfg.DocumentIndexingStateMachineARN,
-			EntityExtractionStateMachineARN:     cfg.EntityExtractionStateMachineARN,
-			RegionClassificationStateMachineARN: cfg.RegionClassificationStateMachineARN,
-		}),
-	)
+	publisher, err := dispatchaws.New(ctx, cfg, status)
+	if err != nil {
+		fail("pipeline publisher setup failed", err)
+	}
 	splitter := chunk.DefaultFixedWindow()
 
 	docIndex := docindex.New(docindex.Deps{
