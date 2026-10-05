@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
@@ -241,5 +242,68 @@ func TestBulkCreate_SpansMultipleStatementsWithoutLosingRows(t *testing.T) {
 	}
 	if len(seen) != n {
 		t.Errorf("got %d distinct ordinals, want %d", len(seen), n)
+	}
+}
+
+// TestBulkCreate_BoundingBox_SimpleProtocol covers the connection mode
+// cmd/api and the pipeline Lambdas actually use: db.Connect's pooled DSN
+// runs pgx in simple protocol (PgBouncer transaction mode), which encodes
+// parameters client-side as literals. A region-derived chunk's
+// bounding_box must still land in its jsonb column as JSON -- passed as
+// raw bytes, simple protocol sends a bytea hex literal instead, which
+// Postgres rejects ("invalid input syntax for type json"). The default
+// pool in the tests above uses the extended protocol and never hit this.
+func TestBulkCreate_BoundingBox_SimpleProtocol(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping integration test")
+	}
+	pcfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	pcfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	pool, err := pgxpool.NewWithConfig(context.Background(), pcfg)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	txRunner := rls.New(pool)
+	ctx := context.Background()
+	sess, err := sessionpg.New(pool).Create(ctx)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	userCtx := auth.WithUserID(ctx, sess.ID)
+	k, err := kbpg.New(txRunner).Create(userCtx, sess.ID, "chunk-simple-protocol-kb")
+	if err != nil {
+		t.Fatalf("create kb: %v", err)
+	}
+	doc, err := docpg.New(txRunner).Create(userCtx, &document.Document{
+		KBID: k.ID, UserID: sess.ID, Filename: "doc.pdf",
+		S3Key: "test/" + uuid.New().String(), ContentType: "application/pdf",
+		Status: document.StatusProcessing,
+	})
+	if err != nil {
+		t.Fatalf("create doc: %v", err)
+	}
+
+	bbox := &chunk.BoundingBox{X0: 0.1, Y0: 0.2, X1: 0.8, Y1: 0.9}
+	page := 2
+	chunks := pgstore.New(txRunner)
+	if err := chunks.BulkCreate(userCtx, []*chunk.Chunk{
+		{DocumentID: doc.ID, KBID: k.ID, UserID: sess.ID, Ordinal: 0, Text: "region text", PageNumber: &page, BoundingBox: bbox},
+		{DocumentID: doc.ID, KBID: k.ID, UserID: sess.ID, Ordinal: 1, Text: "no region"},
+	}); err != nil {
+		t.Fatalf("BulkCreate: %v", err)
+	}
+
+	got, err := chunks.ListByDocument(userCtx, sess.ID, doc.ID)
+	if err != nil {
+		t.Fatalf("ListByDocument: %v", err)
+	}
+	if len(got) != 2 || got[0].BoundingBox == nil || *got[0].BoundingBox != *bbox || got[1].BoundingBox != nil {
+		t.Errorf("chunks = %+v, want the first with %+v and the second with no bounding box", got, bbox)
 	}
 }
