@@ -1,12 +1,11 @@
 //go:build integration
 
-// Integration test for manifest/pgstore's BulkCreate, specifically
-// covering its switch from a per-row Exec loop to CopyFrom (Postgres's
-// COPY wire protocol) -- see BulkCreate's own doc for the measured
-// numbers behind the change. CopyFrom is a genuinely different code path
-// than a normal INSERT, so this exists to give real evidence -- against a
-// real Postgres, not an in-memory fake -- that every field (including the
-// JSONB bounding_box column) still round-trips correctly.
+// Integration test for manifest/pgstore's BulkCreate, a batched multi-row
+// INSERT (db.InsertRows) -- see BulkCreate's own doc for why. Against a
+// real Postgres, not an in-memory fake, it checks that every field
+// (including the JSONB bounding_box column) round-trips and that
+// row-level security tenant isolation applies. CI runs it as
+// dumpster_app, so the policies are enforced.
 //
 // Excluded from the default `go test ./...` run and the coverage gate by
 // this build tag. Run explicitly against a migrated database:
@@ -49,7 +48,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func TestBulkCreate_RoundTripsAllFieldsViaCopyFrom(t *testing.T) {
+func TestBulkCreate_RoundTripsAllFields(t *testing.T) {
 	pool := testPool(t)
 	txRunner := rls.New(pool)
 	sessions := sessionpg.New(pool)
@@ -116,7 +115,7 @@ func TestBulkCreate_RoundTripsAllFieldsViaCopyFrom(t *testing.T) {
 		t.Errorf("page 1 region fields: %+v", r1)
 	}
 	if r1.BoundingBox != bbox {
-		t.Errorf("page 1 bounding_box (JSONB via CopyFrom) = %+v, want %+v", r1.BoundingBox, bbox)
+		t.Errorf("page 1 bounding_box (JSONB) = %+v, want %+v", r1.BoundingBox, bbox)
 	}
 	if r1.ID == uuid.Nil {
 		t.Error("expected a DB-generated ID")
@@ -134,14 +133,14 @@ func TestBulkCreate_RoundTripsAllFieldsViaCopyFrom(t *testing.T) {
 	}
 }
 
-// TestBulkCreate_TenantIsolationSurvivesCopyFrom is the critical
+// TestBulkCreate_TenantIsolation is the critical
 // correctness check for this change: COPY is a genuinely different wire
 // protocol than a normal INSERT, so this proves row-level security still
 // scopes rows written via BulkCreate to their owning tenant -- per
 // CLAUDE.md's multi-tenancy invariant ("every query filters on the
 // current tenant. No exceptions"), this needed direct evidence, not an
 // assumption that RLS "just applies."
-func TestBulkCreate_TenantIsolationSurvivesCopyFrom(t *testing.T) {
+func TestBulkCreate_TenantIsolation(t *testing.T) {
 	pool := testPool(t)
 	txRunner := rls.New(pool)
 	sessions := sessionpg.New(pool)
@@ -193,6 +192,6 @@ func TestBulkCreate_TenantIsolationSurvivesCopyFrom(t *testing.T) {
 		t.Fatalf("cross-tenant ListByDocument errored instead of returning empty: %v", err)
 	}
 	if len(gotCrossTenant) != 0 {
-		t.Fatalf("tenant A read %d of tenant B's regions via CopyFrom-written rows -- RLS violation", len(gotCrossTenant))
+		t.Fatalf("tenant A read %d of tenant B's regions via BulkCreate-written rows -- RLS violation", len(gotCrossTenant))
 	}
 }

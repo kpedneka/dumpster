@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/kunalpednekar/dumpster/internal/auth"
@@ -276,9 +277,11 @@ func TestKBGraph_CollapsesAcrossChunksAndDocuments(t *testing.T) {
 	// Verify SaveResult actually wrote community_id onto the canonical_entities
 	// row, not just the kb_community_runs summary.
 	var wroteCommunityID int
-	if err := pool.QueryRow(ctx,
-		`SELECT community_id FROM canonical_entities WHERE id = $1`, adaCanon,
-	).Scan(&wroteCommunityID); err != nil {
+	if err := txRunner.RunInTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT community_id FROM canonical_entities WHERE id = $1`, adaCanon,
+		).Scan(&wroteCommunityID)
+	}); err != nil {
 		t.Fatalf("query canonical_entities.community_id: %v", err)
 	}
 	if wroteCommunityID != 0 {

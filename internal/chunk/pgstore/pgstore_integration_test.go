@@ -166,10 +166,12 @@ func TestBulkCreate_RoundTripsFieldsAndEmbedding(t *testing.T) {
 	}
 
 	var emptyDims *int
-	err = pool.QueryRow(ctx,
-		`SELECT vector_dims(embedding) FROM chunks WHERE id = $1`,
-		c1.ID,
-	).Scan(&emptyDims)
+	err = txRunner.RunInTx(userCtx, func(tx pgx.Tx) error {
+		return tx.QueryRow(userCtx,
+			`SELECT vector_dims(embedding) FROM chunks WHERE id = $1`,
+			c1.ID,
+		).Scan(&emptyDims)
+	})
 	if err != nil {
 		t.Fatalf("query chunk 1 embedding: %v", err)
 	}
