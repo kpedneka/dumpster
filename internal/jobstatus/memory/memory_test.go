@@ -230,3 +230,32 @@ func TestActiveJobsForDocuments_NoIDs_ReturnsEmptyMap(t *testing.T) {
 		t.Errorf("got %v, want an empty non-nil map", got)
 	}
 }
+
+func TestGet(t *testing.T) {
+	ctx := context.Background()
+	s := memory.New()
+	key := jobstatus.Key{UserID: uuid.New(), DocumentID: uuid.New(), JobType: queue.JobTypeMalwareScan}
+
+	if _, err := s.Get(ctx, key); !errors.Is(err, jobstatus.ErrNotFound) {
+		t.Errorf("unknown job: got %v, want ErrNotFound", err)
+	}
+	if _, err := s.Enqueue(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkFailed(ctx, key, 1, "Malware detected"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.Get(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Status != jobstatus.StatusFailed || rec.LastError != "Malware detected" || rec.Attempt != 1 {
+		t.Errorf("got %+v, want failed attempt 1 with its reason", rec)
+	}
+
+	other := key
+	other.UserID = uuid.New()
+	if _, err := s.Get(ctx, other); !errors.Is(err, jobstatus.ErrNotFound) {
+		t.Errorf("another tenant: got %v, want ErrNotFound", err)
+	}
+}

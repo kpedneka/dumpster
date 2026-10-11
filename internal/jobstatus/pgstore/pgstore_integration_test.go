@@ -199,3 +199,27 @@ func TestRowLevelSecurity_OtherTenantSeesAndChangesNothing(t *testing.T) {
 		t.Errorf("owner's job = %+v, want still pending", got)
 	}
 }
+
+func TestGet(t *testing.T) {
+	pool := newPool(t, false)
+	s := pgstore.New(rls.New(pool))
+	ctx, userID, docID := newDocument(t, pool)
+	k := jobstatus.Key{UserID: userID, DocumentID: docID, JobType: queue.JobTypeMalwareScan}
+
+	if _, err := s.Get(ctx, k); !errors.Is(err, jobstatus.ErrNotFound) {
+		t.Fatalf("before Enqueue: got %v, want ErrNotFound", err)
+	}
+	if _, err := s.Enqueue(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkFailed(ctx, k, 1, "Malware detected (EICAR)"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := s.Get(ctx, k)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if rec.Status != jobstatus.StatusFailed || rec.LastError != "Malware detected (EICAR)" || rec.Attempt != 1 || rec.Key != k {
+		t.Errorf("got %+v, want failed attempt 1 with its reason", rec)
+	}
+}

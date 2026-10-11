@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,8 +33,38 @@ import (
 )
 
 // testDeps assembles a Deps with all in-memory/mock implementations.
+// fakeScanner records the malware scans uploads begin, and whether each
+// document's file was already stored when its scan began (it must not be:
+// the scan record has to exist before GuardDuty can report on the file).
+type fakeScanner struct {
+	objects       *objmock.Store
+	begun         []uuid.UUID
+	storedAtBegin map[uuid.UUID]bool
+	beginErr      error
+	rejected      map[uuid.UUID]bool
+	rejectedErr   error
+}
+
+func (s *fakeScanner) Begin(ctx context.Context, doc *document.Document) error {
+	if s.beginErr != nil {
+		return s.beginErr
+	}
+	if s.storedAtBegin == nil {
+		s.storedAtBegin = map[uuid.UUID]bool{}
+	}
+	_, err := s.objects.Get(ctx, doc.S3Key)
+	s.storedAtBegin[doc.ID] = err == nil
+	s.begun = append(s.begun, doc.ID)
+	return nil
+}
+
+func (s *fakeScanner) Rejected(_ context.Context, _, docID uuid.UUID) (bool, error) {
+	return s.rejected[docID], s.rejectedErr
+}
+
 func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.Store, pub *qmem.Publisher) Deps {
 	return Deps{
+		Scans:             &fakeScanner{objects: obj},
 		KBs:               kbRepo,
 		Docs:              docRepo,
 		Objects:           obj,

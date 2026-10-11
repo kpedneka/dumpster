@@ -1,6 +1,9 @@
 package queue
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStageFor_RegionClassification_PhaseDeterminesStage(t *testing.T) {
 	analyzing := StageFor(JobTypeRegionClassification, "")
@@ -32,21 +35,17 @@ func TestStageFor_EntityPipelineJobTypes_CollapseToOneStage(t *testing.T) {
 
 func TestStagesForDocument_RegionClassification_IncludesAnalyzing(t *testing.T) {
 	stages := StagesForDocument(true)
-	if len(stages) != 4 {
-		t.Fatalf("got %d stages, want 4", len(stages))
-	}
-	if stages[0].Key != "analyzing" || stages[1].Key != "embedding" || stages[2].Key != "entities" || stages[3].Key != "complete" {
-		t.Errorf("got stage order %v, want [analyzing embedding entities complete]", stageKeys(stages))
+	want := []string{"scanning", "analyzing", "embedding", "entities", "complete"}
+	if got := stageKeys(stages); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got stage order %v, want %v", got, want)
 	}
 }
 
 func TestStagesForDocument_PlainText_SkipsAnalyzing(t *testing.T) {
 	stages := StagesForDocument(false)
-	if len(stages) != 3 {
-		t.Fatalf("got %d stages, want 3", len(stages))
-	}
-	if stages[0].Key != "embedding" || stages[1].Key != "entities" || stages[2].Key != "complete" {
-		t.Errorf("got stage order %v, want [embedding entities complete]", stageKeys(stages))
+	want := []string{"scanning", "embedding", "entities", "complete"}
+	if got := stageKeys(stages); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("got stage order %v, want %v", got, want)
 	}
 }
 

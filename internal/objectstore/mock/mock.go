@@ -18,6 +18,15 @@ type Store struct {
 	// DeleteErrFor, when set for a key, is returned by Delete for that key
 	// instead of removing it, so tests can exercise partial-failure paths.
 	DeleteErrFor map[string]error
+	// PutErr, when set, is returned by every Put.
+	PutErr error
+}
+
+// Len returns how many objects are stored.
+func (s *Store) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.objects)
 }
 
 func New() *Store {
@@ -25,6 +34,9 @@ func New() *Store {
 }
 
 func (s *Store) Put(_ context.Context, key string, r io.Reader, _ int64, _ string) error {
+	if s.PutErr != nil {
+		return s.PutErr
+	}
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
