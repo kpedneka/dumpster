@@ -181,8 +181,16 @@ type Writer interface {
 	MarkFailed(ctx context.Context, key Key, attempt int, reason string) error
 }
 
+// Getter reads one job's current record, finished or not.
+type Getter interface {
+	// Get returns key's record, or ErrNotFound when there is none (or it
+	// belongs to another tenant).
+	Get(ctx context.Context, key Key) (Record, error)
+}
+
 // Store is a Writer that can also serve the API's reads.
 type Store interface {
 	Writer
+	Getter
 	queue.JobStatusReader
 }

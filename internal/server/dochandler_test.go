@@ -47,29 +47,6 @@ func multipartUpload(t *testing.T, filename, content string) (*bytes.Buffer, str
 	return body, w.FormDataContentType()
 }
 
-// failPublisher always returns an error from PublishDocumentUploaded.
-type failPublisher struct{}
-
-func (p *failPublisher) PublishDocumentUploaded(_ context.Context, _ queue.DocumentUploaded) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishEntityExtraction(_ context.Context, _ queue.EntityExtractionRequested) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishEdgeExtraction(_ context.Context, _ queue.EdgeExtractionRequested) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishRegionClassification(_ context.Context, _ queue.RegionClassificationRequested) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishCanonicalization(_ context.Context, _ queue.CanonicalizationRequested) error {
-	return errors.New("queue unavailable")
-}
-
 // fakeJobStatusReader returns canned active queue.JobStatus entries for
 // whichever document IDs are present in its map; document IDs absent
 // from the map (or mapped to an empty/nil slice) are reported as having
@@ -127,16 +104,17 @@ func TestDocUpload(t *testing.T) {
 	}
 	_ = rc.Close()
 
-	// Verify the DocumentUploaded event was published.
-	events := pub.Events()
-	if len(events) != 1 {
-		t.Fatalf("events: got %d, want 1", len(events))
+	// The upload begins a malware scan and waits for it: nothing is
+	// published until the scan reports the file clean.
+	scans := deps.Scans.(*fakeScanner)
+	if len(scans.begun) != 1 || scans.begun[0] != doc.ID {
+		t.Fatalf("scans begun = %v, want [%v]", scans.begun, doc.ID)
 	}
-	if events[0].DocumentID != doc.ID {
-		t.Errorf("event document_id mismatch")
+	if scans.storedAtBegin[doc.ID] {
+		t.Error("the file was stored before its scan was recorded; a fast scan result would find no record")
 	}
-	if events[0].UserID != userID {
-		t.Errorf("event user_id mismatch")
+	if n := len(pub.Events()) + len(pub.RegionClassificationEvents()); n != 0 {
+		t.Errorf("processing published %d job(s) at upload, want none before the scan", n)
 	}
 }
 
@@ -177,7 +155,7 @@ func TestDocUpload_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestDocUpload_PDF_RoutesToRegionClassification(t *testing.T) {
+func TestDocUpload_PDF_WaitsForScan(t *testing.T) {
 	deps, kbRepo, _, _, pub := defaultDeps()
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -193,16 +171,15 @@ func TestDocUpload_PDF_RoutesToRegionClassification(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status: got %d, want 201; body: %s", w.Code, w.Body.String())
 	}
-	// Should have published a RegionClassification event, not a DocumentUploaded.
-	if len(pub.RegionClassificationEvents()) != 1 {
-		t.Errorf("expected 1 RegionClassification event, got %d", len(pub.RegionClassificationEvents()))
+	if n := len(pub.Events()) + len(pub.RegionClassificationEvents()); n != 0 {
+		t.Errorf("published %d job(s) at upload, want none before the scan", n)
 	}
-	if len(pub.Events()) != 0 {
-		t.Errorf("expected 0 DocumentUploaded events for PDF, got %d", len(pub.Events()))
+	if len(deps.Scans.(*fakeScanner).begun) != 1 {
+		t.Error("expected the upload to begin a malware scan")
 	}
 }
 
-func TestDocUpload_Image_RoutesToRegionClassification(t *testing.T) {
+func TestDocUpload_Image_WaitsForScan(t *testing.T) {
 	deps, kbRepo, _, _, pub := defaultDeps()
 	router := NewRouter(deps)
 	userID := uuid.New()
@@ -218,8 +195,11 @@ func TestDocUpload_Image_RoutesToRegionClassification(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Fatalf("status: got %d, want 201; body: %s", w.Code, w.Body.String())
 	}
-	if len(pub.RegionClassificationEvents()) != 1 {
-		t.Errorf("expected 1 RegionClassification event for image, got %d", len(pub.RegionClassificationEvents()))
+	if n := len(pub.Events()) + len(pub.RegionClassificationEvents()); n != 0 {
+		t.Errorf("published %d job(s) at upload, want none before the scan", n)
+	}
+	if len(deps.Scans.(*fakeScanner).begun) != 1 {
+		t.Error("expected the upload to begin a malware scan")
 	}
 }
 
@@ -404,9 +384,9 @@ func TestDocDelete_WrongKB(t *testing.T) {
 
 // --- Finding 4: publish error → document marked failed ---
 
-func TestDocUpload_PublishError(t *testing.T) {
-	deps, kbRepo, docRepo, _, _ := defaultDeps()
-	deps.Publisher = &failPublisher{}
+func TestDocUpload_ScanBeginError(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	deps.Scans.(*fakeScanner).beginErr = errors.New("timeout queue unavailable")
 	router := NewRouter(deps)
 	userID := uuid.New()
 
@@ -419,19 +399,45 @@ func TestDocUpload_PublishError(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status: got %d, want 500 on publish failure", w.Code)
+		t.Fatalf("status: got %d, want 500 when the scan can't begin", w.Code)
 	}
 
-	// The document row must exist and be marked failed.
+	// Nothing is kept: no document row and no stored file.
 	docs, err := docRepo.ListByKB(context.TODO(), userID, kb.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(docs) != 1 {
-		t.Fatalf("expected 1 document record, got %d", len(docs))
+	if len(docs) != 0 {
+		t.Errorf("expected no document record, got %d", len(docs))
 	}
-	if docs[0].Status != document.StatusFailed {
-		t.Errorf("status: got %q, want failed", docs[0].Status)
+	if n := obj.Len(); n != 0 {
+		t.Errorf("expected no stored file, got %d", n)
+	}
+}
+
+func TestDocUpload_StoreError_RemovesDocument(t *testing.T) {
+	deps, kbRepo, docRepo, obj, _ := defaultDeps()
+	obj.PutErr = errors.New("s3 unavailable")
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	body, ct := multipartUpload(t, "notes.txt", "content")
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+kb.ID.String()+"/documents", body, userID)
+	req.Header.Set("Content-Type", ct)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500 when the file can't be stored", w.Code)
+	}
+	docs, err := docRepo.ListByKB(context.TODO(), userID, kb.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("expected the document record removed, got %d", len(docs))
 	}
 }
 
@@ -524,8 +530,8 @@ func TestDocList_IncludesProgress_ForPendingPDF(t *testing.T) {
 	if progress == nil {
 		t.Fatal("expected Progress to be set for a processing PDF")
 	}
-	if len(progress.Stages) != 4 {
-		t.Errorf("Stages: got %d, want 4 (PDF goes through region classification, plus the terminal complete stage)", len(progress.Stages))
+	if len(progress.Stages) != 5 {
+		t.Errorf("Stages: got %d, want 5 (malware scan, then region classification's stages, plus the terminal complete stage)", len(progress.Stages))
 	}
 	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "embedding" {
 		t.Errorf("ActiveStages: got %v, want [embedding]", progress.ActiveStages)
@@ -562,8 +568,8 @@ func TestDocList_IncludesProgress_ForPendingText_SkipsAnalyzing(t *testing.T) {
 	// Plain text never goes through region classification, so no
 	// "analyzing" stage should appear -- but the terminal complete stage
 	// is still there, since every document ends on it.
-	if len(progress.Stages) != 3 {
-		t.Errorf("Stages: got %d, want 3 (text/markdown skips analyzing, plus the terminal complete stage)", len(progress.Stages))
+	if len(progress.Stages) != 4 {
+		t.Errorf("Stages: got %d, want 4 (malware scan; text/markdown skips analyzing; plus the terminal complete stage)", len(progress.Stages))
 	}
 	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "embedding" {
 		t.Errorf("ActiveStages: got %v, want [embedding]", progress.ActiveStages)
@@ -664,8 +670,8 @@ func TestDocList_IncludesProgress_ForIndexedDocument_ActiveEntityJob(t *testing.
 	if progress == nil {
 		t.Fatal("expected Progress to still be set for an indexed document with an active entity-extraction job")
 	}
-	if len(progress.Stages) != 4 {
-		t.Errorf("Stages: got %d, want 4 (PDF goes through region classification, plus the terminal complete stage)", len(progress.Stages))
+	if len(progress.Stages) != 5 {
+		t.Errorf("Stages: got %d, want 5 (malware scan, then region classification's stages, plus the terminal complete stage)", len(progress.Stages))
 	}
 	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "entities" {
 		t.Errorf("ActiveStages: got %v, want [entities]", progress.ActiveStages)
@@ -1178,7 +1184,7 @@ func TestDocUpload_RecordsSuccessMetric(t *testing.T) {
 
 func TestDocUpload_RecordsFailureMetric(t *testing.T) {
 	deps, kbRepo, _, _, _ := defaultDeps()
-	deps.Publisher = &failPublisher{}
+	deps.Scans.(*fakeScanner).beginErr = errors.New("timeout queue unavailable")
 	inst, metrics := telemetrytest.New(t)
 	deps.Instruments = inst
 	router := NewRouter(deps)
@@ -1193,7 +1199,7 @@ func TestDocUpload_RecordsFailureMetric(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status: got %d, want 500 on publish failure", w.Code)
+		t.Fatalf("status: got %d, want 500 when the scan can't begin", w.Code)
 	}
 
 	if _, ok := metrics.CounterValue("documents_uploaded_total", attribute.String("outcome", "failure")); !ok {
@@ -1354,6 +1360,56 @@ func TestDocRetry_PDF_RoutesToRegionClassification(t *testing.T) {
 	}
 	if len(pub.Events()) != 0 {
 		t.Errorf("DocumentUploaded events: got %d, want 0 for a PDF retry", len(pub.Events()))
+	}
+}
+
+func TestDocRetry_RejectedByMalwareScan_Refused(t *testing.T) {
+	deps, kbRepo, docRepo, _, pub := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "invoice.pdf",
+		S3Key: "documents/test/invoice.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
+	})
+	deps.Scans.(*fakeScanner).reasons = map[uuid.UUID]string{doc.ID: "Malware detected (EICAR)"}
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want 409 for a file the malware scan rejected", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "upload") {
+		t.Errorf("body %q should tell the user to upload the file again", w.Body.String())
+	}
+	if n := len(pub.Events()) + len(pub.RegionClassificationEvents()); n != 0 {
+		t.Errorf("published %d job(s) for a rejected file, want none", n)
+	}
+}
+
+func TestDocRetry_ScanCheckError(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	deps.Scans.(*fakeScanner).rejectedErr = errors.New("database unavailable")
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+
+	req := authedRequest(t, deps, http.MethodPost,
+		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500 when the scan status can't be read", w.Code)
 	}
 }
 
@@ -1627,5 +1683,79 @@ func TestDocRetry_TenantIsolation(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant retry: got %d, want 404", w.Code)
+	}
+}
+
+// A document the malware scan rejected carries the scan's reason, so the
+// user sees why it failed; any other document doesn't.
+func TestDocList_ScanRejection_IncludesReason(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	rejected, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "invoice.pdf",
+		S3Key: "documents/test/invoice.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
+	})
+	otherFailure, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+	deps.Scans.(*fakeScanner).reasons = map[uuid.UUID]string{rejected.ID: "Malware detected (EICAR)"}
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var page struct {
+		Items []struct {
+			ID              uuid.UUID `json:"id"`
+			RejectionReason *string   `json:"rejection_reason"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[uuid.UUID]*string{}
+	for _, it := range page.Items {
+		reasons[it.ID] = it.RejectionReason
+	}
+	if r := reasons[rejected.ID]; r == nil || *r != "Malware detected (EICAR)" {
+		t.Errorf("rejected document's rejection_reason = %v, want the scan's reason", r)
+	}
+	if r := reasons[otherFailure.ID]; r != nil {
+		t.Errorf("a document that failed for another reason has rejection_reason %q, want none", *r)
+	}
+}
+
+func TestDocGet_ScanRejection_IncludesReason(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "invoice.pdf",
+		S3Key: "documents/test/invoice.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
+	})
+	deps.Scans.(*fakeScanner).reasons = map[uuid.UUID]string{doc.ID: "Malware detected (EICAR)"}
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var got struct {
+		RejectionReason string `json:"rejection_reason"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RejectionReason != "Malware detected (EICAR)" {
+		t.Errorf("rejection_reason = %q, want the scan's reason", got.RejectionReason)
 	}
 }

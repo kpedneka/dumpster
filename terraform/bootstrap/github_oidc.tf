@@ -343,6 +343,43 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["arn:aws:s3:::dumpster-*"]
   }
 
+  # terraform/modules/pipeline/malware_scan.tf: the GuardDuty Malware
+  # Protection plan scanning each environment's uploads bucket. A plan's ARN
+  # ends in an AWS-assigned ID, so it's scoped to this account's plans
+  # rather than by name.
+  statement {
+    sid = "GuardDutyMalwareProtectionPlans"
+    actions = [
+      "guardduty:CreateMalwareProtectionPlan",
+      "guardduty:GetMalwareProtectionPlan",
+      "guardduty:UpdateMalwareProtectionPlan",
+      "guardduty:DeleteMalwareProtectionPlan",
+      "guardduty:TagResource",
+      "guardduty:UntagResource",
+      "guardduty:ListTagsForResource",
+    ]
+    resources = ["arn:aws:guardduty:${var.aws_region}:${data.aws_caller_identity.current.account_id}:malware-protection-plan/*"]
+  }
+
+  # The EventBridge rule that sends GuardDuty's scan results to the
+  # malware scan Lambda (malware_scan.tf). Only this project's own
+  # dumpster-* rules; GuardDuty manages its own rule with its own role.
+  statement {
+    sid = "EventBridgeRules"
+    actions = [
+      "events:PutRule",
+      "events:DeleteRule",
+      "events:DescribeRule",
+      "events:PutTargets",
+      "events:RemoveTargets",
+      "events:ListTargetsByRule",
+      "events:TagResource",
+      "events:UntagResource",
+      "events:ListTagsForResource",
+    ]
+    resources = ["arn:aws:events:${var.aws_region}:${data.aws_caller_identity.current.account_id}:rule/dumpster-*"]
+  }
+
   statement {
     sid       = "ECR"
     actions   = ["ecr:*"]

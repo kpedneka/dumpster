@@ -56,6 +56,7 @@ run:
 lambdas:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/lambda-pipeline/bootstrap ./cmd/lambda-pipeline
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o build/lambda-malware-scan/bootstrap ./cmd/lambda-malware-scan
 
 # Reads .env.local and hands its settings to terraform/dev as TF_VAR_*,
 # so secrets live in one place. Any AWS keys .env.local sets are cleared,

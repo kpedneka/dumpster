@@ -20,9 +20,11 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
 	"github.com/kunalpednekar/dumpster/internal/llm/instrumented"
+	"github.com/kunalpednekar/dumpster/internal/malwarescan"
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue/dispatch/dispatchaws"
+	sqsqueue "github.com/kunalpednekar/dumpster/internal/queue/sqs"
 	ratelimitpg "github.com/kunalpednekar/dumpster/internal/ratelimit/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
@@ -109,11 +111,24 @@ func main() {
 		logger.Error("pipeline publisher setup failed", "err", err)
 		os.Exit(1)
 	}
+	// Every upload is scanned for malware before it's processed: the API
+	// records the pending scan and sends its timeout message, and the
+	// scan-result Lambda (cmd/lambda-malware-scan) takes it from there.
+	if cfg.MalwareScanTimeoutQueueURL == "" {
+		logger.Error("MALWARE_SCAN_TIMEOUT_QUEUE_URL is not set")
+		os.Exit(1)
+	}
+	timeoutSender, err := sqsqueue.NewClient(context.Background(), cfg.AWSRegion)
+	if err != nil {
+		logger.Error("malware scan timeout queue setup failed", "err", err)
+		os.Exit(1)
+	}
 	deps := server.Deps{
 		KBs:                       kbpg.New(txRunner),
 		Docs:                      docpg.New(txRunner),
 		Objects:                   obj,
 		Publisher:                 publisher,
+		Scans:                     malwarescan.NewScans(jobStatus, timeoutSender, cfg.MalwareScanTimeoutQueueURL),
 		JobStatusReader:           jobStatus,
 		Manifest:                  manifestpg.New(txRunner),
 		Canonical:                 canonicalpg.New(txRunner),

@@ -85,6 +85,13 @@ components:
             failed:
               type: integer
           required: [indexed, skipped, failed]
+        rejection_reason:
+          type: string
+          description: >-
+            Why the malware scan rejected this document's file, which was
+            then deleted. Set only for a failed document the scan rejected
+            (infected, unscannable or timed out); retrying such a document
+            returns 409, so the user uploads the file again.
         progress:
           type: object
           nullable: true

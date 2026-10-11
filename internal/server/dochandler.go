@@ -41,11 +41,25 @@ var allowedContentTypes = map[string]string{
 	".jpeg": "image/jpeg",
 }
 
+// UploadScanner is the upload side of malware scanning. An upload records a
+// pending scan with Begin and is processed only once the scan reports the
+// file clean (internal/malwarescan.Handler starts processing then).
+type UploadScanner interface {
+	// Begin records doc's pending scan and schedules its timeout. It must
+	// run before the file is stored, so the record exists by the time
+	// GuardDuty reports on the file.
+	Begin(ctx context.Context, doc *document.Document) error
+	// Rejection reports whether the scan rejected the document's file, and
+	// why. A rejected file is deleted, so only a new upload replaces it.
+	Rejection(ctx context.Context, userID, documentID uuid.UUID) (reason string, rejected bool, err error)
+}
+
 type docHandler struct {
 	kbRepo            kb.Repository
 	docRepo           document.Repository
 	objects           objectstore.ObjectStore
 	publisher         queue.Publisher
+	scans             UploadScanner
 	jobs              queue.JobStatusReader  // nil when per-document progress is not available
 	manifest          manifest.Repository    // nil when manifest not yet available
 	canonical         canonical.Repository   // nil when canonicalization not yet available
@@ -60,6 +74,7 @@ func registerDocRoutes(
 	docRepo document.Repository,
 	objects objectstore.ObjectStore,
 	publisher queue.Publisher,
+	scans UploadScanner,
 	jobs queue.JobStatusReader,
 	manifestRepo manifest.Repository,
 	canonicalRepo canonical.Repository,
@@ -78,6 +93,7 @@ func registerDocRoutes(
 		docRepo:           docRepo,
 		objects:           objects,
 		publisher:         publisher,
+		scans:             scans,
 		jobs:              jobs,
 		manifest:          manifestRepo,
 		canonical:         canonicalRepo,
@@ -162,14 +178,10 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 
 	s3Key := fmt.Sprintf("documents/%s/%s/%s/%s", userID, kbID, uuid.New(), filename)
 
-	// Stream directly from the multipart part — no io.ReadAll buffering needed.
-	if err := h.objects.Put(r.Context(), s3Key, file, header.Size, contentType); err != nil {
-		slog.Error("s3 put failed", "key", s3Key, "err", err)
-		h.recordUpload(r.Context(), "failure")
-		writeError(w, http.StatusInternalServerError, "failed to store file")
-		return
-	}
-
+	// The document row and its pending malware scan are recorded before
+	// the file is stored: GuardDuty scans the file as soon as it lands, and
+	// its result must find both. Processing starts only when the scan
+	// reports the file clean (internal/malwarescan).
 	doc, err := h.docRepo.Create(r.Context(), &document.Document{
 		KBID:        kbID,
 		UserID:      userID,
@@ -185,17 +197,51 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if publishErr := ingest.Start(r.Context(), h.publisher, doc); publishErr != nil {
-		// Mark failed so the caller knows processing will not happen. The S3
-		// object and DB row are retained — the reconciliation job can retry.
-		_ = h.docRepo.UpdateStatus(r.Context(), userID, doc.ID, document.StatusFailed)
-		h.recordUpload(r.Context(), "failure")
-		writeError(w, http.StatusInternalServerError, "failed to enqueue document for processing")
+	if err := h.scans.Begin(r.Context(), doc); err != nil {
+		slog.Error("malware scan: begin failed", "document_id", doc.ID, "err", err)
+		h.abandonUpload(r.Context(), doc)
+		writeError(w, http.StatusInternalServerError, "failed to start the malware scan")
+		return
+	}
+
+	// Stream directly from the multipart part — no io.ReadAll buffering needed.
+	if err := h.objects.Put(r.Context(), s3Key, file, header.Size, contentType); err != nil {
+		slog.Error("s3 put failed", "key", s3Key, "err", err)
+		h.abandonUpload(r.Context(), doc)
+		writeError(w, http.StatusInternalServerError, "failed to store file")
 		return
 	}
 
 	h.recordUpload(r.Context(), "success")
 	writeJSON(w, http.StatusCreated, doc)
+}
+
+// rejectionReason returns why the malware scan rejected d's file, or "" if
+// it didn't. Only a failed document can have been rejected. A lookup error
+// is logged rather than failing the request: the reason is extra detail on
+// top of the document's failed status.
+func (h *docHandler) rejectionReason(ctx context.Context, d *document.Document) string {
+	if d.Status != document.StatusFailed {
+		return ""
+	}
+	reason, _, err := h.scans.Rejection(ctx, d.UserID, d.ID)
+	if err != nil {
+		slog.Error("malware scan: read rejection failed", "document_id", d.ID, "err", err)
+		return ""
+	}
+	return reason
+}
+
+// abandonUpload removes the document row of an upload that failed before
+// its file was stored (its scan record goes with it), and records the
+// failure. The scan's timeout message then finds no document and does
+// nothing.
+func (h *docHandler) abandonUpload(ctx context.Context, doc *document.Document) {
+	if err := h.docRepo.Delete(ctx, doc.UserID, doc.ID); err != nil {
+		slog.Error("abandoned upload: delete document row failed", "document_id", doc.ID, "err", err)
+		_ = h.docRepo.UpdateStatus(ctx, doc.UserID, doc.ID, document.StatusFailed)
+	}
+	h.recordUpload(ctx, "failure")
 }
 
 // recordUpload increments DocumentsUploadedTotal for the given outcome, once
@@ -282,6 +328,9 @@ type docListItem struct {
 	// document is fully indexed -- see documentProgress.ActiveStages --
 	// so a caller can show ingestion history, not just live progress.
 	Progress *documentProgress `json:"progress,omitempty"`
+	// RejectionReason is why the malware scan rejected the document's file,
+	// set only for a document it rejected (whose file is then deleted).
+	RejectionReason string `json:"rejection_reason,omitempty"`
 }
 
 // documentProgress is the staged-checklist view of ingestion progress a
@@ -316,7 +365,7 @@ func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page Docu
 
 	if h.jobs == nil {
 		for i, d := range page.Items {
-			resp.Items[i] = &docListItem{Document: d}
+			resp.Items[i] = &docListItem{Document: d, RejectionReason: h.rejectionReason(ctx, d)}
 		}
 		return resp
 	}
@@ -331,7 +380,7 @@ func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page Docu
 	}
 
 	for i, d := range page.Items {
-		item := &docListItem{Document: d}
+		item := &docListItem{Document: d, RejectionReason: h.rejectionReason(ctx, d)}
 		// A failed (dead-lettered) document has nothing left to show --
 		// there's no in-flight or completed pipeline to report on. Every
 		// other status gets a checklist, including "indexed": that only
@@ -397,9 +446,11 @@ func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
 		// classification has run. Omitted (nil) for text/markdown documents
 		// and before classification completes.
 		ManifestSummary *manifestSummary `json:"manifest_summary,omitempty"`
+		// RejectionReason: see docListItem.RejectionReason.
+		RejectionReason string `json:"rejection_reason,omitempty"`
 	}
 
-	resp := &docDetailResponse{Document: doc}
+	resp := &docDetailResponse{Document: doc, RejectionReason: h.rejectionReason(r.Context(), doc)}
 	if h.manifest != nil {
 		regions, _ := h.manifest.ListByDocument(r.Context(), userID, docID)
 		if len(regions) > 0 {
@@ -608,6 +659,18 @@ func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
 	}
 	if hasActiveJob {
 		writeError(w, http.StatusConflict, "document has an active background job and cannot be retried yet")
+		return
+	}
+
+	// A file the malware scan rejected has been deleted; retrying can't
+	// bring it back.
+	_, rejected, err := h.scans.Rejection(r.Context(), userID, docID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check the malware scan")
+		return
+	}
+	if rejected {
+		writeError(w, http.StatusConflict, "this file was rejected by the malware scan and deleted; upload it again")
 		return
 	}
 

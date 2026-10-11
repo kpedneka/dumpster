@@ -89,6 +89,7 @@ jobs:
         run: |
           go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
           go build -o build/lambda-pipeline/bootstrap ./cmd/lambda-pipeline
+          go build -o build/lambda-malware-scan/bootstrap ./cmd/lambda-malware-scan
 
       - uses: opentofu/setup-opentofu@v1
         with:
@@ -402,6 +403,7 @@ jobs:
         run: |
           go build -o build/lambda-stateless-jobs/bootstrap ./cmd/lambda-stateless-jobs
           go build -o build/lambda-pipeline/bootstrap ./cmd/lambda-pipeline
+          go build -o build/lambda-malware-scan/bootstrap ./cmd/lambda-malware-scan
 
       - name: Destroy staging
         working-directory: terraform

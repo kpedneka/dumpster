@@ -120,6 +120,42 @@ func (s *Store) transition(ctx context.Context, key jobstatus.Key, attempt int, 
 	return nil
 }
 
+// Get implements jobstatus.Getter.
+func (s *Store) Get(ctx context.Context, key jobstatus.Key) (jobstatus.Record, error) {
+	rec := jobstatus.Record{Key: key}
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		var status string
+		var phase, lastError *string
+		err := tx.QueryRow(ctx,
+			`SELECT status, phase, attempt, last_error
+			 FROM document_job_status
+			 WHERE document_id = $1 AND job_type = $2 AND user_id = $3`,
+			key.DocumentID, string(key.JobType), key.UserID,
+		).Scan(&status, &phase, &rec.Attempt, &lastError)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return jobstatus.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		rec.Status = jobstatus.Status(status)
+		if phase != nil {
+			rec.Phase = *phase
+		}
+		if lastError != nil {
+			rec.LastError = *lastError
+		}
+		return nil
+	})
+	if errors.Is(err, jobstatus.ErrNotFound) {
+		return jobstatus.Record{}, err
+	}
+	if err != nil {
+		return jobstatus.Record{}, fmt.Errorf("jobstatus: get %s for document %s: %w", key.JobType, key.DocumentID, err)
+	}
+	return rec, nil
+}
+
 // lockRecord reads key's row FOR UPDATE, returning jobstatus.ErrNotFound
 // when it doesn't exist or isn't visible to this tenant.
 func lockRecord(ctx context.Context, tx pgx.Tx, key jobstatus.Key) (jobstatus.Record, error) {

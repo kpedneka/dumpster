@@ -414,6 +414,24 @@ describe('KBDetailPage', () => {
       expect(screen.getAllByRole('button', { name: /retry indexing/i })).toHaveLength(1)
     })
 
+    it('shows why the malware scan rejected a document, with no retry', async () => {
+      mockDocs([
+        {
+          id: 'doc-1',
+          filename: 'invoice.pdf',
+          status: 'failed',
+          size_bytes: 10,
+          rejection_reason: 'Malware detected (EICAR-Test-File), so the file was deleted. Upload a clean copy.',
+        },
+      ])
+      renderKBDetailPage()
+
+      await screen.findByText('invoice.pdf')
+      expect(screen.getByText(/Malware detected \(EICAR-Test-File\)/)).toBeInTheDocument()
+      // Retry would only be refused: the file was deleted.
+      expect(screen.queryByRole('button', { name: /retry indexing/i })).not.toBeInTheDocument()
+    })
+
     it('retries a failed document and reflects its updated status', async () => {
       mockDocs([{ id: 'doc-1', filename: 'failed.txt', status: 'failed', size_bytes: 10 }])
       vi.mocked(api.POST).mockResolvedValue({

@@ -169,6 +169,12 @@ type Config struct {
 	RegionClassificationStateMachineARN string
 	EdgeExtractionQueueURL              string
 	CanonicalizationQueueURL            string
+
+	// MalwareScanTimeoutQueueURL is the SQS queue each upload sends its
+	// malware scan's timeout message to (internal/malwarescan). The queue's
+	// own delivery delay is the timeout; the scan-result Lambda fails a
+	// scan still pending when the message arrives. Required by cmd/api.
+	MalwareScanTimeoutQueueURL string
 }
 
 func Load() *Config {
@@ -239,6 +245,7 @@ func Load() *Config {
 		RegionClassificationStateMachineARN: getEnv("REGION_CLASSIFICATION_STATE_MACHINE_ARN", ""),
 		EdgeExtractionQueueURL:              getEnv("EDGE_EXTRACTION_QUEUE_URL", ""),
 		CanonicalizationQueueURL:            getEnv("CANONICALIZATION_QUEUE_URL", ""),
+		MalwareScanTimeoutQueueURL:          getEnv("MALWARE_SCAN_TIMEOUT_QUEUE_URL", ""),
 	}
 }
 

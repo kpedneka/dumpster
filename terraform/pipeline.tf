@@ -6,7 +6,7 @@
 # Deployed but idle until the publish-path cutover: nothing publishes jobs
 # into it until cmd/api uses internal/queue/dispatch.
 #
-# The CI/deploy pipeline builds both ../build/lambda-*/bootstrap binaries
+# The CI/deploy pipeline builds every ../build/lambda-*/bootstrap binary
 # before any tofu operation (staging.yml) -- archive_file is evaluated on
 # every plan, apply and destroy.
 data "archive_file" "lambda_pipeline" {
@@ -19,6 +19,12 @@ data "archive_file" "lambda_stateless_jobs" {
   type        = "zip"
   source_file = "${path.module}/../build/lambda-stateless-jobs/bootstrap"
   output_path = "${path.module}/../build/lambda-stateless-jobs.zip"
+}
+
+data "archive_file" "lambda_malware_scan" {
+  type        = "zip"
+  source_file = "${path.module}/../build/lambda-malware-scan/bootstrap"
+  output_path = "${path.module}/../build/lambda-malware-scan.zip"
 }
 
 data "aws_secretsmanager_secret_version" "lambda_database_url_pooled" {
@@ -47,6 +53,9 @@ module "pipeline" {
     S3_SCRATCH_USE_PATH_STYLE    = "false"
     ENTITY_EXTRACTION_BATCH_SIZE = "50"
   }
+
+  malware_scan_lambda_zip_path = data.archive_file.lambda_malware_scan.output_path
+  malware_scan_lambda_zip_hash = data.archive_file.lambda_malware_scan.output_base64sha256
 
   stateless_lambda_zip_path = data.archive_file.lambda_stateless_jobs.output_path
   stateless_lambda_zip_hash = data.archive_file.lambda_stateless_jobs.output_base64sha256
@@ -142,6 +151,12 @@ data "aws_iam_policy_document" "ecs_task_publish" {
     sid       = "SendToLambdaQueues"
     actions   = ["sqs:SendMessage"]
     resources = values(module.pipeline.job_queue_arns)
+  }
+  # Each upload's malware scan timeout message (internal/malwarescan).
+  statement {
+    sid       = "SendMalwareScanTimeouts"
+    actions   = ["sqs:SendMessage"]
+    resources = [module.pipeline.malware_scan_timeout_queue_arn]
   }
 }
 
