@@ -39,10 +39,11 @@ type Config struct {
 	// When set it takes precedence over DatabaseURL for pooled access.
 	// Use the Neon pooler endpoint (host has -pooler suffix) for the API.
 	DatabaseURLPooled string
-	// Object storage — endpoint-configurable so the same adapter serves
-	// MinIO or Cloudflare R2 locally and real AWS S3 in staging/production
-	// (see internal/objectstore/s3store's doc comment for the credential
-	// implications of that split). Holds real, user-owned documents — a
+	// Object storage — AWS S3 in every environment, including local dev
+	// (terraform/dev's uploads bucket); the endpoint stays configurable so
+	// the same adapter can still serve any S3-compatible server (see
+	// internal/objectstore/s3store's doc comment for the credential
+	// implications). Holds real, user-owned documents — a
 	// different retention/access contract than the scratch bucket below,
 	// which is why the two are never conflated.
 	S3Endpoint     string
@@ -52,8 +53,8 @@ type Config struct {
 	S3SecretKey    string
 	S3UsePathStyle bool
 	// S3Scratch* configures a separate bucket for AWS Batch jobs' transient
-	// input/output handoff (internal/entity/awsbatch, internal/llm/awsbatch,
-	// internal/manifest/awsbatch) — never real user documents. Kept out of
+	// input/output handoff (the pipeline state machines' Batch jobs and
+	// cmd/reembed's internal/llm/awsbatch) — never real user documents. Kept out of
 	// the main document bucket above deliberately: scratch objects don't
 	// need (and shouldn't get) the same durability/retention guarantees
 	// real documents do, and a separate bucket makes that bucket's size
@@ -191,9 +192,8 @@ func Load() *Config {
 		// the SDK resolve the real regional S3 endpoint on its own, and
 		// empty Access/SecretKey tells it to resolve credentials via the
 		// ECS task role instead of attempting -- and failing -- static auth
-		// with a bogus key. A real local MinIO/R2 setup always sets all
-		// three explicitly via .env.local (see .env.example), so none of
-		// these defaults are ever actually relied on for local dev either.
+		// with a bogus key. Local dev does the same against the dev stack's
+		// bucket, authenticating as the local IAM user (see .env.example).
 		S3Endpoint:     getEnv("S3_ENDPOINT", ""),
 		S3Region:       getEnv("S3_REGION", "auto"),
 		S3Bucket:       getEnv("S3_BUCKET", "dumpster"),

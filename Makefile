@@ -63,13 +63,7 @@ lambdas:
 DEV_STACK_ENV = set -a && . ./.env.local && set +a && \
 	unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN && \
 	export TF_VAR_database_url_pooled="$$DATABASE_URL_POOLED" \
-	       TF_VAR_entity_types="$$ENTITY_TYPES" \
-	       TF_VAR_uploads_endpoint="$$S3_ENDPOINT" \
-	       TF_VAR_uploads_region="$${S3_REGION:-auto}" \
-	       TF_VAR_uploads_bucket="$$S3_BUCKET" \
-	       TF_VAR_uploads_access_key="$$S3_ACCESS_KEY" \
-	       TF_VAR_uploads_secret_key="$$S3_SECRET_KEY" \
-	       TF_VAR_uploads_use_path_style="$${S3_USE_PATH_STYLE:-true}" && \
+	       TF_VAR_entity_types="$$ENTITY_TYPES" && \
 	tofu -chdir=terraform/dev init -input=false >/dev/null &&
 
 # Shows what dev-deploy would change.

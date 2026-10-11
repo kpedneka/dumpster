@@ -4,11 +4,10 @@
 # development-only orchestration code. See the "Pipeline-only dev stack in
 # AWS + make dev-deploy" dev board card.
 #
-# Only the pipeline (terraform/modules/pipeline) plus a scratch bucket:
-# no VPC, ECS, ALB or CloudFront, and nothing that bills while idle.
-# Everything else local dev already uses stays as it is:
-#   - the database and the uploads bucket (Cloudflare R2) are the ones
-#     .env.local points at;
+# Only the pipeline (terraform/modules/pipeline) plus uploads and scratch
+# buckets: no VPC, ECS, ALB or CloudFront, and nothing that bills while
+# idle. Everything else local dev already uses stays as it is:
+#   - the database is the one .env.local points at;
 #   - the Batch queues and job definitions are the long-lived ones local
 #     dev and the GPU pilot already use, not created here.
 #
@@ -47,6 +46,50 @@ data "aws_caller_identity" "current" {}
 
 locals {
   name_prefix = "dumpster-dev"
+}
+
+# --- Uploads bucket: documents uploaded through the local API ---
+#
+# The dev counterpart of the environments' documents bucket
+# (../s3_storage.tf), with the same hardening. On AWS S3 rather than
+# Cloudflare R2 so dev runs the same storage path staging and production
+# do, and so S3-based protections (such as malware scanning) apply here
+# too. Dev data is disposable, hence force_destroy.
+
+resource "aws_s3_bucket" "uploads" {
+  bucket        = "${local.name_prefix}-uploads-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "uploads" {
+  bucket                  = aws_s3_bucket.uploads.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Backstop only, as in ../s3_storage.tf: the session sweep deletes a
+# session's objects before its row.
+resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  rule {
+    id     = "orphan-object-backstop"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 2
+    }
+  }
 }
 
 # --- Scratch bucket: Batch jobs' input/result handoff ---
@@ -141,12 +184,9 @@ module "pipeline" {
   lambda_zip_hash = data.archive_file.lambda_pipeline.output_base64sha256
   lambda_environment = {
     DATABASE_URL_POOLED          = var.database_url_pooled
-    S3_ENDPOINT                  = var.uploads_endpoint
-    S3_REGION                    = var.uploads_region
-    S3_BUCKET                    = var.uploads_bucket
-    S3_ACCESS_KEY                = var.uploads_access_key
-    S3_SECRET_KEY                = var.uploads_secret_key
-    S3_USE_PATH_STYLE            = var.uploads_use_path_style
+    S3_REGION                    = var.aws_region
+    S3_BUCKET                    = aws_s3_bucket.uploads.bucket
+    S3_USE_PATH_STYLE            = "false"
     S3_SCRATCH_REGION            = var.aws_region
     S3_SCRATCH_BUCKET            = aws_s3_bucket.scratch.bucket
     S3_SCRATCH_USE_PATH_STYLE    = "false"
@@ -162,8 +202,7 @@ module "pipeline" {
   }
   bedrock_model_arns = local.bedrock_model_arns
 
-  # Uploads are on R2, reached with the keys above, so no AWS bucket grant.
-  uploads_bucket_arn = null
+  uploads_bucket_arn = aws_s3_bucket.uploads.arn
   scratch_bucket_arn = aws_s3_bucket.scratch.arn
 
   batch = {
@@ -181,7 +220,7 @@ module "pipeline" {
 # After cutover the local API (`make run`) publishes jobs to this stack
 # with the AWS keys in .env.local, which belong to an existing IAM user
 # that isn't managed here. Grant that user exactly what the deployed API's
-# task role has for publishing jobs and calling Bedrock.
+# task role has for publishing jobs, storing uploads and calling Bedrock.
 data "aws_iam_user" "local" {
   user_name = var.local_iam_user
 }
@@ -196,6 +235,16 @@ data "aws_iam_policy_document" "local_publish" {
     sid       = "SendToLambdaQueues"
     actions   = ["sqs:SendMessage"]
     resources = values(module.pipeline.job_queue_arns)
+  }
+  statement {
+    sid       = "UploadsObjects"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.uploads.arn}/*"]
+  }
+  statement {
+    sid       = "UploadsList"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.uploads.arn]
   }
   statement {
     sid = "InvokeBedrock"

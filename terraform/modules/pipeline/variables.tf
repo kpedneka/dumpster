@@ -51,7 +51,7 @@ variable "lambda_environment" {
 variable "uploads_bucket_arn" {
   type        = string
   default     = null
-  description = "AWS bucket user documents live in, if they're on AWS S3: the pipeline Lambda reads uploads and presigns them for the layout job. Null when uploads are elsewhere (local dev uses Cloudflare R2 with keys in lambda_environment)."
+  description = "AWS bucket user documents live in: the pipeline Lambda reads uploads and presigns them for the layout job. Null only if uploads live outside AWS, with keys passed in lambda_environment."
 }
 
 variable "scratch_bucket_arn" {
