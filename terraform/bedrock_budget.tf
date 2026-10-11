@@ -3,9 +3,11 @@
 # unbounded bill -- explicit go-live gate for the DNS/TLS cutover (#20),
 # driven by a real incident (a load-testing burst burned real
 # non-refundable Anthropic credit in under an hour with zero spend
-# control between the app and the bill). Production-only: staging isn't
-# on Bedrock at all yet (ecs_api.tf's local.llm_provider), so there's
-# nothing to budget there until that changes.
+# control between the app and the bill). Production-only: staging, the dev
+# stack and local runs also call Bedrock, but through their own tagged
+# inference profiles (bedrock.tf), and this budget counts only spend
+# tagged environment=production, so non-production usage can never
+# trigger production's deny.
 #
 # Real, honest caveat this design can't engineer around: AWS Cost
 # Explorer/Budgets data has an inherent ~24-48h reporting lag. This is a
@@ -16,17 +18,23 @@
 # degrading gracefully once AWS actually applies it, not preventing the
 # spend that happens before the lag catches up).
 #
-# Filtered by Service (Amazon Bedrock), not the tagged application
-# inference profile from bedrock.tf, even though that profile exists
-# specifically for cost separation: tag-based Cost Explorer/Budgets
-# filtering requires activating cost allocation tags first, which has its
-# own propagation delay on top of the existing reporting lag, and this is
-# a single-project personal AWS account with no other Bedrock consumer --
-# "all Bedrock spend in this account" and "this app's production Bedrock
-# spend" are the same number today. The tagged profile stays valuable for
-# Cost Explorer breakdown/reporting regardless, and if a second Bedrock
-# consumer (e.g. staging, later) ever shares this account, switching this
-# filter to tag-based is the natural next step at that point, not now.
+# Filtered to Bedrock spend tagged environment=production: every
+# environment invokes through its own tagged application inference profile
+# (bedrock.tf), and Bedrock usage through such a profile carries the
+# profile's tags in billing data. Tag filtering needs the tag activated as
+# a cost allocation tag (below). Costs are tagged only from activation on,
+# and Cost Explorer data lags 24-48h, so right after the switch this budget
+# reads low until tagged data arrives.
+
+# Cost allocation tag activation is account-wide, not per environment, so
+# only the production workspace manages it; staging's applies never touch
+# it.
+resource "aws_ce_cost_allocation_tag" "environment" {
+  count = var.environment == "production" ? 1 : 0
+
+  tag_key = "environment"
+  status  = "Active"
+}
 
 locals {
   bedrock_budget_amount = "20"
@@ -119,6 +127,11 @@ resource "aws_budgets_budget" "bedrock" {
   cost_filter {
     name   = "Service"
     values = ["Amazon Bedrock"]
+  }
+
+  cost_filter {
+    name   = "TagKeyValue"
+    values = ["user:environment$production"]
   }
 
   # Awareness alerts, independent of the hard-stop action below -- the

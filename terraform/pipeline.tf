@@ -25,10 +25,6 @@ data "aws_secretsmanager_secret_version" "lambda_database_url_pooled" {
   secret_id = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn
 }
 
-data "aws_secretsmanager_secret_version" "lambda_anthropic_api_key" {
-  secret_id = data.aws_secretsmanager_secret.runtime["anthropic-api-key"].arn
-}
-
 module "pipeline" {
   source = "./modules/pipeline"
 
@@ -55,17 +51,14 @@ module "pipeline" {
   stateless_lambda_zip_path = data.archive_file.lambda_stateless_jobs.output_path
   stateless_lambda_zip_hash = data.archive_file.lambda_stateless_jobs.output_base64sha256
   stateless_lambda_environment = {
-    LLM_PROVIDER        = local.llm_provider
     BEDROCK_MODEL_ID    = local.bedrock_model_id
-    ANTHROPIC_MODEL     = var.anthropic_model
     DATABASE_URL_POOLED = data.aws_secretsmanager_secret_version.lambda_database_url_pooled.secret_string
-    ANTHROPIC_API_KEY   = data.aws_secretsmanager_secret_version.lambda_anthropic_api_key.secret_string
   }
-  # Production invokes through its own tagged inference profile
-  # (bedrock.tf); every environment may also use the shared cross-region
-  # profile and the foundation model it routes to.
+  # Each environment invokes through its own tagged inference profile
+  # (bedrock.tf), which routes through the shared cross-region profile to
+  # the foundation model; Bedrock checks permission at every hop.
   bedrock_model_arns = concat(
-    var.environment == "production" ? [aws_bedrock_inference_profile.app[0].arn] : [],
+    [aws_bedrock_inference_profile.app.arn],
     [
       "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
       "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
