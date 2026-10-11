@@ -141,3 +141,13 @@ func stageKeys(stages []DisplayStage) []string {
 	}
 	return keys
 }
+
+func TestStageFor_MalwareScan_IsScanning(t *testing.T) {
+	stage := StageFor(JobTypeMalwareScan, "")
+	if stage.Key != "scanning" {
+		t.Errorf("got stage %q, want scanning", stage.Key)
+	}
+	if stage.Label == "" || stage.Message == "" {
+		t.Errorf("scanning stage needs a label and message for the progress UI: %+v", stage)
+	}
+}

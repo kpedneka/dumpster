@@ -16,6 +16,7 @@ import (
 
 	"github.com/kunalpednekar/dumpster/internal/canonical"
 	"github.com/kunalpednekar/dumpster/internal/document"
+	"github.com/kunalpednekar/dumpster/internal/ingest"
 	"github.com/kunalpednekar/dumpster/internal/kb"
 	"github.com/kunalpednekar/dumpster/internal/manifest"
 	"github.com/kunalpednekar/dumpster/internal/objectstore"
@@ -38,15 +39,6 @@ var allowedContentTypes = map[string]string{
 	".png":  "image/png",
 	".jpg":  "image/jpeg",
 	".jpeg": "image/jpeg",
-}
-
-// regionClassificationTypes is the subset of allowedContentTypes that need
-// the region-classification pipeline (pdfplumber + VLM) instead of the
-// plain-text chunking pipeline.
-var regionClassificationTypes = map[string]bool{
-	"application/pdf": true,
-	"image/png":       true,
-	"image/jpeg":      true,
 }
 
 type docHandler struct {
@@ -193,17 +185,7 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var publishErr error
-	if regionClassificationTypes[contentType] {
-		publishErr = h.publisher.PublishRegionClassification(r.Context(), queue.RegionClassificationRequested{
-			DocumentID: doc.ID, UserID: userID,
-		})
-	} else {
-		publishErr = h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{
-			DocumentID: doc.ID, UserID: userID,
-		})
-	}
-	if publishErr != nil {
+	if publishErr := ingest.Start(r.Context(), h.publisher, doc); publishErr != nil {
 		// Mark failed so the caller knows processing will not happen. The S3
 		// object and DB row are retained — the reconciliation job can retry.
 		_ = h.docRepo.UpdateStatus(r.Context(), userID, doc.ID, document.StatusFailed)
@@ -362,7 +344,7 @@ func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page Docu
 		// callers use this to show a document's ingestion history, not
 		// just its live progress.
 		if d.Status != document.StatusFailed {
-			hasRegionClassification := regionClassificationTypes[d.ContentType]
+			hasRegionClassification := ingest.NeedsRegionClassification(d.ContentType)
 			progress := &documentProgress{
 				Stages: queue.StagesForDocument(hasRegionClassification),
 			}
@@ -634,17 +616,7 @@ func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var publishErr error
-	if regionClassificationTypes[doc.ContentType] {
-		publishErr = h.publisher.PublishRegionClassification(r.Context(), queue.RegionClassificationRequested{
-			DocumentID: doc.ID, UserID: userID,
-		})
-	} else {
-		publishErr = h.publisher.PublishDocumentUploaded(r.Context(), queue.DocumentUploaded{
-			DocumentID: doc.ID, UserID: userID,
-		})
-	}
-	if publishErr != nil {
+	if publishErr := ingest.Start(r.Context(), h.publisher, doc); publishErr != nil {
 		_ = h.docRepo.UpdateStatus(r.Context(), userID, docID, document.StatusFailed)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue document for reprocessing")
 		return

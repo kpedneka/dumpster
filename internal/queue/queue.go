@@ -40,6 +40,11 @@ const (
 	// Depends on entity extraction having populated entities rows, but does
 	// not touch chunks, embeddings, entity text, or entity_edges.
 	JobTypeCanonicalization JobType = "canonicalization"
+	// JobTypeMalwareScan tracks an uploaded file's malware scan, which
+	// must report it clean before any other job reads the file. Not a
+	// published job: the API records it at upload and the scan-result
+	// handler finishes it.
+	JobTypeMalwareScan JobType = "malware_scan"
 )
 
 // DocumentUploaded is published once a document's bytes land in object storage
