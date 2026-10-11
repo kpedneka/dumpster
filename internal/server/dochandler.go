@@ -49,9 +49,9 @@ type UploadScanner interface {
 	// run before the file is stored, so the record exists by the time
 	// GuardDuty reports on the file.
 	Begin(ctx context.Context, doc *document.Document) error
-	// Rejected reports whether the scan rejected the document's file,
-	// which is then deleted, so only a new upload can replace it.
-	Rejected(ctx context.Context, userID, documentID uuid.UUID) (bool, error)
+	// Rejection reports whether the scan rejected the document's file, and
+	// why. A rejected file is deleted, so only a new upload replaces it.
+	Rejection(ctx context.Context, userID, documentID uuid.UUID) (reason string, rejected bool, err error)
 }
 
 type docHandler struct {
@@ -216,6 +216,22 @@ func (h *docHandler) upload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, doc)
 }
 
+// rejectionReason returns why the malware scan rejected d's file, or "" if
+// it didn't. Only a failed document can have been rejected. A lookup error
+// is logged rather than failing the request: the reason is extra detail on
+// top of the document's failed status.
+func (h *docHandler) rejectionReason(ctx context.Context, d *document.Document) string {
+	if d.Status != document.StatusFailed {
+		return ""
+	}
+	reason, _, err := h.scans.Rejection(ctx, d.UserID, d.ID)
+	if err != nil {
+		slog.Error("malware scan: read rejection failed", "document_id", d.ID, "err", err)
+		return ""
+	}
+	return reason
+}
+
 // abandonUpload removes the document row of an upload that failed before
 // its file was stored (its scan record goes with it), and records the
 // failure. The scan's timeout message then finds no document and does
@@ -312,6 +328,9 @@ type docListItem struct {
 	// document is fully indexed -- see documentProgress.ActiveStages --
 	// so a caller can show ingestion history, not just live progress.
 	Progress *documentProgress `json:"progress,omitempty"`
+	// RejectionReason is why the malware scan rejected the document's file,
+	// set only for a document it rejected (whose file is then deleted).
+	RejectionReason string `json:"rejection_reason,omitempty"`
 }
 
 // documentProgress is the staged-checklist view of ingestion progress a
@@ -346,7 +365,7 @@ func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page Docu
 
 	if h.jobs == nil {
 		for i, d := range page.Items {
-			resp.Items[i] = &docListItem{Document: d}
+			resp.Items[i] = &docListItem{Document: d, RejectionReason: h.rejectionReason(ctx, d)}
 		}
 		return resp
 	}
@@ -361,7 +380,7 @@ func (h *docHandler) enrichPage(ctx context.Context, userID uuid.UUID, page Docu
 	}
 
 	for i, d := range page.Items {
-		item := &docListItem{Document: d}
+		item := &docListItem{Document: d, RejectionReason: h.rejectionReason(ctx, d)}
 		// A failed (dead-lettered) document has nothing left to show --
 		// there's no in-flight or completed pipeline to report on. Every
 		// other status gets a checklist, including "indexed": that only
@@ -427,9 +446,11 @@ func (h *docHandler) get(w http.ResponseWriter, r *http.Request) {
 		// classification has run. Omitted (nil) for text/markdown documents
 		// and before classification completes.
 		ManifestSummary *manifestSummary `json:"manifest_summary,omitempty"`
+		// RejectionReason: see docListItem.RejectionReason.
+		RejectionReason string `json:"rejection_reason,omitempty"`
 	}
 
-	resp := &docDetailResponse{Document: doc}
+	resp := &docDetailResponse{Document: doc, RejectionReason: h.rejectionReason(r.Context(), doc)}
 	if h.manifest != nil {
 		regions, _ := h.manifest.ListByDocument(r.Context(), userID, docID)
 		if len(regions) > 0 {
@@ -643,7 +664,7 @@ func (h *docHandler) retry(w http.ResponseWriter, r *http.Request) {
 
 	// A file the malware scan rejected has been deleted; retrying can't
 	// bring it back.
-	rejected, err := h.scans.Rejected(r.Context(), userID, docID)
+	_, rejected, err := h.scans.Rejection(r.Context(), userID, docID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check the malware scan")
 		return

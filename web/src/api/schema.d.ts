@@ -1574,6 +1574,8 @@ export interface components {
                 skipped: number;
                 failed: number;
             } | null;
+            /** @description Why the malware scan rejected this document's file, which was then deleted. Set only for a failed document the scan rejected (infected, unscannable or timed out); retrying such a document returns 409, so the user uploads the file again. */
+            rejection_reason?: string;
             /** @description Staged ingestion checklist, always ending on a "complete" stage. Set for every status except failed (a dead-lettered document has nothing left to report), and omitted entirely on responses where per-document progress isn't available. Stays set forever once a document finishes its whole pipeline -- including background entity extraction, which keeps running after the document is already searchable -- so it doubles as a permanent ingestion-history record, not just live progress. */
             progress?: {
                 stages: {

@@ -1325,6 +1325,9 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
   })
 
   const isFailed = doc.status === 'failed'
+  // A file the malware scan rejected is deleted: show why, and don't offer
+  // a retry the API would refuse.
+  const rejectionReason = isFailed ? doc.rejection_reason : undefined
   // The stage label is a permanent ingestion-history record, not just
   // live progress -- it stays in place (ending on "Fully indexed") even
   // after processing finishes, so file size only shows up as a fallback
@@ -1338,7 +1341,9 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
       <img src={fileIconSrc(doc.filename)} alt="" className="h-4 w-4 shrink-0" />
       <div className="min-w-0 flex-1">
         <p className="wrap-anywhere text-sm font-medium">{doc.filename}</p>
-        {stageView ? (
+        {rejectionReason ? (
+          <p className="text-xs text-destructive">{rejectionReason}</p>
+        ) : stageView ? (
           <StageProgressLabel view={stageView} />
         ) : (
           <p className="text-xs text-muted-foreground">{formatSize(doc.size_bytes)}</p>
@@ -1350,7 +1355,7 @@ function DocRow({ doc, kbId }: { doc: Document; kbId: string }) {
           pending/processing (still a useful compact glance) and for
           failed, where it's the at-a-glance error signal. */}
       {doc.status !== 'indexed' && <StatusRing status={doc.status} progress={doc.progress} />}
-      {isFailed && (
+      {isFailed && !rejectionReason && (
         <Button
           variant="ghost"
           size="icon"
