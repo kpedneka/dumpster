@@ -28,6 +28,11 @@ const PhaseEmbedding = "embedding"
 const StageKeyComplete = "complete"
 
 var (
+	stageScanning = DisplayStage{
+		Key:     "scanning",
+		Label:   "Scanning for malware",
+		Message: "Checking the file before anything else reads it.",
+	}
 	stageAnalyzing = DisplayStage{
 		Key:     "analyzing",
 		Label:   "Analyzing document",
@@ -70,6 +75,8 @@ func StageFor(jobType JobType, phase string) DisplayStage {
 		return stageEmbedding
 	case JobTypeEntityExtraction, JobTypeEdgeExtraction, JobTypeCanonicalization:
 		return stageEntities
+	case JobTypeMalwareScan:
+		return stageScanning
 	default:
 		return DisplayStage{Key: "processing", Label: "Processing"}
 	}
