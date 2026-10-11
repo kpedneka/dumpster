@@ -84,22 +84,6 @@ func newInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("telemetry: embedding_duration_ms: %w", err)
 	}
 
-	queueDepth, err := meter.Int64UpDownCounter(
-		"queue_depth",
-		metric.WithDescription("Number of jobs currently pending in the queue"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("telemetry: queue_depth: %w", err)
-	}
-
-	jobFailureTotal, err := meter.Int64Counter(
-		"job_failure_total",
-		metric.WithDescription("Number of jobs dead-lettered after exhausting retries"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("telemetry: job_failure_total: %w", err)
-	}
-
 	documentsUploadedTotal, err := meter.Int64Counter(
 		"documents_uploaded_total",
 		metric.WithDescription("Number of document upload attempts, labeled by outcome"),
@@ -116,22 +100,10 @@ func newInstruments(meter metric.Meter) (*Instruments, error) {
 		return nil, fmt.Errorf("telemetry: documents_deleted_total: %w", err)
 	}
 
-	jobDuration, err := meter.Float64Histogram(
-		"job_duration_ms",
-		metric.WithDescription("Wall-clock time from a job being claimed to its resolution, in milliseconds"),
-		metric.WithUnit("ms"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("telemetry: job_duration_ms: %w", err)
-	}
-
 	return &Instruments{
 		SearchLatency:          searchLatency,
 		EmbeddingDuration:      embeddingDuration,
-		QueueDepth:             queueDepth,
-		JobFailureTotal:        jobFailureTotal,
 		DocumentsUploadedTotal: documentsUploadedTotal,
 		DocumentsDeletedTotal:  documentsDeletedTotal,
-		JobDuration:            jobDuration,
 	}, nil
 }

@@ -12,12 +12,6 @@ type Instruments struct {
 	SearchLatency metric.Float64Histogram
 	// EmbeddingDuration tracks the time spent calling the embedding API in ms.
 	EmbeddingDuration metric.Float64Histogram
-	// QueueDepth tracks the number of pending jobs in the queue. Increment on
-	// enqueue, decrement on dequeue or dead-letter.
-	QueueDepth metric.Int64UpDownCounter
-	// JobFailureTotal counts jobs that have been dead-lettered after exhausting
-	// retries. A rising rate here signals a systemic processing problem.
-	JobFailureTotal metric.Int64Counter
 	// DocumentsUploadedTotal counts document upload attempts, labeled by
 	// outcome ("success"/"failure"). Only recorded once an upload has begun
 	// persisting (object storage, DB row, or enqueue) — request validation
@@ -27,11 +21,6 @@ type Instruments struct {
 	// outcome ("success"/"failure"), with the same validation-vs-attempt
 	// distinction as DocumentsUploadedTotal.
 	DocumentsDeletedTotal metric.Int64Counter
-	// JobDuration tracks wall-clock time from a job being claimed (Dequeue)
-	// to its resolution (Ack or Nack), in milliseconds, labeled by outcome
-	// ("success"/"failure"). The direct clearance-rate signal for deciding
-	// whether to move off the Postgres-backed queue.
-	JobDuration metric.Float64Histogram
 }
 
 // NewInstruments builds Instruments from an already-configured OTel Meter.

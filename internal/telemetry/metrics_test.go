@@ -25,20 +25,11 @@ func TestSetup_InstrumentsNonNil(t *testing.T) {
 	if inst.EmbeddingDuration == nil {
 		t.Error("EmbeddingDuration is nil")
 	}
-	if inst.QueueDepth == nil {
-		t.Error("QueueDepth is nil")
-	}
-	if inst.JobFailureTotal == nil {
-		t.Error("JobFailureTotal is nil")
-	}
 	if inst.DocumentsUploadedTotal == nil {
 		t.Error("DocumentsUploadedTotal is nil")
 	}
 	if inst.DocumentsDeletedTotal == nil {
 		t.Error("DocumentsDeletedTotal is nil")
-	}
-	if inst.JobDuration == nil {
-		t.Error("JobDuration is nil")
 	}
 	if shutdown == nil {
 		t.Error("shutdown func is nil")
@@ -59,11 +50,8 @@ func TestSetup_InstrumentsRecordWithoutError(t *testing.T) {
 	ctx := context.Background()
 	inst.SearchLatency.Record(ctx, 42.5, metric.WithAttributes(attribute.String("status", "ok")))
 	inst.EmbeddingDuration.Record(ctx, 12.3)
-	inst.QueueDepth.Add(ctx, 1)
-	inst.JobFailureTotal.Add(ctx, 1)
 	inst.DocumentsUploadedTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "success")))
 	inst.DocumentsDeletedTotal.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "failure")))
-	inst.JobDuration.Record(ctx, 123.4, metric.WithAttributes(attribute.String("outcome", "success")))
 }
 
 // TestSetup_ShutdownReturnsPromptly asserts the real production shape of a
