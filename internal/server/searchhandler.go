@@ -354,6 +354,8 @@ func (h *searchHandler) streamAndAnswer(w http.ResponseWriter, r *http.Request, 
 	h.recordQueryExecuted(r.Context(), elapsed)
 
 	if err != nil {
+		// The client only sees "search failed", so log the cause here.
+		slog.Error("search failed", "kb_id", kbID, "stream_started", streamStarted, "err", err)
 		if !streamStarted {
 			writeError(w, http.StatusInternalServerError, "search failed")
 			return search.Result{}, false
