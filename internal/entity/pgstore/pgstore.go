@@ -22,45 +22,29 @@ func New(runner db.TxRunner) entity.Repository {
 	return &Store{runner: runner}
 }
 
-// entityCopyColumns is the column list BulkCreate's CopyFrom writes, in
-// the exact order rowSource below produces values in. id and created_at
-// are deliberately omitted -- both have DB-side defaults (gen_random_uuid(),
-// now()) this never overrode even in the previous Exec-based version.
-var entityCopyColumns = []string{
+// entityColumns are the columns BulkCreate writes, in the order its rows
+// list them. id and created_at come from the table's defaults.
+var entityColumns = []string{
 	"chunk_id", "document_id", "kb_id", "user_id",
 	"entity_type", "text", "char_start", "char_end", "score",
 }
 
-// BulkCreate persists entities in a single transaction.
-//
-// Uses CopyFrom (Postgres's COPY wire protocol) rather than one Exec per
-// row -- despite the name, a naive per-row Exec loop here measured at
-// ~45ms/entity against a real remote Postgres (Neon), a genuine per-round-
-// trip cost, not connection warm-up: it was exactly as slow for the 9th
-// call in a batch as the 1st. For a real 2842-entity document that's
-// ~130s spent on inserts alone, found while diagnosing unexplained tail
-// latency in the AWS Batch entity-extraction pipeline (see
-// internal/entity/awsbatch and internal/worker/entityhandler.go's own
-// timing instrumentation) -- this was never an AWS Batch or CloudWatch
-// cost, just hiding behind a bigger one until batches ran in parallel.
-// CopyFrom cuts this to one round trip regardless of row count.
+// BulkCreate persists entities in a single transaction, as batched
+// multi-row INSERTs (db.InsertRows): one round trip per batch rather than
+// per row, which mattered for a real 2842-entity document (~45 ms per row
+// against Neon), and unlike COPY FROM it works under row-level security.
 func (s *Store) BulkCreate(ctx context.Context, entities []*entity.Entity) error {
 	if len(entities) == 0 {
 		return nil
 	}
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
-		_, err := tx.CopyFrom(ctx,
-			pgx.Identifier{"entities"},
-			entityCopyColumns,
-			pgx.CopyFromSlice(len(entities), func(i int) ([]any, error) {
-				e := entities[i]
-				return []any{
-					e.ChunkID, e.DocumentID, e.KBID, e.UserID,
-					string(e.Type), e.Text, e.Start, e.End, e.Score,
-				}, nil
-			}),
-		)
-		return err
+		return db.InsertRows(ctx, tx, "entities", entityColumns, len(entities), func(i int) ([]any, error) {
+			e := entities[i]
+			return []any{
+				e.ChunkID, e.DocumentID, e.KBID, e.UserID,
+				string(e.Type), e.Text, e.Start, e.End, e.Score,
+			}, nil
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("entity: bulk create: %w", err)

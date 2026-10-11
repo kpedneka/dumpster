@@ -1,14 +1,10 @@
 //go:build integration
 
-// Integration test for entity/pgstore's BulkCreate, specifically covering
-// its switch from a per-row Exec loop to CopyFrom (Postgres's COPY wire
-// protocol) -- see BulkCreate's own doc for why. CopyFrom is a genuinely
-// different code path than a normal INSERT (different wire protocol
-// entirely), so this exists to give real evidence -- against a real
-// Postgres, not the in-memory fake -- that every field still round-trips
-// correctly and, critically, that row-level security tenant isolation
-// still applies to rows written via COPY exactly as it does for a normal
-// INSERT.
+// Integration test for entity/pgstore's BulkCreate, a batched multi-row
+// INSERT (db.InsertRows) -- see BulkCreate's own doc for why. Against a
+// real Postgres, not the in-memory fake, it checks that every field
+// round-trips and that row-level security tenant isolation applies to the
+// rows it writes. CI runs it as dumpster_app, so the policies are enforced.
 //
 // Excluded from the default `go test ./...` run and the coverage gate by
 // this build tag. Run explicitly against a migrated database:
@@ -53,7 +49,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-func TestBulkCreate_RoundTripsAllFieldsViaCopyFrom(t *testing.T) {
+func TestBulkCreate_RoundTripsAllFields(t *testing.T) {
 	pool := testPool(t)
 	txRunner := rls.New(pool)
 	sessions := sessionpg.New(pool)
@@ -131,14 +127,14 @@ func TestBulkCreate_RoundTripsAllFieldsViaCopyFrom(t *testing.T) {
 	}
 }
 
-// TestBulkCreate_TenantIsolationSurvivesCopyFrom is the critical
+// TestBulkCreate_TenantIsolation is the critical
 // correctness check for this change: COPY is a genuinely different wire
 // protocol than a normal INSERT, so this proves row-level security still
 // scopes rows written via BulkCreate to their owning tenant, not just
 // rows written via a plain Exec -- per CLAUDE.md's multi-tenancy
 // invariant ("every query filters on the current tenant. No exceptions"),
 // this needed direct evidence, not an assumption that RLS "just applies."
-func TestBulkCreate_TenantIsolationSurvivesCopyFrom(t *testing.T) {
+func TestBulkCreate_TenantIsolation(t *testing.T) {
 	pool := testPool(t)
 	txRunner := rls.New(pool)
 	sessions := sessionpg.New(pool)
@@ -197,12 +193,12 @@ func TestBulkCreate_TenantIsolationSurvivesCopyFrom(t *testing.T) {
 
 	// Tenant A must not be able to read tenant B's document's entities,
 	// even by document ID, even though both were written via the same
-	// BulkCreate/CopyFrom code path.
+	// BulkCreate code path.
 	gotCrossTenant, err := entities.ListByDocument(ctxA, userA, docB)
 	if err != nil {
 		t.Fatalf("cross-tenant ListByDocument errored instead of returning empty: %v", err)
 	}
 	if len(gotCrossTenant) != 0 {
-		t.Fatalf("tenant A read %d of tenant B's entities via CopyFrom-written rows -- RLS violation", len(gotCrossTenant))
+		t.Fatalf("tenant A read %d of tenant B's entities via BulkCreate-written rows -- RLS violation", len(gotCrossTenant))
 	}
 }

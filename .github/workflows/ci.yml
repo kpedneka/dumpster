@@ -60,6 +60,45 @@ jobs:
         with:
           version: v2.11.3
 
+  # The integration tests against a real Postgres + pgvector, connected as
+  # dumpster_app (migration 033): the role the API and Lambdas use, which
+  # row-level security applies to. Migrations run as the owner, exactly as
+  # in the deployed environments, so a query that relies on bypassing RLS
+  # (or forgets to set the tenant identity) fails here instead of shipping.
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      OWNER_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Migrate as the owner
+        run: go run github.com/pressly/goose/v3/cmd/goose@v3.28.0 -dir migrations postgres "$OWNER_URL" up
+
+      - name: Enable the app role
+        run: psql "$OWNER_URL" -c "ALTER ROLE dumpster_app WITH LOGIN PASSWORD 'ci-only'"
+
+      - name: Integration tests as dumpster_app (row-level security enforced)
+        env:
+          TEST_DATABASE_URL: postgres://dumpster_app:ci-only@localhost:5432/postgres?sslmode=disable
+        run: go test -count=1 -p 1 -tags=integration ./...
+
   terraform-fmt-validate:
     runs-on: ubuntu-latest
     defaults:
