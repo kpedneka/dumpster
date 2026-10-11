@@ -35,28 +35,31 @@
 
 # --- Shared networking / IAM lookups ---
 #
-# The account's 6 existing public subnets and default security group --
-# same values ecs_networking.tf's header comment already confirmed via
-# `aws ec2 describe-subnets` (this account has no private subnets outside
-# the two this migration added for api/worker, and Batch's EC2/Fargate
-# job runners have always used the original 6 public ones directly, not
-# those). Hardcoded, matching this file set's existing precedent for
-# real, confirmed-by-CLI account IDs (data.aws_vpc.default's id below)
-# rather than a dynamic aws_subnets lookup that could silently change
-# scope if someone adds an unrelated subnet to this VPC later.
+# Batch jobs run in this environment's private subnets (ecs_networking.tf),
+# behind the NAT instance like the API, with no public IP. Container images
+# come from ECR, whose layers download through the S3 gateway endpoint;
+# models are baked into the images (HF_HUB_OFFLINE), so jobs fetch nothing
+# from the internet at run time. g4dn.xlarge is offered in both private
+# subnets' AZs (us-east-1a, us-east-1b).
 locals {
-  batch_subnet_ids = [
-    "subnet-6241f54e", # us-east-1d
-    "subnet-f59bf9bd", # us-east-1a
-    "subnet-8c2da880", # us-east-1f
-    "subnet-aeebe4cb", # us-east-1c
-    "subnet-71cde74d", # us-east-1e
-    "subnet-fe13bea4", # us-east-1b
-  ]
+  batch_subnet_ids = [aws_subnet.private_1a.id, aws_subnet.private_1b.id]
 }
 
-data "aws_security_group" "default" {
-  id = "sg-61458610" # this VPC's default security group -- confirmed via `aws ec2 describe-security-groups`, already what every existing Batch compute environment uses
+# Batch's own security group: nothing connects to a Batch job, so no
+# ingress. Egress stays open until the egress-allowlist change narrows it
+# to the ports the app uses.
+resource "aws_security_group" "batch" {
+  name        = "${local.name_prefix}-batch"
+  description = "AWS Batch jobs: outbound only"
+  vpc_id      = data.aws_vpc.default.id
+
+  egress {
+    description = "Outbound to AWS APIs and S3"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 }
 
 # Batch's own service-linked role, created automatically the first time
@@ -136,7 +139,7 @@ resource "aws_batch_job_definition" "embedding" {
       { type = "MEMORY", value = "8192" },
     ]
     networkConfiguration = {
-      assignPublicIp = "ENABLED"
+      assignPublicIp = "DISABLED"
     }
     fargatePlatformConfiguration = {
       platformVersion = "LATEST"
@@ -157,7 +160,7 @@ resource "aws_batch_job_definition" "region_extraction" {
       { type = "MEMORY", value = "2048" },
     ]
     networkConfiguration = {
-      assignPublicIp = "ENABLED"
+      assignPublicIp = "DISABLED"
     }
     fargatePlatformConfiguration = {
       platformVersion = "LATEST"
@@ -167,8 +170,12 @@ resource "aws_batch_job_definition" "region_extraction" {
 
 # --- Entity extraction: GPU, EC2, per-environment (new -- see header) ---
 
+# Changing an EC2 compute environment's subnets or security groups (with
+# BEST_FIT) replaces it, and AWS won't delete one a job queue still uses.
+# A generated name plus create_before_destroy lets a replacement come up
+# first, the queue move to it, and only then the old one go.
 resource "aws_batch_compute_environment" "entity_extraction" {
-  name         = "${local.name_prefix}-entity-extraction-ce"
+  name_prefix  = "${local.name_prefix}-entity-extraction-ce-"
   type         = "MANAGED"
   service_role = data.aws_iam_role.batch_service_role.arn
 
@@ -184,8 +191,12 @@ resource "aws_batch_compute_environment" "entity_extraction" {
     # whenever staging isn't actively running an ingestion job.
     min_vcpus          = 0
     max_vcpus          = 16
-    security_group_ids = [data.aws_security_group.default.id]
+    security_group_ids = [aws_security_group.batch.id]
     subnets            = local.batch_subnet_ids
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -221,7 +232,7 @@ resource "aws_batch_compute_environment" "embedding" {
   compute_resources {
     type               = "FARGATE"
     max_vcpus          = 16
-    security_group_ids = [data.aws_security_group.default.id]
+    security_group_ids = [aws_security_group.batch.id]
     subnets            = local.batch_subnet_ids
   }
 }
