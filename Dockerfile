@@ -10,18 +10,9 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /bin/cleanup ./cmd/cleanup
 
-# web-builder compiles the React SPA so the api binary can serve it.
-# Uses node:22-slim (Debian/glibc) rather than Alpine: esbuild (used by Vite)
-# downloads glibc-linked binaries that don't run on Alpine's musl libc.
-FROM node:22-slim AS web-builder
-WORKDIR /app/web
-COPY web/package*.json web/.npmrc ./
-RUN --mount=type=cache,target=/root/.npm npm ci
-COPY web/ ./
-RUN npm run build
-
 # runtime is cmd/api + cmd/cleanup's production image: just
-# the Go binaries and the built SPA. No Python here — entity extraction,
+# the Go binaries. The frontend ships separately (terraform/frontend.tf,
+# behind CloudFront), so there's no SPA build here either. No Python here — entity extraction,
 # PDF region classification, and embeddings all go out over HTTP to the
 # inference image below instead of running as a subprocess embedded in
 # this process (the pattern this replaced; see the System Architecture
@@ -36,14 +27,12 @@ RUN npm run build
 # image rather than a --mode flag on an existing one, since cmd/cleanup
 # was already its own main package by the time this got built.
 #
-# WORKDIR /app ensures the Go API resolves "web/dist" relative to /app.
 # ECS's cleanup RunTask overrides command to ["/bin/cleanup"].
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /bin/api     /bin/api
 COPY --from=builder /bin/cleanup /bin/cleanup
-COPY --from=web-builder /app/web/dist /app/web/dist
 
 # inference is the standalone, always-on ML inference service: entity
 # extraction, PDF region classification, and local embeddings behind one
