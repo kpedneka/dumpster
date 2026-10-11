@@ -47,29 +47,6 @@ func multipartUpload(t *testing.T, filename, content string) (*bytes.Buffer, str
 	return body, w.FormDataContentType()
 }
 
-// failPublisher always returns an error from PublishDocumentUploaded.
-type failPublisher struct{}
-
-func (p *failPublisher) PublishDocumentUploaded(_ context.Context, _ queue.DocumentUploaded) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishEntityExtraction(_ context.Context, _ queue.EntityExtractionRequested) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishEdgeExtraction(_ context.Context, _ queue.EdgeExtractionRequested) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishRegionClassification(_ context.Context, _ queue.RegionClassificationRequested) error {
-	return errors.New("queue unavailable")
-}
-
-func (p *failPublisher) PublishCanonicalization(_ context.Context, _ queue.CanonicalizationRequested) error {
-	return errors.New("queue unavailable")
-}
-
 // fakeJobStatusReader returns canned active queue.JobStatus entries for
 // whichever document IDs are present in its map; document IDs absent
 // from the map (or mapped to an empty/nil slice) are reported as having
@@ -553,8 +530,8 @@ func TestDocList_IncludesProgress_ForPendingPDF(t *testing.T) {
 	if progress == nil {
 		t.Fatal("expected Progress to be set for a processing PDF")
 	}
-	if len(progress.Stages) != 4 {
-		t.Errorf("Stages: got %d, want 4 (PDF goes through region classification, plus the terminal complete stage)", len(progress.Stages))
+	if len(progress.Stages) != 5 {
+		t.Errorf("Stages: got %d, want 5 (malware scan, then region classification's stages, plus the terminal complete stage)", len(progress.Stages))
 	}
 	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "embedding" {
 		t.Errorf("ActiveStages: got %v, want [embedding]", progress.ActiveStages)
@@ -591,8 +568,8 @@ func TestDocList_IncludesProgress_ForPendingText_SkipsAnalyzing(t *testing.T) {
 	// Plain text never goes through region classification, so no
 	// "analyzing" stage should appear -- but the terminal complete stage
 	// is still there, since every document ends on it.
-	if len(progress.Stages) != 3 {
-		t.Errorf("Stages: got %d, want 3 (text/markdown skips analyzing, plus the terminal complete stage)", len(progress.Stages))
+	if len(progress.Stages) != 4 {
+		t.Errorf("Stages: got %d, want 4 (malware scan; text/markdown skips analyzing; plus the terminal complete stage)", len(progress.Stages))
 	}
 	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "embedding" {
 		t.Errorf("ActiveStages: got %v, want [embedding]", progress.ActiveStages)
@@ -693,8 +670,8 @@ func TestDocList_IncludesProgress_ForIndexedDocument_ActiveEntityJob(t *testing.
 	if progress == nil {
 		t.Fatal("expected Progress to still be set for an indexed document with an active entity-extraction job")
 	}
-	if len(progress.Stages) != 4 {
-		t.Errorf("Stages: got %d, want 4 (PDF goes through region classification, plus the terminal complete stage)", len(progress.Stages))
+	if len(progress.Stages) != 5 {
+		t.Errorf("Stages: got %d, want 5 (malware scan, then region classification's stages, plus the terminal complete stage)", len(progress.Stages))
 	}
 	if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "entities" {
 		t.Errorf("ActiveStages: got %v, want [entities]", progress.ActiveStages)

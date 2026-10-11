@@ -93,9 +93,9 @@ func StageFor(jobType JobType, phase string) DisplayStage {
 // that processing finished, not just while it's still in flight.
 func StagesForDocument(hasRegionClassification bool) []DisplayStage {
 	if hasRegionClassification {
-		return []DisplayStage{stageAnalyzing, stageEmbedding, stageEntities, stageComplete}
+		return []DisplayStage{stageScanning, stageAnalyzing, stageEmbedding, stageEntities, stageComplete}
 	}
-	return []DisplayStage{stageEmbedding, stageEntities, stageComplete}
+	return []DisplayStage{stageScanning, stageEmbedding, stageEntities, stageComplete}
 }
 
 // ActiveStageKeys returns the deduplicated set of stage keys genuinely

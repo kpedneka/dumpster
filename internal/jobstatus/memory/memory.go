@@ -43,6 +43,17 @@ func keyOf(k jobstatus.Key) rowKey {
 	return rowKey{documentID: k.DocumentID, jobType: k.JobType}
 }
 
+// Get implements jobstatus.Getter.
+func (s *Store) Get(_ context.Context, key jobstatus.Key) (jobstatus.Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.rows[keyOf(key)]
+	if !ok || r.rec.UserID != key.UserID {
+		return jobstatus.Record{}, jobstatus.ErrNotFound
+	}
+	return r.rec, nil
+}
+
 // Record returns the current record for key, for tests to inspect a job's
 // final state and reason. It ignores tenancy.
 func (s *Store) Record(key jobstatus.Key) (jobstatus.Record, bool) {

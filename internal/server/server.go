@@ -30,6 +30,9 @@ type Deps struct {
 	Docs      document.Repository
 	Objects   objectstore.ObjectStore
 	Publisher queue.Publisher
+	// Scans begins the malware scan every upload waits on before it's
+	// processed (internal/malwarescan.Scans). Required.
+	Scans UploadScanner
 	// JobStatusReader is optional; when nil, GET /kbs/{id}/documents omits
 	// per-document progress info and the frontend falls back to just the
 	// coarse document.Status.
@@ -118,7 +121,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authed := http.NewServeMux()
 	registerKBRoutes(authed, deps.KBs)
-	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.JobStatusReader, deps.Manifest, deps.Canonical, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
+	registerDocRoutes(authed, deps.KBs, deps.Docs, deps.Objects, deps.Publisher, deps.Scans, deps.JobStatusReader, deps.Manifest, deps.Canonical, deps.Instruments, deps.MaxUploadBytes, deps.MaxDocumentsPerSession)
 	registerAccountRoutes(authed, deps.Sessions)
 	if deps.Searcher != nil {
 		registerSearchRoutes(authed, deps.KBs, deps.Docs, deps.Searcher, deps.Inquiries, deps.Instruments, deps.Stats)
