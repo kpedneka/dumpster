@@ -9,5 +9,6 @@ output "dotenv" {
     S3_SCRATCH_REGION=${var.aws_region}
     S3_SCRATCH_BUCKET=${aws_s3_bucket.scratch.bucket}
     S3_SCRATCH_USE_PATH_STYLE=false
+    BEDROCK_MODEL_ID=${aws_bedrock_inference_profile.dev.arn}
   EOT
 }

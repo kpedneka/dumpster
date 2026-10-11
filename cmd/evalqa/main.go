@@ -6,8 +6,8 @@
 // -- the query router, hybrid retrieval, graph legs, RRF merge, and the
 // answerer -- not just the graph legs directly. It needs the same
 // dependencies cmd/api wires up: an embedder reaching the inference
-// service and a generator reaching Anthropic's API, both configured the
-// same way (INFERENCE_SERVICE_URL, ANTHROPIC_API_KEY). If you're running
+// service and a generator reaching Bedrock, both configured the same way
+// (INFERENCE_SERVICE_URL, BEDROCK_MODEL_ID, AWS credentials). If you're running
 // this from the host rather than inside docker-compose's network,
 // INFERENCE_SERVICE_URL's default ("http://inference:8000", a
 // docker-internal hostname) won't resolve -- override it to
@@ -30,7 +30,7 @@ import (
 	docpg "github.com/kunalpednekar/dumpster/internal/document/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/evalcorpus"
 	graphragpg "github.com/kunalpednekar/dumpster/internal/graphrag/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
+	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
 	"github.com/kunalpednekar/dumpster/internal/multihopqa"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
@@ -110,7 +110,11 @@ func main() {
 	}
 
 	embedder := llminference.NewQueryEmbedder(cfg.InferenceServiceURL)
-	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	generator, err := bedrock.New(ctx, cfg.AWSRegion, cfg.BedrockModelID)
+	if err != nil {
+		logger.Error("bedrock generator setup failed", "err", err)
+		os.Exit(1)
+	}
 	retriever := retrievalpg.New(txRunner, embedder)
 	answerer := search.NewAnswerer(generator)
 	router := queryrouter.NewLLMRouter(generator)

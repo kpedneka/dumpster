@@ -25,7 +25,7 @@ import (
 	canonicalpg "github.com/kunalpednekar/dumpster/internal/canonical/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/config"
 	"github.com/kunalpednekar/dumpster/internal/db"
-	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
+	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
@@ -64,7 +64,11 @@ func main() {
 
 	txRunner := rls.New(pool)
 	repo := canonicalpg.New(txRunner)
-	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	generator, err := bedrock.New(ctx, cfg.AWSRegion, cfg.BedrockModelID)
+	if err != nil {
+		logger.Error("bedrock generator setup failed", "err", err)
+		os.Exit(1)
+	}
 	judge := &canonical.LLMAliasJudge{Generator: generator}
 
 	merged, err := canonical.ResolveAllAliases(ctx, repo, userID, kbID, judge)

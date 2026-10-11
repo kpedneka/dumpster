@@ -1,11 +1,9 @@
 // Package bedrock implements llm.Generator against AWS Bedrock's Converse
-// API -- the AWS-hosted path to the same Claude models the direct Anthropic
-// API calls, billed through AWS rather than an Anthropic API key. Built for
-// production's cutover to Bedrock (see the "DNS and TLS cutover plan" dev
-// board card): direct Anthropic billing turned out to be a real, immediate
-// cost risk (a load-testing burst burned ~$12 of non-refundable credit in
-// under an hour), and Bedrock sidesteps that specific exposure entirely --
-// staging keeps using the direct Anthropic generator for now, not this one.
+// API, the app's only LLM provider: Claude models billed through AWS, with
+// no API key to manage. It replaced a direct Anthropic API client after a
+// load-testing burst burned ~$12 of non-refundable credit in under an hour
+// with no spend control in between; Bedrock spend is capped per
+// environment by an AWS Budget (terraform/bedrock_budget.tf).
 package bedrock
 
 import (
@@ -20,10 +18,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/llm"
 )
 
-// maxTokens caps every call's response length, matching the direct
-// Anthropic generator's own hardcoded limit -- kept identical rather than
-// re-litigated here, since nothing about switching providers changes what
-// a reasonable response length is for this app's prompts.
+// maxTokens caps every call's response length.
 const maxTokens = 4096
 
 // Generator implements llm.Generator using AWS Bedrock's Converse API.
@@ -33,8 +28,7 @@ type Generator struct {
 }
 
 // New returns a Generator that invokes modelID via Bedrock in region.
-// modelID is a Bedrock model ID or inference profile ID/ARN, not the bare
-// model name the direct Anthropic API uses -- some models, including
+// modelID is a Bedrock model ID or inference profile ID/ARN -- some models, including
 // Claude Sonnet 5, reject on-demand invocation by model ID entirely and
 // require an inference profile instead (confirmed for real against this
 // account: `aws bedrock-runtime converse --model-id anthropic.claude-
@@ -75,9 +69,7 @@ func (g *Generator) Generate(ctx context.Context, prompt string) (string, error)
 }
 
 // GenerateStream calls ConverseStream, invoking onDelta for each text delta
-// as it arrives -- the same shape as the direct Anthropic generator's
-// GenerateStream, just against Bedrock's own streaming event union instead
-// of Anthropic's SSE events.
+// as it arrives, from Bedrock's streaming event union.
 func (g *Generator) GenerateStream(ctx context.Context, prompt string, onDelta func(string)) (string, error) {
 	return g.converseStream(ctx, []types.ContentBlock{
 		&types.ContentBlockMemberText{Value: prompt},
@@ -86,10 +78,9 @@ func (g *Generator) GenerateStream(ctx context.Context, prompt string, onDelta f
 
 // GenerateStreamCached behaves like GenerateStream, but inserts a cache
 // point after cacheablePrefix -- Bedrock's Converse API caches everything
-// up to and including a CachePointBlock marker in the content array,
-// unlike the direct Anthropic API's cache_control attribute on the block
-// itself, but the effect is the same: a repeat call whose prefix matches
-// this one gets that portion billed as a cache read instead of full price.
+// up to and including a CachePointBlock marker in the content array, so a
+// repeat call whose prefix matches this one gets that portion billed as a
+// cache read instead of full price.
 func (g *Generator) GenerateStreamCached(ctx context.Context, cacheablePrefix, dynamicSuffix string, onDelta func(string)) (string, error) {
 	return g.converseStream(ctx, []types.ContentBlock{
 		&types.ContentBlockMemberText{Value: cacheablePrefix},

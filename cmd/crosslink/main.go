@@ -23,7 +23,7 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/crosslink"
 	crosslinkpg "github.com/kunalpednekar/dumpster/internal/crosslink/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/db"
-	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
+	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	"github.com/kunalpednekar/dumpster/internal/rls"
 	"github.com/kunalpednekar/dumpster/internal/telemetry"
 )
@@ -92,7 +92,11 @@ func main() {
 		return
 	}
 
-	generator := anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	generator, err := bedrock.New(ctx, cfg.AWSRegion, cfg.BedrockModelID)
+	if err != nil {
+		logger.Error("bedrock generator setup failed", "err", err)
+		os.Exit(1)
+	}
 	extractor := crosslink.NewExtractor(generator)
 
 	candidates, err := repo.CandidateChains(ctx, userID, kbID, *limit)

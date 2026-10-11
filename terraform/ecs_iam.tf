@@ -13,8 +13,8 @@
 # additions on their own dev board cards, when those migrations actually
 # happen). Object storage's S3 permissions live in s3_storage.tf, not here,
 # since that policy needs the bucket resources this file doesn't define --
-# Neon and Anthropic remain the only genuinely external services, reached
-# over the internet via the NAT instance, not through IAM at all.
+# Neon remains the only genuinely external service, reached over the
+# internet via the NAT instance, not through IAM at all.
 
 data "aws_caller_identity" "current" {}
 
@@ -109,14 +109,11 @@ resource "aws_iam_role_policy" "ecs_task_logs_read" {
   policy = data.aws_iam_policy_document.ecs_task_logs_read.json
 }
 
-# internal/llm/bedrock calls Bedrock's Converse API when LLM_PROVIDER is
-# "bedrock" (production; see ecs_api.tf's local.llm_provider) -- granted to
-# every environment's task role regardless, same reasoning var.
-# bedrock_model_id's description gives for reading the env var everywhere:
-# flipping providers during an outage shouldn't also need an IAM change.
+# internal/llm/bedrock calls Bedrock's Converse API, the app's only LLM
+# provider.
 #
-# Three resource ARNs, not one -- a whole chain, not a single hop:
-# production invokes through its own tagged application inference profile
+# Three resource ARNs, not one -- a whole chain, not a single hop: each
+# environment invokes through its own tagged application inference profile
 # (bedrock.tf, for cost-tracking separation), which routes to the
 # system-defined cross-region profile (Claude Sonnet 5 rejects on-demand
 # invocation by bare model ID -- confirmed for real, not assumed), which
@@ -137,7 +134,7 @@ data "aws_iam_policy_document" "ecs_task_bedrock" {
       "bedrock:ConverseStream",
     ]
     resources = concat(
-      var.environment == "production" ? [aws_bedrock_inference_profile.app[0].arn] : [],
+      [aws_bedrock_inference_profile.app.arn],
       [
         "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
         "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",

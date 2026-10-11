@@ -7,22 +7,10 @@
 # not assumed. Env vars/secrets below are grounded in internal/config's
 # real fields, not guessed: object storage points at real AWS S3
 # (s3_storage.tf, IAM-role auth, no static key) -- Neon direct is still in
-# place (Aurora migration is separate, later work); Anthropic direct is
-# now production-scoped only to staging -- see local.llm_provider below.
+# place (Aurora migration is separate, later work); the LLM is Bedrock
+# in every environment (bedrock.tf).
 
 locals {
-  # Production launches on Bedrock, not direct Anthropic, from day one --
-  # not a preference, a real cost incident: a load-testing burst against
-  # staging burned real non-refundable Anthropic credit in under an hour
-  # with no spend controls in between the app and the bill at all. Bedrock
-  # bills through AWS instead, authenticated via this task's own IAM role,
-  # no API key in the request path. Staging keeps direct Anthropic for now
-  # (cheaper to iterate against while its own remaining credit lasts --
-  # see the "DNS and TLS cutover plan" dev board card's notes) -- not a
-  # permanent split, just not worth re-plumbing both environments at once
-  # under real time pressure to ship the cutover itself.
-  llm_provider = var.environment == "production" ? "bedrock" : "anthropic"
-
   # Env vars/secrets every one of the three commands needs, regardless of
   # which binary runs -- object storage and AWS region are read by all
   # three (cleanup deletes real documents from S3 on account expiry).
@@ -40,7 +28,6 @@ locals {
     { name = "S3_REGION", value = var.aws_region },
     { name = "S3_BUCKET", value = aws_s3_bucket.documents.bucket },
     { name = "S3_USE_PATH_STYLE", value = "false" },
-    { name = "LLM_PROVIDER", value = local.llm_provider },
     { name = "BEDROCK_MODEL_ID", value = local.bedrock_model_id },
   ]
   shared_secrets = []
@@ -93,7 +80,6 @@ resource "aws_ecs_task_definition" "api" {
       ]
       environment = concat(local.shared_environment, [
         { name = "HTTP_PORT", value = "8080" },
-        { name = "ANTHROPIC_MODEL", value = var.anthropic_model },
         # localhost, not the Service Connect DNS name -- the query
         # embedder now talks to the sidecar container below, in this
         # same task, not the standalone inference service. No Go code
@@ -119,7 +105,6 @@ resource "aws_ecs_task_definition" "api" {
       ])
       secrets = concat(local.shared_secrets, [
         { name = "DATABASE_URL_POOLED", valueFrom = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn },
-        { name = "ANTHROPIC_API_KEY", valueFrom = data.aws_secretsmanager_secret.runtime["anthropic-api-key"].arn },
       ])
       logConfiguration = merge(local.common_log_config, {
         options = merge(local.common_log_config.options, { "awslogs-stream-prefix" = "api" })
@@ -252,15 +237,9 @@ variable "api_memory" {
   default     = "2048"
 }
 
-variable "anthropic_model" {
-  type        = string
-  description = "Claude model ID for staging, still called directly against the Anthropic API -- production uses Bedrock instead, see local.llm_provider and var.bedrock_model_id."
-  default     = "claude-sonnet-4-6"
-}
-
 variable "bedrock_model_id" {
   type        = string
-  description = "Bedrock model ID or inference profile ID/ARN production's api/worker/cleanup invoke via AWS Bedrock's Converse API. Not the bare model name the direct Anthropic API uses -- Claude Sonnet 5 specifically rejects on-demand invocation by model ID and requires an inference profile (confirmed for real against this account: `aws bedrock-runtime converse --model-id anthropic.claude-sonnet-5` fails with ValidationException; the US cross-region inference profile below is what actually works). Read by every environment's task definitions (harmless when local.llm_provider is \"anthropic\" -- just an unused env var), not only production's, so flipping LLM_PROVIDER back to \"anthropic\" during a Bedrock outage never needs a redeploy to add a missing value."
+  description = "System-defined Bedrock inference profile each environment's tagged application inference profile (bedrock.tf) copies. Claude Sonnet 5 rejects on-demand invocation by bare model ID and requires an inference profile (confirmed against this account: `aws bedrock-runtime converse --model-id anthropic.claude-sonnet-5` fails with ValidationException)."
   default     = "us.anthropic.claude-sonnet-5"
 }
 
