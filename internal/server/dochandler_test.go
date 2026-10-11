@@ -1373,7 +1373,7 @@ func TestDocRetry_RejectedByMalwareScan_Refused(t *testing.T) {
 		KBID: kb.ID, UserID: userID, Filename: "invoice.pdf",
 		S3Key: "documents/test/invoice.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
 	})
-	deps.Scans.(*fakeScanner).rejected = map[uuid.UUID]bool{doc.ID: true}
+	deps.Scans.(*fakeScanner).reasons = map[uuid.UUID]string{doc.ID: "Malware detected (EICAR)"}
 
 	req := authedRequest(t, deps, http.MethodPost,
 		"/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String()+"/retry", nil, userID)
@@ -1683,5 +1683,79 @@ func TestDocRetry_TenantIsolation(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant retry: got %d, want 404", w.Code)
+	}
+}
+
+// A document the malware scan rejected carries the scan's reason, so the
+// user sees why it failed; any other document doesn't.
+func TestDocList_ScanRejection_IncludesReason(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	rejected, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "invoice.pdf",
+		S3Key: "documents/test/invoice.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
+	})
+	otherFailure, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "notes.txt",
+		S3Key: "documents/test/notes.txt", ContentType: "text/plain", Status: document.StatusFailed,
+	})
+	deps.Scans.(*fakeScanner).reasons = map[uuid.UUID]string{rejected.ID: "Malware detected (EICAR)"}
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var page struct {
+		Items []struct {
+			ID              uuid.UUID `json:"id"`
+			RejectionReason *string   `json:"rejection_reason"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[uuid.UUID]*string{}
+	for _, it := range page.Items {
+		reasons[it.ID] = it.RejectionReason
+	}
+	if r := reasons[rejected.ID]; r == nil || *r != "Malware detected (EICAR)" {
+		t.Errorf("rejected document's rejection_reason = %v, want the scan's reason", r)
+	}
+	if r := reasons[otherFailure.ID]; r != nil {
+		t.Errorf("a document that failed for another reason has rejection_reason %q, want none", *r)
+	}
+}
+
+func TestDocGet_ScanRejection_IncludesReason(t *testing.T) {
+	deps, kbRepo, docRepo, _, _ := defaultDeps()
+	router := NewRouter(deps)
+	userID := uuid.New()
+
+	kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	doc, _ := docRepo.Create(context.TODO(), &document.Document{
+		KBID: kb.ID, UserID: userID, Filename: "invoice.pdf",
+		S3Key: "documents/test/invoice.pdf", ContentType: "application/pdf", Status: document.StatusFailed,
+	})
+	deps.Scans.(*fakeScanner).reasons = map[uuid.UUID]string{doc.ID: "Malware detected (EICAR)"}
+
+	req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents/"+doc.ID.String(), nil, userID)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want 200", w.Code)
+	}
+	var got struct {
+		RejectionReason string `json:"rejection_reason"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RejectionReason != "Malware detected (EICAR)" {
+		t.Errorf("rejection_reason = %q, want the scan's reason", got.RejectionReason)
 	}
 }

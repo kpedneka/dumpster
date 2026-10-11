@@ -41,7 +41,7 @@ type fakeScanner struct {
 	begun         []uuid.UUID
 	storedAtBegin map[uuid.UUID]bool
 	beginErr      error
-	rejected      map[uuid.UUID]bool
+	reasons       map[uuid.UUID]string
 	rejectedErr   error
 }
 
@@ -58,8 +58,9 @@ func (s *fakeScanner) Begin(ctx context.Context, doc *document.Document) error {
 	return nil
 }
 
-func (s *fakeScanner) Rejected(_ context.Context, _, docID uuid.UUID) (bool, error) {
-	return s.rejected[docID], s.rejectedErr
+func (s *fakeScanner) Rejection(_ context.Context, _, docID uuid.UUID) (string, bool, error) {
+	reason, ok := s.reasons[docID]
+	return reason, ok, s.rejectedErr
 }
 
 func testDeps(kbRepo kb.Repository, docRepo document.Repository, obj *objmock.Store, pub *qmem.Publisher) Deps {
