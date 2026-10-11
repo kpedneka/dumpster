@@ -94,3 +94,12 @@ variable "malware_scan_timeout_seconds" {
     error_message = "SQS delivery delays range from 1 to 900 seconds."
   }
 }
+
+variable "vpc_config" {
+  type = object({
+    subnet_ids         = list(string)
+    security_group_ids = list(string)
+  })
+  default     = null
+  description = "Private subnets and security groups for the module's Lambdas, so their traffic goes through the VPC's NAT and egress controls. Null leaves them outside any VPC (the dev stack, which has none)."
+}

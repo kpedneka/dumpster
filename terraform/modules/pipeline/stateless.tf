@@ -25,6 +25,13 @@ resource "aws_iam_role_policy_attachment" "stateless_basic_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# Creating and removing the network interfaces a Lambda in a VPC uses.
+resource "aws_iam_role_policy_attachment" "stateless_vpc_access" {
+  count      = var.vpc_config == null ? 0 : 1
+  role       = aws_iam_role.stateless.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 data "aws_iam_policy_document" "stateless" {
   statement {
     sid       = "ConsumeQueues"
@@ -70,7 +77,16 @@ resource "aws_lambda_function" "stateless" {
     variables = var.stateless_lambda_environment
   }
 
-  depends_on = [aws_cloudwatch_log_group.stateless, aws_iam_role_policy_attachment.stateless_basic_execution]
+
+  dynamic "vpc_config" {
+    for_each = var.vpc_config == null ? [] : [var.vpc_config]
+    content {
+      subnet_ids         = vpc_config.value.subnet_ids
+      security_group_ids = vpc_config.value.security_group_ids
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.stateless, aws_iam_role_policy_attachment.stateless_basic_execution, aws_iam_role_policy_attachment.stateless_vpc_access]
 }
 
 # ReportBatchItemFailures matches the dispatcher's per-record
