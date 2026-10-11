@@ -168,3 +168,36 @@ func TestDelete_NotFound(t *testing.T) {
 		t.Errorf("got %v, want document.ErrNotFound", err)
 	}
 }
+
+func TestGetByS3Key(t *testing.T) {
+	r := memory.New()
+	userID := uuid.New()
+	created := seed(t, r, userID, uuid.New(), "scan.pdf")
+	seed(t, r, userID, uuid.New(), "other.pdf")
+
+	got, err := r.GetByS3Key(context.Background(), userID, created.S3Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("got document %v, want %v", got.ID, created.ID)
+	}
+}
+
+func TestGetByS3Key_NotFound(t *testing.T) {
+	r := memory.New()
+	_, err := r.GetByS3Key(context.Background(), uuid.New(), "documents/missing")
+	if err != document.ErrNotFound {
+		t.Errorf("got %v, want document.ErrNotFound", err)
+	}
+}
+
+func TestGetByS3Key_WrongTenant(t *testing.T) {
+	r := memory.New()
+	created := seed(t, r, uuid.New(), uuid.New(), "f.pdf")
+
+	_, err := r.GetByS3Key(context.Background(), uuid.New(), created.S3Key)
+	if err != document.ErrNotFound {
+		t.Errorf("cross-tenant lookup: got %v, want document.ErrNotFound", err)
+	}
+}

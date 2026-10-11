@@ -62,6 +62,29 @@ func (s *Store) Get(ctx context.Context, userID, id uuid.UUID) (*document.Docume
 	return &result, nil
 }
 
+// GetByS3Key implements document.Repository.
+func (s *Store) GetByS3Key(ctx context.Context, userID uuid.UUID, key string) (*document.Document, error) {
+	var result document.Document
+	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT id, kb_id, user_id, filename, s3_key, content_type, size_bytes, status, created_at, updated_at
+			 FROM documents WHERE s3_key = $1 AND user_id = $2`,
+			key, userID,
+		).Scan(
+			&result.ID, &result.KBID, &result.UserID,
+			&result.Filename, &result.S3Key, &result.ContentType, &result.SizeBytes,
+			&result.Status, &result.CreatedAt, &result.UpdatedAt,
+		)
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, document.ErrNotFound
+		}
+		return nil, fmt.Errorf("document: get by s3 key: %w", err)
+	}
+	return &result, nil
+}
+
 func (s *Store) ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*document.Document, error) {
 	var results []*document.Document
 	err := s.runner.RunInTx(ctx, func(tx pgx.Tx) error {
