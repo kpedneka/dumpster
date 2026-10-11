@@ -17,6 +17,12 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # Integration tests need a live Postgres, so CI doesn't run them, but
+      # vet still type-checks them so an API change can't silently break
+      # their build.
+      - name: Vet integration tests
+        run: go vet -tags=integration ./...
+
       - name: Test with coverage
         run: |
           go test ./...

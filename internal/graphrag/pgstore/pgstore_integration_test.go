@@ -167,7 +167,7 @@ func TestTraversalLeg_TwoHopAcrossDocuments(t *testing.T) {
 
 	// Canonicalize both documents' mentions so the two "Ada Lovelace"
 	// mentions, in separate documents, resolve to one shared identity.
-	if err := canonical.ResolveNew(ctx, canonicalRepo, entities, userID, append(allA, allB...)); err != nil {
+	if _, err := canonical.ResolveNew(ctx, canonicalRepo, entities, userID, append(allA, allB...)); err != nil {
 		t.Fatalf("canonicalize: %v", err)
 	}
 
