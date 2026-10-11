@@ -41,6 +41,10 @@ type Document struct {
 type Repository interface {
 	Create(ctx context.Context, d *Document) (*Document, error)
 	Get(ctx context.Context, userID, id uuid.UUID) (*Document, error)
+	// GetByS3Key returns the document whose file is stored at key. The
+	// malware scan's result names only the object, so this is how its
+	// handler finds the document. ErrNotFound if there is none.
+	GetByS3Key(ctx context.Context, userID uuid.UUID, key string) (*Document, error)
 	ListByKB(ctx context.Context, userID, kbID uuid.UUID) ([]*Document, error)
 	// ListByUserID returns every document a user owns across all of their
 	// knowledge bases. Used by account cleanup to find every R2 object that

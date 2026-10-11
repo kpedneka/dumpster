@@ -41,6 +41,18 @@ func (r *Repository) Get(_ context.Context, userID, id uuid.UUID) (*document.Doc
 	return d, nil
 }
 
+// GetByS3Key implements document.Repository.
+func (r *Repository) GetByS3Key(_ context.Context, userID uuid.UUID, key string) (*document.Document, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, d := range r.rows {
+		if d.S3Key == key && d.UserID == userID {
+			return d, nil
+		}
+	}
+	return nil, document.ErrNotFound
+}
+
 func (r *Repository) ListByKB(_ context.Context, userID, kbID uuid.UUID) ([]*document.Document, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

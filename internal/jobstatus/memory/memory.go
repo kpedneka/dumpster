@@ -43,6 +43,18 @@ func keyOf(k jobstatus.Key) rowKey {
 	return rowKey{documentID: k.DocumentID, jobType: k.JobType}
 }
 
+// Record returns the current record for key, for tests to inspect a job's
+// final state and reason. It ignores tenancy.
+func (s *Store) Record(key jobstatus.Key) (jobstatus.Record, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.rows[keyOf(key)]
+	if !ok {
+		return jobstatus.Record{}, false
+	}
+	return r.rec, true
+}
+
 // Enqueue implements jobstatus.Writer.
 func (s *Store) Enqueue(_ context.Context, key jobstatus.Key) (jobstatus.Enqueued, error) {
 	s.mu.Lock()
