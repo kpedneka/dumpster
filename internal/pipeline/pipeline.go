@@ -5,7 +5,8 @@
 // The failure model is: retry only failures that might go away (a dropped
 // database connection, an S3 or AWS API hiccup), and fail everything else
 // on the first attempt, since a parse error or bad document produces the
-// same result every time. Code marks the first kind with Transient, and the
+// same result every time. Code marks the first kind with Transient (which
+// leaves deterministic database errors unmarked), and the
 // Lambda entrypoint returns errors through ForLambda so the state machine's
 // Retry can tell them apart by name.
 package pipeline
@@ -34,12 +35,45 @@ func (e *TransientError) Error() string { return e.Err.Error() }
 // marker.
 func (e *TransientError) Unwrap() error { return e.Err }
 
-// Transient marks err as worth retrying. It returns nil for a nil err.
+// Transient marks err as worth retrying. It returns nil for a nil err,
+// and returns err unmarked when it is a deterministic database error (see
+// deterministicDBError), so callers can wrap every repository error
+// without retrying failures that can't change.
 func Transient(err error) error {
-	if err == nil {
-		return nil
+	if err == nil || deterministicDBError(err) {
+		return err
 	}
 	return &TransientError{Err: err}
+}
+
+// sqlStater is implemented by database driver errors that carry a
+// SQLSTATE code, such as pgx's *pgconn.PgError. Matching on the method
+// keeps the driver out of this package.
+type sqlStater interface {
+	SQLState() string
+}
+
+// deterministicDBError reports whether err, or anything it wraps, is a
+// database error whose SQLSTATE class means retrying can't help: a data
+// exception (22, e.g. invalid input syntax), an integrity constraint
+// violation (23) or a syntax error or access rule violation (42). Every
+// other class -- connection failures (08), insufficient resources (53),
+// operator intervention (57), system errors (58), serialization failures
+// (40) -- stays retryable.
+func deterministicDBError(err error) bool {
+	var se sqlStater
+	if !errors.As(err, &se) {
+		return false
+	}
+	code := se.SQLState()
+	if len(code) < 2 {
+		return false
+	}
+	switch code[:2] {
+	case "22", "23", "42":
+		return true
+	}
+	return false
 }
 
 // IsTransient reports whether err, or anything it wraps, was marked with

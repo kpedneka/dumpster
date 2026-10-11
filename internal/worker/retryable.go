@@ -10,9 +10,10 @@ import (
 // retryable marks a handler error as worth retrying (pipeline.Transient)
 // unless it means the document is gone, which fails the same way every
 // time. The edge-extraction and canonicalization handlers' other failures
-// all come from database or LLM calls, which are the network-level
-// failures a retry can fix. Only the stateless-jobs Lambda's dispatcher
-// reads the mark; for the ECS worker these are ordinary errors.
+// all come from database or LLM calls, which are mostly network-level
+// failures a retry can fix; pipeline.Transient itself leaves deterministic
+// database errors (bad data, constraint violations) unmarked. The
+// stateless-jobs Lambda's dispatcher reads the mark.
 func retryable(err error) error {
 	if errors.Is(err, document.ErrNotFound) {
 		return err
