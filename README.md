@@ -38,7 +38,8 @@ implementation is a contained change, not a rewrite.
 ## Local development
 
 ```
-make run      # full stack via docker compose
+make run      # API + inference service via docker compose
+cd web && npm run dev  # frontend (Vite), proxies /api to the API
 make test     # unit tests + coverage gate
 make lint     # go vet/lint + frontend typecheck/lint
 make migrate  # apply database migrations
