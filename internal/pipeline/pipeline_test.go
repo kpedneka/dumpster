@@ -110,3 +110,63 @@ func TestStepError_Reason(t *testing.T) {
 		t.Errorf("Reason() is %d chars, want %d starting with the error name", len(got), pipeline.MaxReasonLen)
 	}
 }
+
+// dbError stands in for a database driver error that carries a SQLSTATE
+// code, the way pgx's *pgconn.PgError does.
+type dbError struct{ code string }
+
+func (e *dbError) Error() string    { return "database error " + e.code }
+func (e *dbError) SQLState() string { return e.code }
+
+func TestTransient_DeterministicDatabaseErrorsAreNotRetried(t *testing.T) {
+	cases := map[string]string{
+		"invalid text representation (22P02)": "22P02",
+		"numeric value out of range (22003)":  "22003",
+		"unique violation (23505)":            "23505",
+		"foreign key violation (23503)":       "23503",
+		"undefined column (42703)":            "42703",
+		"insufficient privilege (42501)":      "42501",
+	}
+	for name, code := range cases {
+		t.Run(name, func(t *testing.T) {
+			cause := fmt.Errorf("chunk: bulk create: %w", &dbError{code: code})
+			err := pipeline.Transient(cause)
+			if pipeline.IsTransient(err) {
+				t.Errorf("SQLSTATE %s marked transient; it fails the same way on every retry", code)
+			}
+			if !errors.Is(err, cause) {
+				t.Error("the original error should come back unchanged")
+			}
+		})
+	}
+}
+
+func TestTransient_ConnectionAndServerDatabaseErrorsAreRetried(t *testing.T) {
+	cases := map[string]string{
+		"connection failure (08006)":    "08006",
+		"too many connections (53300)":  "53300",
+		"admin shutdown (57P01)":        "57P01",
+		"serialization failure (40001)": "40001",
+		"system I/O error (58030)":      "58030",
+		"malformed code (single char)":  "2",
+		"empty code":                    "",
+	}
+	for name, code := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := pipeline.Transient(fmt.Errorf("query: %w", &dbError{code: code}))
+			if !pipeline.IsTransient(err) {
+				t.Errorf("SQLSTATE %q should stay transient", code)
+			}
+		})
+	}
+}
+
+func TestTransientUnless_DeterministicDatabaseErrorIsNotRetried(t *testing.T) {
+	err := pipeline.TransientUnless(fmt.Errorf("persist: %w", &dbError{code: "22P02"}), jobstatus.ErrNotFound)
+	if pipeline.IsTransient(err) {
+		t.Error("a data exception should not be retried")
+	}
+	if got := lambdaErrorType(pipeline.ForLambda(err)); got == pipeline.TransientErrorName {
+		t.Errorf("ForLambda returned %s; the state machine would retry it", got)
+	}
+}
