@@ -17,35 +17,6 @@ variable "entity_types" {
   description = "ENTITY_TYPES from .env.local; empty uses the app's default set."
 }
 
-variable "uploads_endpoint" {
-  type        = string
-  description = "S3_ENDPOINT from .env.local (Cloudflare R2)."
-}
-
-variable "uploads_region" {
-  type    = string
-  default = "auto"
-}
-
-variable "uploads_bucket" {
-  type = string
-}
-
-variable "uploads_access_key" {
-  type      = string
-  sensitive = true
-}
-
-variable "uploads_secret_key" {
-  type      = string
-  sensitive = true
-}
-
-variable "uploads_use_path_style" {
-  type    = string
-  default = "true"
-}
-
 # --- Long-lived Batch resources (not managed here) ---
 
 variable "embed_job_queue" {
