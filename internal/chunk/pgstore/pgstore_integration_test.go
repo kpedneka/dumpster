@@ -140,12 +140,17 @@ func TestBulkCreate_RoundTripsFieldsAndEmbedding(t *testing.T) {
 	// Embedding isn't returned by ListByDocument at all (see list()'s
 	// SELECT) -- query it back directly, the only way to actually verify
 	// CopyFrom's uncast text value was parsed correctly by pgvector.
+	// Through the RLS runner as the owner: with row-level security
+	// enforced, a query without the tenant identity fails rather than
+	// seeing the row.
 	var dims int
 	var asText string
-	err = pool.QueryRow(ctx,
-		`SELECT vector_dims(embedding), embedding::text FROM chunks WHERE id = $1`,
-		c0.ID,
-	).Scan(&dims, &asText)
+	err = txRunner.RunInTx(userCtx, func(tx pgx.Tx) error {
+		return tx.QueryRow(userCtx,
+			`SELECT vector_dims(embedding), embedding::text FROM chunks WHERE id = $1`,
+			c0.ID,
+		).Scan(&dims, &asText)
+	})
 	if err != nil {
 		t.Fatalf("query stored embedding: %v", err)
 	}
