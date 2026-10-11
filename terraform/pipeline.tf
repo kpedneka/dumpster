@@ -31,8 +31,32 @@ data "aws_secretsmanager_secret_version" "lambda_database_url_pooled" {
   secret_id = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn
 }
 
+# The pipeline Lambdas' security group: nothing connects to a Lambda over
+# the network (they're invoked through the Lambda API), so no ingress.
+# Egress stays open until the egress-allowlist change narrows it.
+resource "aws_security_group" "lambda" {
+  name        = "${local.name_prefix}-lambda"
+  description = "Pipeline Lambdas: outbound only"
+  vpc_id      = data.aws_vpc.default.id
+
+  egress {
+    description = "Outbound to AWS APIs and Neon"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
 module "pipeline" {
   source = "./modules/pipeline"
+
+  # The Lambdas run in the private subnets, behind the NAT instance like the
+  # API and Batch, so the VPC's egress controls cover them too.
+  vpc_config = {
+    subnet_ids         = [aws_subnet.private_1a.id, aws_subnet.private_1b.id]
+    security_group_ids = [aws_security_group.lambda.id]
+  }
 
   name_prefix = local.name_prefix
   aws_region  = var.aws_region

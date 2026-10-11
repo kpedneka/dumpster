@@ -77,6 +77,13 @@ resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# Creating and removing the network interfaces a Lambda in a VPC uses.
+resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
+  count      = var.vpc_config == null ? 0 : 1
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 data "aws_iam_policy_document" "lambda" {
   # Only when uploads live in an AWS bucket. Local dev's uploads are on
   # Cloudflare R2, reached with static keys in the Lambda's environment.
@@ -142,7 +149,16 @@ resource "aws_lambda_function" "pipeline" {
     variables = merge(var.lambda_environment, local.dispatch_environment)
   }
 
-  depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy_attachment.lambda_basic_execution]
+
+  dynamic "vpc_config" {
+    for_each = var.vpc_config == null ? [] : [var.vpc_config]
+    content {
+      subnet_ids         = vpc_config.value.subnet_ids
+      security_group_ids = vpc_config.value.security_group_ids
+    }
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy_attachment.lambda_basic_execution, aws_iam_role_policy_attachment.lambda_vpc_access]
 }
 
 # --- State machines ---
