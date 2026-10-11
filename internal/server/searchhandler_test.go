@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -680,5 +682,33 @@ func TestSearch_RecordsQueryExecuted_OnError(t *testing.T) {
 	}
 	if snap.QueriesExecuted != 1 {
 		t.Errorf("QueriesExecuted = %d, want 1 even on error", snap.QueriesExecuted)
+	}
+}
+
+// TestSearch_ServiceError_IsLogged verifies that a failed search logs its
+// cause. The client only ever sees "search failed", so without the log
+// line a broken LLM provider (e.g. exhausted credits) is invisible.
+func TestSearch_ServiceError_IsLogged(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	deps, kbRepo, _, _, _ := defaultDeps()
+	userID := uuid.New()
+	k, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+	deps.Searcher = searchmock.NewErrorSearcher("credit balance too low")
+	router := NewRouter(deps)
+
+	req := authedRequest(t, deps, http.MethodPost, "/kbs/"+k.ID.String()+"/search",
+		strings.NewReader(`{"query":"hello"}`), userID)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	if !strings.Contains(logs.String(), "credit balance too low") {
+		t.Errorf("the search error's cause wasn't logged; logs:\n%s", logs.String())
+	}
+	if !strings.Contains(logs.String(), k.ID.String()) {
+		t.Errorf("the log line should identify the knowledge base; logs:\n%s", logs.String())
 	}
 }

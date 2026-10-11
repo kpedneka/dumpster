@@ -302,13 +302,26 @@ jobs:
             CF_IP=$(dig +short "$CF_DOMAIN" | head -1)
             if [[ -n "$CF_IP" ]] && curl -s --resolve "$ALIAS_DOMAIN:443:$CF_IP" -o /dev/null -w '%{http_code}' "https://$ALIAS_DOMAIN/healthz" | grep -q 200; then
               echo "CloudFront healthz OK (via $ALIAS_DOMAIN resolved to $CF_IP)"
-              exit 0
+              break
+            fi
+            if [[ $i -eq 90 ]]; then
+              echo "::error::CloudFront never started serving /healthz"
+              exit 1
             fi
             echo "attempt $i: not ready yet, retrying..."
             sleep 20
           done
-          echo "::error::CloudFront never started serving /healthz"
-          exit 1
+
+          # The full end-to-end check: session, text and PDF upload, both
+          # indexed (the PDF through region classification on Batch), and a
+          # search answered from each. Pinned to the same CloudFront IP as
+          # the health check above, since DNS may still cache the previous
+          # cycle's distribution. A failure names the step, HTTP status and
+          # response, and fails the run, which tears staging down below.
+          if ! BASE_URL="https://$ALIAS_DOMAIN" CURL_RESOLVE="$ALIAS_DOMAIN:443:$CF_IP" bash ../scripts/smoke_test.sh; then
+            echo "::error::End-to-end smoke test failed; see the [FAIL] line above"
+            exit 1
+          fi
 
       # Prints the real alias URL, not CloudFront's default domain -- a
       # human's browser can't do the --resolve trick the smoke test above
