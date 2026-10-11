@@ -470,6 +470,39 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"]
   }
 
+  # Staging now creates its own tagged application inference profile on
+  # every deploy-staging run (bedrock.tf), so this role manages one, not
+  # just reads it. Creating a profile also needs access to the
+  # system-defined profile it copies and the models that routes to.
+  statement {
+    sid = "BedrockInferenceProfileManage"
+    actions = [
+      "bedrock:CreateInferenceProfile",
+      "bedrock:DeleteInferenceProfile",
+      "bedrock:TagResource",
+      "bedrock:UntagResource",
+    ]
+    resources = ["arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:application-inference-profile/*"]
+  }
+
+  statement {
+    sid     = "BedrockInferenceProfileSource"
+    actions = ["bedrock:CreateInferenceProfile", "bedrock:GetInferenceProfile"]
+    resources = [
+      "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
+      "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+    ]
+  }
+
+  # aws_ce_cost_allocation_tag.environment (bedrock_budget.tf) -- only the
+  # production workspace manages it, but a production plan still reads it.
+  # Cost Explorer's tag APIs have no resource-level permissions.
+  statement {
+    sid       = "CostAllocationTagsRead"
+    actions   = ["ce:ListCostAllocationTags"]
+    resources = ["*"]
+  }
+
   # aws_budgets_budget.bedrock (bedrock_budget.tf) -- same "first real
   # production plan" story again, surfaced as AccessDenied on
   # budgets:ViewBudget, then ListTagsForResource on the next attempt (same

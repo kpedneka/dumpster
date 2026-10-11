@@ -23,10 +23,10 @@
 # can't") now literally cannot delete production's real credentials,
 # regardless of any recovery-window setting.
 #
-# The tradeoff: each of the 3 secrets needs a real, one-time bootstrap
+# The tradeoff: each of the 2 secrets needs a real, one-time bootstrap
 # per environment BEFORE the first `tofu apply` against that environment
 # -- before, not after, unlike the old resource-managed version:
-#   for name in database-url database-url-pooled anthropic-api-key; do
+#   for name in database-url database-url-pooled; do
 #     aws secretsmanager create-secret --name "dumpster/staging/$name"
 #     aws secretsmanager put-secret-value --secret-id "dumpster/staging/$name" --secret-string '...'
 #   done
@@ -46,8 +46,8 @@
 #
 # Still on Neon (see the ECS Migration dev board's cost discussion) --
 # DATABASE_URL/DATABASE_URL_POOLED hold Neon connection strings today, not
-# Aurora. Anthropic direct for generation, not Bedrock yet -- both
-# migrations are separate, later cards. Object storage's four secrets
+# Aurora. The LLM is Bedrock, authenticated by IAM, so the old
+# anthropic-api-key secret is no longer read. Object storage's four secrets
 # (s3-access-key, s3-secret-key, r2-scratch-access-key,
 # r2-scratch-secret-key) were deleted entirely, not repointed, once real
 # document/scratch storage moved to AWS S3 (see s3_storage.tf and the
@@ -59,7 +59,6 @@ locals {
   secret_names = [
     "database-url",        # DATABASE_URL -- Neon direct (non-pooled) connection string, for worker/cleanup
     "database-url-pooled", # DATABASE_URL_POOLED -- Neon PgBouncer connection string, for api
-    "anthropic-api-key",   # ANTHROPIC_API_KEY
   ]
 }
 

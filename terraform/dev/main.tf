@@ -102,6 +102,34 @@ data "archive_file" "lambda_stateless_jobs" {
   output_path = "${path.module}/../../build/dev/lambda-stateless-jobs.zip"
 }
 
+# The dev environment's own tagged Bedrock inference profile, for the
+# stateless-jobs Lambda and the local API (`make dev-env` prints its ARN
+# for .env.local). Tagged environment=dev so this usage stays out of
+# production's Bedrock budget (../bedrock_budget.tf).
+resource "aws_bedrock_inference_profile" "dev" {
+  name        = local.name_prefix
+  description = "dumpster dev Claude Sonnet 5 tagged for cost tracking"
+
+  model_source {
+    copy_from = "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-5"
+  }
+
+  tags = {
+    environment = "dev"
+    app         = "dumpster"
+  }
+}
+
+locals {
+  # The profile and every hop it routes through; Bedrock checks permission
+  # at each one (see ../ecs_iam.tf).
+  bedrock_model_arns = [
+    aws_bedrock_inference_profile.dev.arn,
+    "arn:aws:bedrock:${var.aws_region}:${data.aws_caller_identity.current.account_id}:inference-profile/us.anthropic.claude-sonnet-5",
+    "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-5",
+  ]
+}
+
 module "pipeline" {
   source = "../modules/pipeline"
 
@@ -130,10 +158,9 @@ module "pipeline" {
   stateless_lambda_zip_hash = data.archive_file.lambda_stateless_jobs.output_base64sha256
   stateless_lambda_environment = {
     DATABASE_URL_POOLED = var.database_url_pooled
-    LLM_PROVIDER        = "anthropic"
-    ANTHROPIC_API_KEY   = var.anthropic_api_key
-    ANTHROPIC_MODEL     = var.anthropic_model
+    BEDROCK_MODEL_ID    = aws_bedrock_inference_profile.dev.arn
   }
+  bedrock_model_arns = local.bedrock_model_arns
 
   # Uploads are on R2, reached with the keys above, so no AWS bucket grant.
   uploads_bucket_arn = null
@@ -153,8 +180,8 @@ module "pipeline" {
 #
 # After cutover the local API (`make run`) publishes jobs to this stack
 # with the AWS keys in .env.local, which belong to an existing IAM user
-# that isn't managed here. Grant that user exactly what publishing needs,
-# the same two actions the deployed API's task role has.
+# that isn't managed here. Grant that user exactly what the deployed API's
+# task role has for publishing jobs and calling Bedrock.
 data "aws_iam_user" "local" {
   user_name = var.local_iam_user
 }
@@ -169,6 +196,16 @@ data "aws_iam_policy_document" "local_publish" {
     sid       = "SendToLambdaQueues"
     actions   = ["sqs:SendMessage"]
     resources = values(module.pipeline.job_queue_arns)
+  }
+  statement {
+    sid = "InvokeBedrock"
+    actions = [
+      "bedrock:InvokeModel",
+      "bedrock:InvokeModelWithResponseStream",
+      "bedrock:Converse",
+      "bedrock:ConverseStream",
+    ]
+    resources = local.bedrock_model_arns
   }
 }
 

@@ -33,13 +33,13 @@ variable "stateless_lambda_zip_hash" {
 variable "stateless_lambda_environment" {
   type        = map(string)
   sensitive   = true
-  description = "Environment for the stateless-jobs Lambda (database URL, LLM provider settings and keys)."
+  description = "Environment for the stateless-jobs Lambda (database URL and Bedrock model)."
 }
 
 variable "bedrock_model_arns" {
   type        = list(string)
   default     = []
-  description = "Bedrock models/inference profiles the stateless-jobs Lambda may invoke. Empty when it uses the Anthropic API instead."
+  description = "Bedrock inference profiles and models the stateless-jobs Lambda may invoke: the environment's own profile and every hop it routes through."
 }
 
 variable "lambda_environment" {

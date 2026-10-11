@@ -11,17 +11,6 @@ variable "database_url_pooled" {
   description = "DATABASE_URL_POOLED from .env.local: the Lambdas must use the database the local API reads."
 }
 
-variable "anthropic_api_key" {
-  type      = string
-  sensitive = true
-}
-
-variable "anthropic_model" {
-  type        = string
-  default     = ""
-  description = "ANTHROPIC_MODEL from .env.local; empty uses the app's default."
-}
-
 variable "entity_types" {
   type        = string
   default     = ""

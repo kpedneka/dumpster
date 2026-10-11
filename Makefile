@@ -6,19 +6,17 @@ COVERAGE_THRESHOLD := 80
 # excluded from the unit-test coverage gate. They are exercised separately
 # by integration tests that run against live infrastructure.
 # This list must stay in sync with .github/workflows/ci.yml.
-UNIT_COVERPKG := ./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/llm,./internal/llm/mock,./internal/llm/inference,./internal/llm/anthropic,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/awsbatch/mock,./internal/canonical,./internal/canonical/memory,./internal/canonicalize,./internal/inquiry,./internal/inquiry/memory,./internal/reembed,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/queue/sqs,./internal/queue/sqs/mock,./internal/queue/stepfunctions,./internal/queue/stepfunctions/mock,./internal/queue/dispatch,./internal/queue/dispatch/dispatchaws,./internal/worker/lambda,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock,./internal/stats,./internal/stats/memory,./internal/community,./internal/community/memory,./internal/theme,./internal/theme/memory,./internal/intrusion,./internal/intrusion/memory,./internal/relation,./internal/relation/memory,./internal/graphrecall,./internal/evalcorpus,./internal/multihopqa,./internal/crosslink,./internal/crosslink/memory,./internal/jobstatus,./internal/jobstatus/memory,./internal/pipeline,./internal/pipeline/docindex,./internal/pipeline/entityextract,./internal/pipeline/embedtail,./internal/pipeline/regionclassify,./internal/pipeline/router
+UNIT_COVERPKG := ./internal/auth,./internal/session,./internal/session/mock,./internal/account,./internal/account/mock,./internal/config,./internal/server,./internal/graphedge,./internal/graphedge/memory,./internal/manifest,./internal/manifest/memory,./internal/llm,./internal/llm/mock,./internal/llm/inference,./internal/kb,./internal/kb/memory,./internal/document,./internal/document/memory,./internal/chunk,./internal/chunk/memory,./internal/entity,./internal/entity/memory,./internal/entity/mock,./internal/awsbatch/mock,./internal/canonical,./internal/canonical/memory,./internal/canonicalize,./internal/inquiry,./internal/inquiry/memory,./internal/reembed,./internal/objectstore,./internal/objectstore/mock,./internal/queue,./internal/queue/memory,./internal/queue/sqs,./internal/queue/sqs/mock,./internal/queue/stepfunctions,./internal/queue/stepfunctions/mock,./internal/queue/dispatch,./internal/queue/dispatch/dispatchaws,./internal/worker/lambda,./internal/rls,./internal/retrieval,./internal/retrieval/memory,./internal/search,./internal/search/mock,./internal/worker,./internal/router,./internal/router/mock,./internal/graphrag,./internal/graphrag/memory,./internal/ratelimit,./internal/ratelimit/memory,./internal/ratelimit/mock,./internal/stats,./internal/stats/memory,./internal/community,./internal/community/memory,./internal/theme,./internal/theme/memory,./internal/intrusion,./internal/intrusion/memory,./internal/relation,./internal/relation/memory,./internal/graphrecall,./internal/evalcorpus,./internal/multihopqa,./internal/crosslink,./internal/crosslink/memory,./internal/jobstatus,./internal/jobstatus/memory,./internal/pipeline,./internal/pipeline/docindex,./internal/pipeline/entityextract,./internal/pipeline/embedtail,./internal/pipeline/regionclassify,./internal/pipeline/router
 
 # UNIT_TESTPKG: test packages that exercise UNIT_COVERPKG (excludes pgstore and other infra).
 # llm/inference is an HTTP-client adapter tested with httptest — no
 # external process needed, so it belongs in the unit gate.
-# llm/anthropic is tested against a fake http.RoundTripper
-# (option.WithHTTPClient) serving canned SSE responses — same idea, no real
-# Anthropic API call. reembed and canonicalize only touch memory/mock
+# reembed and canonicalize only touch memory/mock
 # repositories in their tests, so they belong here too despite existing to
 # drive a real Postgres backfill in production. Real AWS access only lives
 # in the adapters' client.go files (internal/awsbatch, queue/sqs,
 # queue/stepfunctions), which can't be exercised without live AWS.
-UNIT_TESTPKG := ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/graphedge ./internal/manifest ./internal/llm ./internal/llm/inference ./internal/llm/anthropic \
+UNIT_TESTPKG := ./internal/auth ./internal/account ./internal/config ./internal/server ./internal/graphedge ./internal/manifest ./internal/llm ./internal/llm/inference \
                 ./internal/kb ./internal/document ./internal/chunk ./internal/entity ./internal/canonical ./internal/canonicalize ./internal/inquiry ./internal/reembed \
                 ./internal/objectstore ./internal/worker \
                 ./internal/queue/sqs ./internal/queue/stepfunctions ./internal/queue/dispatch ./internal/queue/dispatch/dispatchaws \
@@ -65,8 +63,6 @@ lambdas:
 DEV_STACK_ENV = set -a && . ./.env.local && set +a && \
 	unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN && \
 	export TF_VAR_database_url_pooled="$$DATABASE_URL_POOLED" \
-	       TF_VAR_anthropic_api_key="$$ANTHROPIC_API_KEY" \
-	       TF_VAR_anthropic_model="$$ANTHROPIC_MODEL" \
 	       TF_VAR_entity_types="$$ENTITY_TYPES" \
 	       TF_VAR_uploads_endpoint="$$S3_ENDPOINT" \
 	       TF_VAR_uploads_region="$${S3_REGION:-auto}" \

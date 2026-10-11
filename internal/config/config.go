@@ -71,25 +71,14 @@ type Config struct {
 	S3ScratchSecretKey    string
 	S3ScratchUsePathStyle bool
 	// LLM
-	AnthropicAPIKey string
-	AnthropicModel  string
-	// LLMProvider selects which llm.Generator implementation cmd/api and the
-	// stateless-jobs Lambda construct: "anthropic" (default, direct Anthropic API,
-	// billed against AnthropicAPIKey's account) or "bedrock" (AWS Bedrock's
-	// Converse API, billed through AWS, authenticated via the ECS task
-	// role -- no API key at all). Production launches on Bedrock from day
-	// one; staging keeps using Anthropic direct -- see the "DNS and TLS
-	// cutover plan" dev board card for why direct Anthropic billing was a
-	// real, immediate cost risk this app hit for real (a load-testing
-	// burst burned real non-refundable credit in under an hour) that
-	// Bedrock sidesteps entirely for production traffic.
-	LLMProvider string
-	// BedrockModelID is a Bedrock model ID or inference profile ID/ARN,
-	// only read when LLMProvider is "bedrock". Not the bare model name the
-	// direct Anthropic API uses -- some models, including Claude Sonnet 5,
-	// reject on-demand invocation by model ID and require an inference
-	// profile instead (confirmed for real against this account before
-	// picking the default below, not assumed from documentation).
+	// BedrockModelID is the Bedrock model ID or inference profile ID/ARN
+	// the LLM generator (internal/llm/bedrock) invokes through Bedrock's
+	// Converse API, authenticated by the AWS SDK credential chain. Each
+	// deployed environment passes its own tagged application inference
+	// profile (terraform/bedrock.tf) so Bedrock spend can be attributed
+	// per environment. Some models, including Claude Sonnet 5, reject
+	// on-demand invocation by bare model ID and need an inference profile,
+	// hence the system-defined cross-region profile as the default.
 	BedrockModelID string
 	// Entity extraction
 	// EntityTypes is the closed-but-broad, domain-agnostic set of entity
@@ -224,9 +213,6 @@ func Load() *Config {
 		S3ScratchAccessKey:    getEnv("S3_SCRATCH_ACCESS_KEY", ""),
 		S3ScratchSecretKey:    getEnv("S3_SCRATCH_SECRET_KEY", ""),
 		S3ScratchUsePathStyle: getEnv("S3_SCRATCH_USE_PATH_STYLE", "false") == "true",
-		AnthropicAPIKey:       getEnv("ANTHROPIC_API_KEY", ""),
-		AnthropicModel:        getEnv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-		LLMProvider:           getEnv("LLM_PROVIDER", "anthropic"),
 		BedrockModelID:        getEnv("BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-5"),
 
 		EntityTypes:         getEntityTypes("ENTITY_TYPES", defaultEntityTypes),

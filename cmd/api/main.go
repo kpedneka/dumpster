@@ -17,8 +17,6 @@ import (
 	intrusionpg "github.com/kunalpednekar/dumpster/internal/intrusion/pgstore"
 	statuspg "github.com/kunalpednekar/dumpster/internal/jobstatus/pgstore"
 	kbpg "github.com/kunalpednekar/dumpster/internal/kb/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/llm"
-	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	llminference "github.com/kunalpednekar/dumpster/internal/llm/inference"
 	"github.com/kunalpednekar/dumpster/internal/llm/instrumented"
@@ -87,16 +85,10 @@ func main() {
 	}
 
 	embedder := instrumented.NewEmbedder(llminference.NewQueryEmbedder(cfg.InferenceServiceURL), instruments)
-	var generator llm.Generator
-	switch cfg.LLMProvider {
-	case "bedrock":
-		generator, err = bedrock.New(context.Background(), cfg.AWSRegion, cfg.BedrockModelID)
-		if err != nil {
-			logger.Error("bedrock generator setup failed", "err", err)
-			os.Exit(1)
-		}
-	default:
-		generator = anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	generator, err := bedrock.New(context.Background(), cfg.AWSRegion, cfg.BedrockModelID)
+	if err != nil {
+		logger.Error("bedrock generator setup failed", "err", err)
+		os.Exit(1)
 	}
 	retriever := retrievalpg.New(txRunner, embedder)
 	answerer := search.NewAnswerer(generator)

@@ -30,8 +30,6 @@ import (
 	entitypg "github.com/kunalpednekar/dumpster/internal/entity/pgstore"
 	graphedgepg "github.com/kunalpednekar/dumpster/internal/graphedge/pgstore"
 	statuspg "github.com/kunalpednekar/dumpster/internal/jobstatus/pgstore"
-	"github.com/kunalpednekar/dumpster/internal/llm"
-	"github.com/kunalpednekar/dumpster/internal/llm/anthropic"
 	"github.com/kunalpednekar/dumpster/internal/llm/bedrock"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/rls"
@@ -71,24 +69,10 @@ func main() {
 
 	edgeHandler := worker.NewEdgeHandler(docs, entities, edges)
 
-	// Same LLM-provider switch and alias/cross-link wiring as
-	// cmd/worker/main.go's canonicalizationHandler construction — kept in
-	// sync deliberately by mirroring, not by extracting a shared helper:
-	// the two entrypoints' os.Exit-on-setup-failure behavior differs
-	// enough (this one has no telemetry/instruments to shut down first)
-	// that a shared function would need its own parameterization for
-	// little real duplication saved.
-	var generator llm.Generator
-	switch cfg.LLMProvider {
-	case "bedrock":
-		var err error
-		generator, err = bedrock.New(ctx, cfg.AWSRegion, cfg.BedrockModelID)
-		if err != nil {
-			logger.Error("bedrock generator setup failed", "err", err)
-			os.Exit(1)
-		}
-	default:
-		generator = anthropic.New(cfg.AnthropicAPIKey, cfg.AnthropicModel)
+	generator, err := bedrock.New(ctx, cfg.AWSRegion, cfg.BedrockModelID)
+	if err != nil {
+		logger.Error("bedrock generator setup failed", "err", err)
+		os.Exit(1)
 	}
 	aliasJudge := &canonical.LLMAliasJudge{Generator: generator}
 	crosslinkRepo := crosslinkpg.New(txRunner)
