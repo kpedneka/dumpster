@@ -129,6 +129,17 @@ func TestLouvain_AlreadyCancelledContext(t *testing.T) {
 func TestLouvain_CancellationDuringComputation(t *testing.T) {
 	g := largeClusteredGraph(2000, 40)
 
+	// Time an uncancelled run first, on the same machine, so the bound
+	// below scales with the runner instead of being a fixed wall-clock
+	// limit: a full run takes ~250ms on a laptop and several times that on
+	// a loaded CI runner with coverage instrumentation, so a fixed 200ms
+	// limit failed on CI even though cancellation worked.
+	fullStart := time.Now()
+	if _, _, err := community.Louvain(context.Background(), g); err != nil {
+		t.Fatalf("uncancelled run: %v", err)
+	}
+	full := time.Since(fullStart)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 	defer cancel()
 
@@ -136,8 +147,11 @@ func TestLouvain_CancellationDuringComputation(t *testing.T) {
 	_, _, err := community.Louvain(ctx, g)
 	elapsed := time.Since(start)
 
-	if elapsed > 200*time.Millisecond {
-		t.Errorf("Louvain took %v after a 1ms timeout, want well under 200ms — cancellation check likely isn't firing mid-computation", elapsed)
+	// A cancelled run stops at the next check, roughly a quarter of a full
+	// run here (graph setup happens before the first check). Taking more
+	// than half means the checks aren't firing mid-computation.
+	if elapsed > full/2 {
+		t.Errorf("Louvain took %v after a 1ms timeout, against %v for a full run; want under half — cancellation check likely isn't firing mid-computation", elapsed, full)
 	}
 	if err == nil {
 		t.Fatal("expected an error from the blown deadline, got nil")
