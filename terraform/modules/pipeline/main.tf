@@ -111,6 +111,18 @@ resource "aws_iam_role_policy" "lambda" {
   policy = data.aws_iam_policy_document.lambda.json
 }
 
+# Where internal/queue/dispatch publishes each job type, for every Lambda
+# that starts jobs (this one and the malware scan's).
+locals {
+  dispatch_environment = {
+    DOCUMENT_INDEXING_STATE_MACHINE_ARN     = local.state_machine_arns.document_indexing
+    ENTITY_EXTRACTION_STATE_MACHINE_ARN     = local.state_machine_arns.entity_extraction
+    REGION_CLASSIFICATION_STATE_MACHINE_ARN = local.state_machine_arns.region_classification
+    EDGE_EXTRACTION_QUEUE_URL               = aws_sqs_queue.job["edge_extraction"].url
+    CANONICALIZATION_QUEUE_URL              = aws_sqs_queue.job["canonicalization"].url
+  }
+}
+
 resource "aws_lambda_function" "pipeline" {
   function_name    = local.function_name
   role             = aws_iam_role.lambda.arn
@@ -127,13 +139,7 @@ resource "aws_lambda_function" "pipeline" {
   memory_size = 1024
 
   environment {
-    variables = merge(var.lambda_environment, {
-      DOCUMENT_INDEXING_STATE_MACHINE_ARN     = local.state_machine_arns.document_indexing
-      ENTITY_EXTRACTION_STATE_MACHINE_ARN     = local.state_machine_arns.entity_extraction
-      REGION_CLASSIFICATION_STATE_MACHINE_ARN = local.state_machine_arns.region_classification
-      EDGE_EXTRACTION_QUEUE_URL               = aws_sqs_queue.job["edge_extraction"].url
-      CANONICALIZATION_QUEUE_URL              = aws_sqs_queue.job["canonicalization"].url
-    })
+    variables = merge(var.lambda_environment, local.dispatch_environment)
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda, aws_iam_role_policy_attachment.lambda_basic_execution]

@@ -102,6 +102,8 @@ resource "aws_ecs_task_definition" "api" {
         { name = "REGION_CLASSIFICATION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["region_classification"] },
         { name = "EDGE_EXTRACTION_QUEUE_URL", value = module.pipeline.job_queue_urls["edge_extraction"] },
         { name = "CANONICALIZATION_QUEUE_URL", value = module.pipeline.job_queue_urls["canonicalization"] },
+        # Every upload sends its malware scan's timeout message here.
+        { name = "MALWARE_SCAN_TIMEOUT_QUEUE_URL", value = module.pipeline.malware_scan_timeout_queue_url },
       ])
       secrets = concat(local.shared_secrets, [
         { name = "DATABASE_URL_POOLED", valueFrom = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn },

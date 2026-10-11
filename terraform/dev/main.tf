@@ -145,6 +145,12 @@ data "archive_file" "lambda_stateless_jobs" {
   output_path = "${path.module}/../../build/dev/lambda-stateless-jobs.zip"
 }
 
+data "archive_file" "lambda_malware_scan" {
+  type        = "zip"
+  source_file = "${path.module}/../../build/lambda-malware-scan/bootstrap"
+  output_path = "${path.module}/../../build/dev/lambda-malware-scan.zip"
+}
+
 # The dev environment's own tagged Bedrock inference profile, for the
 # stateless-jobs Lambda and the local API (`make dev-env` prints its ARN
 # for .env.local). Tagged environment=dev so this usage stays out of
@@ -194,6 +200,9 @@ module "pipeline" {
     ENTITY_EXTRACTION_BATCH_SIZE = "50"
   }
 
+  malware_scan_lambda_zip_path = data.archive_file.lambda_malware_scan.output_path
+  malware_scan_lambda_zip_hash = data.archive_file.lambda_malware_scan.output_base64sha256
+
   stateless_lambda_zip_path = data.archive_file.lambda_stateless_jobs.output_path
   stateless_lambda_zip_hash = data.archive_file.lambda_stateless_jobs.output_base64sha256
   stateless_lambda_environment = {
@@ -234,7 +243,7 @@ data "aws_iam_policy_document" "local_publish" {
   statement {
     sid       = "SendToLambdaQueues"
     actions   = ["sqs:SendMessage"]
-    resources = values(module.pipeline.job_queue_arns)
+    resources = concat(values(module.pipeline.job_queue_arns), [module.pipeline.malware_scan_timeout_queue_arn])
   }
   statement {
     sid       = "UploadsObjects"

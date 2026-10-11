@@ -50,8 +50,7 @@ variable "lambda_environment" {
 
 variable "uploads_bucket_arn" {
   type        = string
-  default     = null
-  description = "AWS bucket user documents live in: the pipeline Lambda reads uploads and presigns them for the layout job. Null only if uploads live outside AWS, with keys passed in lambda_environment."
+  description = "AWS bucket user documents live in: the pipeline Lambda reads uploads and presigns them for the layout job, and malware_scan.tf scans it and owns its bucket policy."
 }
 
 variable "scratch_bucket_arn" {
@@ -74,4 +73,24 @@ variable "batch" {
 variable "log_retention_days" {
   type    = number
   default = 60
+}
+
+variable "malware_scan_lambda_zip_path" {
+  type        = string
+  description = "Zip of cmd/lambda-malware-scan's bootstrap binary."
+}
+
+variable "malware_scan_lambda_zip_hash" {
+  type = string
+}
+
+variable "malware_scan_timeout_seconds" {
+  type        = number
+  default     = 300
+  description = "How long an upload waits for its malware scan before it's failed: the timeout queue's delivery delay. At most 900 (SQS's limit)."
+
+  validation {
+    condition     = var.malware_scan_timeout_seconds > 0 && var.malware_scan_timeout_seconds <= 900
+    error_message = "SQS delivery delays range from 1 to 900 seconds."
+  }
 }

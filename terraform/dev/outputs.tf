@@ -6,6 +6,7 @@ output "dotenv" {
     REGION_CLASSIFICATION_STATE_MACHINE_ARN=${module.pipeline.state_machine_arns["region_classification"]}
     EDGE_EXTRACTION_QUEUE_URL=${module.pipeline.job_queue_urls["edge_extraction"]}
     CANONICALIZATION_QUEUE_URL=${module.pipeline.job_queue_urls["canonicalization"]}
+    MALWARE_SCAN_TIMEOUT_QUEUE_URL=${module.pipeline.malware_scan_timeout_queue_url}
     S3_ENDPOINT=
     S3_REGION=${var.aws_region}
     S3_BUCKET=${aws_s3_bucket.uploads.bucket}
