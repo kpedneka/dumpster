@@ -13,11 +13,16 @@
 # Fly — a genuinely different artifact for a genuinely different runtime.
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# The base image's own pip/setuptools/wheel lag behind their security fixes
+# (setuptools vendors its own copies of wheel and jaraco.context), and
+# nothing pins them, so bring them current before installing anything else.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # GPU-enabled torch: the default PyPI index (not python.org/whl/cpu, as the
 # root Dockerfile's inference stage uses) bundles the CUDA runtime this job
@@ -38,7 +43,14 @@ WORKDIR /app
 # never touches torch.distributed -- but plain `import torch` unconditionally
 # dlopen()s libnccl.so.2 even with no distributed call in sight, confirmed by
 # actually trying to remove it: it breaks the import outright. Keep it.
-RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir spacy gliner torch && \
+#
+# Pinned to the versions in the last image known to work. Left unpinned,
+# a fresh install (2026-10) resolved a combination under which GLiNER's
+# tokenizer no longer loads (transformers asks for tiktoken), failing the
+# model download below.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir \
+    "spacy==3.8.16" "gliner==0.2.28" "torch==2.14.0" "transformers==5.13.1" \
+    "tokenizers==0.22.2" "huggingface_hub==1.30.0" "urllib3>=2.8" && \
     pip uninstall -y triton
 RUN --mount=type=cache,target=/root/.cache/pip python -m spacy download en_core_web_sm
 
@@ -54,4 +66,8 @@ ENV TRANSFORMERS_OFFLINE=1
 
 COPY scripts/extract_entities.py scripts/batch_entity_job.py /app/
 
+# Nothing runs pip once the image is built, and pip ships its own bundled
+# copies of urllib3, msgpack and setuptools that image scanners flag, so
+# remove it from the final image.
+RUN python -m pip uninstall -y pip
 CMD ["python", "batch_entity_job.py"]

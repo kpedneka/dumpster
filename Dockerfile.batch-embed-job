@@ -29,17 +29,22 @@
 # explicit --target going forward.
 FROM python:3.11-slim AS base
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# The base image's own pip/setuptools/wheel lag behind their security fixes
+# (setuptools vendors its own copies of wheel and jaraco.context), and
+# nothing pins them, so bring them current before installing anything else.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # CPU-only torch, same pinned index-url as the root Dockerfile's
 # `inference` target and for the same reason: the default PyPI wheel
 # bundles the full CUDA runtime, dead weight on a CPU-only Fargate task.
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "sentence-transformers>=3.2,<4"
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "sentence-transformers>=3.2,<4" "urllib3>=2.8"
 
 # Baking the weights in and forcing offline mode avoids a live HuggingFace
 # Hub round trip on every job invocation/task start -- every Batch job is
@@ -54,10 +59,18 @@ COPY scripts/embeddings.py /app/
 
 FROM base AS batch-job
 COPY scripts/batch_embed_job.py /app/
+# Nothing runs pip once the image is built, and pip ships its own bundled
+# copies of urllib3, msgpack and setuptools that image scanners flag, so
+# remove it from the final image.
+RUN python -m pip uninstall -y pip
 CMD ["python", "batch_embed_job.py"]
 
 FROM base AS sidecar
 RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir "fastapi>=0.115,<1" "uvicorn>=0.32,<1"
 COPY scripts/embed_service.py /app/
+# Nothing runs pip once the image is built, and pip ships its own bundled
+# copies of urllib3, msgpack and setuptools that image scanners flag, so
+# remove it from the final image.
+RUN python -m pip uninstall -y pip
 EXPOSE 8000
 CMD ["uvicorn", "embed_service:app", "--host", "0.0.0.0", "--port", "8000"]

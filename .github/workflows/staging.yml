@@ -79,7 +79,7 @@ jobs:
       # link against.
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: Build Lambda binaries
         env:
@@ -393,7 +393,7 @@ jobs:
       # destroy fails before it ever gets to actually tearing anything down.
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version-file: go.mod
 
       - name: Build Lambda binaries
         env:
