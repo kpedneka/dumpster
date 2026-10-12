@@ -9,11 +9,9 @@ extraction (pymupdf + pdfplumber, see extract_regions.py) never loaded a
 model in the first place -- there's no warm-state benefit being given up
 here, only the idle-capacity cost of the always-on machine itself.
 
-The isolated-subprocess memory cap extract_regions_isolated() adds for the
-inference-service path (protecting a shared, long-lived process from one
-pathological document) is unnecessary here: an AWS Batch job is already a
-single-document, single-use container that can fail and exit without
-endangering anything else, so this calls extract_regions() directly.
+Calls extract_regions() directly, with no separate memory-capped
+subprocess: an AWS Batch job is already a single-document, single-use
+container that can fail and exit without endangering anything else.
 
 Same request/response transport as batch_embed_job.py: input and result
 both travel via presigned S3 URLs, not stdin/stdout or CloudWatch Logs --
@@ -26,8 +24,7 @@ Environment variables:
                stdin/HTTP paths which pass pdf_base64 inside a JSON body).
   RESULT_URL — presigned PUT URL this job uploads its JSON result to on
                success: {"regions": [...], "peak_rss_kb": N} -- same shape
-               extract_regions.py's own main() and the HTTP /regions
-               endpoint already produce, for parity with both.
+               extract_regions.py's own main() produces.
 
 On success, a short confirmation line is printed to stdout; the actual
 result lives at RESULT_URL. On failure, this exits non-zero and prints

@@ -70,46 +70,6 @@ resource "aws_iam_role" "ecs_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
 }
 
-# Granted for the decommissioned ECS worker, which submitted and polled
-# Batch jobs itself. Nothing on this role calls Batch any more -- the
-# state machines submit jobs with their own role -- so this and
-# ecs_task_logs_read below are unused; tracked for removal on the dev
-# board ("Remove the ECS task role's unused Batch and log-read grants").
-data "aws_iam_policy_document" "ecs_task_batch" {
-  statement {
-    actions = [
-      "batch:SubmitJob",
-      "batch:DescribeJobs",
-      "batch:TerminateJob",
-    ]
-    resources = ["*"] # Batch job/queue ARNs are dynamic per submission; the API itself has no resource-level scoping for SubmitJob targets
-  }
-}
-
-resource "aws_iam_role_policy" "ecs_task_batch" {
-  name   = "${local.name_prefix}-ecs-task-batch"
-  role   = aws_iam_role.ecs_task.id
-  policy = data.aws_iam_policy_document.ecs_task_batch.json
-}
-
-# CloudWatch Logs read for Batch job output -- unused, like
-# ecs_task_batch above.
-data "aws_iam_policy_document" "ecs_task_logs_read" {
-  statement {
-    actions = [
-      "logs:GetLogEvents",
-      "logs:DescribeLogStreams",
-    ]
-    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/batch/*"]
-  }
-}
-
-resource "aws_iam_role_policy" "ecs_task_logs_read" {
-  name   = "${local.name_prefix}-ecs-task-logs-read"
-  role   = aws_iam_role.ecs_task.id
-  policy = data.aws_iam_policy_document.ecs_task_logs_read.json
-}
-
 # internal/llm/bedrock calls Bedrock's Converse API, the app's only LLM
 # provider.
 #

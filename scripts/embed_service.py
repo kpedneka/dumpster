@@ -3,10 +3,9 @@
 Runs as a second container inside api's own ECS task (see
 terraform/ecs_api.tf), reached over localhost rather than a network hop —
 this replaces the /embeddings half of the retired standalone
-inference_service.py. The /regions half doesn't move here: PDF/image
-region classification folds into the AWS Batch embed job instead (see
-scripts/batch_embed_job.py), a separate, later piece of work. Keeping
-those two capabilities apart on purpose, not just for now: this process
+inference_service.py. Region classification isn't here: it runs as its
+own AWS Batch job (scripts/batch_regions_job.py). Keeping those two
+capabilities apart on purpose: this process
 never imports extract_regions or its pdfplumber/pymupdf dependencies at
 all, so the sidecar's image stays exactly as heavy as the embedding model
 itself needs and no heavier, and duplicating it per api replica (see the
