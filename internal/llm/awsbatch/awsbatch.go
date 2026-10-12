@@ -9,9 +9,9 @@
 // embedding call there took 13-16+ minutes in production, tracked down to
 // Fly throttling shared vCPUs to a 5ms/80ms baseline quota once burst
 // balance empties -- a scheduler-level CPU denial no in-process thread
-// tuning could fix. See scripts/embed_bench_job.py for the experiment
-// that established this and the vCPU-size comparison behind the chosen
-// job definition's sizing.
+// tuning could fix. A one-off benchmark job (scripts/embed_bench_job.py,
+// since removed; see git history) established this and compared the vCPU
+// sizes behind the chosen job definition's sizing.
 //
 // This package never touches Postgres, and the Batch container gets a
 // short-lived presigned URL rather than real object-storage credentials.
