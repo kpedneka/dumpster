@@ -85,10 +85,8 @@ resource "aws_ecs_task_definition" "api" {
         # same task, not the standalone inference service. No Go code
         # change needed for this: internal/llm/inference's HTTP client
         # is baseURL-agnostic, this is purely a config value. Region
-        # classification (cmd/worker's separate INFERENCE_SERVICE_URL,
-        # see ecs_worker.tf) is unaffected -- it still calls the
-        # standalone service, unchanged, until that's folded into the
-        # AWS Batch embed job in a separate, later card.
+        # classification runs as an AWS Batch job from the
+        # region_classification state machine, not over HTTP.
         { name = "INFERENCE_SERVICE_URL", value = "http://localhost:8000" },
         { name = "COOKIE_SECURE", value = "true" },
         { name = "MAX_DOCUMENTS_PER_SESSION", value = tostring(var.max_documents_per_session) },

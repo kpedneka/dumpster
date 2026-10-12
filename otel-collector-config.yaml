@@ -1,6 +1,6 @@
 # Config for the metrics sidecar (Dockerfile.otel-collector). Receives OTLP
-# from internal/telemetry (both cmd/api and cmd/worker run one of these each)
-# and exports to CloudWatch via awsemf.
+# from internal/telemetry (each cmd/api task runs one) and exports to
+# CloudWatch via awsemf.
 #
 # One shared config for both services, not two -- the app itself sets the
 # OTel service.name resource attribute (internal/telemetry/telemetry.go),
@@ -23,7 +23,7 @@ processors:
     send_batch_size: 8192
 
 # DUMPSTER_ENV/DUMPSTER_SERVICE are set on the otel-collector container per
-# task definition (terraform/ecs_api.tf, ecs_worker.tf) -- one shared image
+# task definition (terraform/ecs_api.tf) -- one shared image
 # and config for every environment/service, not one baked-in config apiece.
 exporters:
   awsemf:

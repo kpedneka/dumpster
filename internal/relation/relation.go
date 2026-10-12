@@ -7,8 +7,8 @@
 // frequency is, never what actually connects the two entities.
 //
 // Deliberately additive, not a replacement: this reads chunks that already
-// have a co-occurrence edge (internal/worker's edge-derivation stage, which
-// stays exactly as it is) and asks only "does the text support a specific
+// have a co-occurrence edge (the edge_extraction job, which stays exactly
+// as it is) and asks only "does the text support a specific
 // relationship between these two, and if so what is it" -- it never
 // proposes a pair edge derivation didn't already find. graphedge.Edge's
 // RelationType field has existed since migrations/014_entity_edges.sql

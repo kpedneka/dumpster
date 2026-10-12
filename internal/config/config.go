@@ -151,13 +151,11 @@ type Config struct {
 	// keeps running. Defaults to 30 seconds.
 	CommunityDetectionTimeout time.Duration
 
-	// EntityExtractionBatchSize caps how many chunks EntityHandler sends to
-	// the inference service's /entities endpoint in one request. Bounds
-	// worst-case single-request duration regardless of document size —
-	// a document with hundreds of chunks sent in one unbatched call was
-	// measured taking long enough to exceed JOB_STALE_TIMEOUT under normal
-	// operation, no deploy/restart involved (see the production ingestion
-	// incident writeup). Defaults to 50.
+	// EntityExtractionBatchSize caps how many chunks go into one entity
+	// extraction Batch job: the entity_extraction state machine
+	// (internal/pipeline/entityextract) runs one job per batch, so this
+	// bounds each job's duration regardless of document size. Defaults to
+	// 50.
 	EntityExtractionBatchSize int
 
 	// Where the event-driven pipeline sends each job type (see

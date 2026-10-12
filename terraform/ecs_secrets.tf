@@ -41,7 +41,7 @@
 # environment's own path, so staging can never accidentally read (or,
 # worse, silently share) production's real database/API credentials.
 # The for_each keys below stay short (no environment segment) so every
-# reference site (ecs_api.tf, ecs_worker.tf, ecs_cleanup.tf) can address
+# reference site (ecs_api.tf, ecs_cleanup.tf, pipeline.tf) can address
 # a secret the same way regardless of which environment is being applied.
 #
 # Still on Neon (see the ECS Migration dev board's cost discussion) --

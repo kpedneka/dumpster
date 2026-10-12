@@ -38,9 +38,10 @@ func Connect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 }
 
 // ConnectDirect opens a pgx pool using the direct (non-pooled) connection
-// string. Required for the worker's SKIP LOCKED loop and SET LOCAL RLS calls
-// which need session-stable connections that pooler transaction mode cannot
-// provide. Prepared statements are enabled (extended protocol) on direct
+// string, as the table owner: used by cmd/cleanup (which deliberately works
+// across tenants) and one-off tools, not by the API or the Lambdas, which
+// connect through the pooled string as the RLS-restricted dumpster_app.
+// Prepared statements are enabled (extended protocol) on direct
 // connections since they bypass PgBouncer.
 func ConnectDirect(ctx context.Context, cfg *config.Config) (*pgxpool.Pool, error) {
 	return connect(ctx, dsn(cfg), false)

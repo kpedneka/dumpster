@@ -584,8 +584,9 @@ func (h *docHandler) delete(w http.ResponseWriter, r *http.Request) {
 	// Reverse this document's contribution to canonical entity stats before
 	// its entities row are cascade-deleted by the document delete below —
 	// the mention -> canonical linkage DecrementForDocument needs to
-	// reverse it is gone once that cascade runs. Mirrors EntityHandler's
-	// re-extraction path, the only other place entities disappear.
+	// reverse it is gone once that cascade runs. Mirrors the entity
+	// extraction state machine's Plan step, the only other place entities
+	// disappear.
 	if h.canonical != nil {
 		if err := h.canonical.DecrementForDocument(r.Context(), userID, docID); err != nil {
 			h.recordDelete(r.Context(), "failure")

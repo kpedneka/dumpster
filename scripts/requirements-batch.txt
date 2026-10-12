@@ -1,6 +1,6 @@
 # Dependencies for scripts/extract_entities.py and scripts/batch_entity_job.py
-# — the AWS Batch GPU entity-extraction job's Python logic (see
-# internal/entity/awsbatch, the only entity.Extractor implementation).
+# — the AWS Batch GPU entity-extraction job's Python logic, run by the
+# entity_extraction state machine (internal/pipeline/entityextract).
 #
 # Mirrors what Dockerfile.batch-entity-job installs directly (that image
 # does not read this file — it needs the GPU-enabled torch build from

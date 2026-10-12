@@ -11,11 +11,9 @@ resource "aws_cloudwatch_log_group" "otel_metrics" {
   retention_in_days = 60
 }
 
-# awsemf needs CloudWatch *Logs* permissions, genuinely different from the
-# existing cloudwatch:PutMetricData grant in ecs_worker_autoscaling.tf --
-# internal/queuemetrics writes metric data points directly, while awsemf
-# writes structured log lines that CloudWatch itself parses into metrics.
-# Scoped to this one log group's ARN, not logs:* or an open group pattern.
+# awsemf needs CloudWatch *Logs* permissions: it writes structured log
+# lines that CloudWatch itself parses into metrics. Scoped to this one log
+# group's ARN, not logs:* or an open group pattern.
 data "aws_iam_policy_document" "ecs_task_otel_metrics_logs" {
   statement {
     actions = [

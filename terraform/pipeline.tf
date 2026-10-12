@@ -65,8 +65,7 @@ module "pipeline" {
   lambda_zip_path = data.archive_file.lambda_pipeline.output_path
   lambda_zip_hash = data.archive_file.lambda_pipeline.output_base64sha256
   # AWS_REGION is reserved and set by Lambda itself. S3 regions and buckets
-  # match the ECS services' shared_environment and the worker's scratch
-  # settings.
+  # match the ECS services' shared_environment.
   lambda_environment = {
     DATABASE_URL_POOLED          = data.aws_secretsmanager_secret_version.lambda_database_url_pooled.secret_string
     S3_REGION                    = var.aws_region
@@ -101,8 +100,7 @@ module "pipeline" {
   uploads_bucket_arn = aws_s3_bucket.documents.arn
   scratch_bucket_arn = aws_s3_bucket.scratch.arn
 
-  # Region extraction shares the embedding queue, as it does on the worker
-  # (ecs_worker.tf's REGIONS_BATCH_JOB_QUEUE).
+  # Region extraction shares the embedding queue (batch.tf).
   batch = {
     embed_job_queue_arn        = aws_batch_job_queue.embedding.arn
     embed_job_definition_name  = aws_batch_job_definition.embedding.name

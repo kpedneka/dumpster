@@ -13,11 +13,10 @@
 // that established this and the vCPU-size comparison behind the chosen
 // job definition's sizing.
 //
-// Same design as internal/entity/awsbatch in most respects: this package
-// never touches Postgres, and the Batch container gets a short-lived
-// presigned URL rather than real object-storage credentials. It diverges
-// on one specific point, though: the job's RESULT travels back via a
-// presigned PUT to object storage, not CloudWatch Logs the way entity
+// This package never touches Postgres, and the Batch container gets a
+// short-lived presigned URL rather than real object-storage credentials.
+// The job's RESULT travels back via a presigned PUT to object storage,
+// not CloudWatch Logs the way entity
 // extraction's result does. That was the first design tried here too, and
 // it broke in production: a single document's embedding response (433
 // texts x 384 floats, full JSON precision) runs a few MB, but CloudWatch
@@ -182,8 +181,7 @@ func (e *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, erro
 
 // waitForCompletion polls jobID's status until it reaches a terminal
 // state or ctx is done. No separate, shorter timeout hardcoded here --
-// this blocks for as long as the caller's context allows, matching
-// internal/entity/awsbatch's same choice.
+// this blocks for as long as the caller's context allows.
 func (e *Embedder) waitForCompletion(ctx context.Context, jobID string) error {
 	ticker := time.NewTicker(e.cfg.PollInterval)
 	defer ticker.Stop()

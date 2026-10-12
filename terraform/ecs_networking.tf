@@ -336,7 +336,7 @@ resource "aws_security_group" "ecs_tasks" {
 
 output "private_subnet_ids" {
   value       = [aws_subnet.private_1a.id, aws_subnet.private_1b.id]
-  description = "Pass these to the ECS service/task definitions in ecs_api.tf / ecs_worker.tf"
+  description = "The environment's private subnets: the API and cleanup tasks, AWS Batch and the pipeline Lambdas run here."
 }
 
 output "alb_security_group_id" {

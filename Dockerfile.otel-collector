@@ -1,14 +1,13 @@
 # syntax=docker/dockerfile:1
 #
-# The metrics sidecar: receives OTLP from cmd/api and cmd/worker
-# (internal/telemetry) over localhost and exports it to CloudWatch via
+# The metrics sidecar: receives OTLP from cmd/api (internal/telemetry)
+# over localhost and exports it to CloudWatch via
 # awsemf. See the "Push OTel metrics to CloudWatch" dev board card for the
 # full decision -- this is AWS's own documented, standard path for OTel
 # metrics -> CloudWatch specifically (unlike traces/logs, direct in-process
 # SDK export isn't the established pattern for metrics), not a hand-rolled
-# integration. One of these runs per api/worker task (terraform/ecs_api.tf,
-# ecs_worker.tf) -- cmd/cleanup doesn't record any metrics, so it doesn't
-# get one.
+# integration. One of these runs per api task (terraform/ecs_api.tf) --
+# cmd/cleanup doesn't record any metrics, so it doesn't get one.
 #
 # Pinned to a specific release, not :latest -- this project already has a
 # real, hard-won lesson about that exact failure mode (the image_tag

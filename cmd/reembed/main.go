@@ -6,11 +6,10 @@
 // invocation is not needed since this only ever has work to do once per
 // embedding-model change.
 //
-// Embeds via AWS Batch (internal/llm/awsbatch), same as cmd/worker's
-// ingestion-time embedding and for the same reason — this is a bulk,
-// latency-tolerant background job, exactly the shape that suffered under
-// Fly's shared-cpu throttling. See internal/llm/awsbatch's package doc
-// for the full story.
+// Embeds via AWS Batch (internal/llm/awsbatch), the same embedding job
+// the ingestion state machines run: a bulk, latency-tolerant background
+// job. See internal/llm/awsbatch's package doc for why it isn't done
+// in-process.
 package main
 
 import (

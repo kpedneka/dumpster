@@ -29,7 +29,7 @@ const maxEntitiesForEdges = 25
 
 // EdgeHandler derives co-occurrence edges between entity mentions found
 // in the same chunk and persists them to the entity_edges table. It is a
-// distinct job stage from EntityHandler: it reads entity rows that entity
+// distinct job stage from entity extraction: it reads entity rows that entity
 // extraction has already produced and never re-extracts or re-embeds, so
 // it can be re-run independently.
 type EdgeHandler struct {

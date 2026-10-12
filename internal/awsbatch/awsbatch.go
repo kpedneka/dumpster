@@ -1,7 +1,7 @@
 // Package awsbatch is the AWS SDK adapter for submitting and polling AWS
 // Batch jobs. No AWS SDK types cross this package boundary — callers see
-// only the domain-shaped types below, so entity/awsbatch (and anything
-// else built on this later) is testable against the mock without needing
+// only the domain-shaped types below, so internal/llm/awsbatch (and
+// anything else built on this) is testable against the mock without needing
 // real AWS credentials or network access, matching this repo's existing
 // dependency-inversion pattern for queue/storage/LLM adapters.
 package awsbatch

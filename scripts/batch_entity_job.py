@@ -25,13 +25,13 @@ last line printed, so it was specifically the part that went missing first
 once a job's total output crossed that cap. Confirmed this wasn't
 hypothetical for entity extraction either -- it was hit for real, before
 per-batch chunking existed, when a whole document's entities accumulated
-into one oversized result. See internal/entity/awsbatch/awsbatch.go's
-package doc for the full story.
+into one oversized result.
 
 On success, nothing meaningful is printed to stdout beyond a short
 confirmation line -- the actual result lives at RESULT_URL, not in logs.
 On failure, this exits non-zero (so Batch marks the job FAILED, which the
-worker's polling already distinguishes from success) and prints
+entity_extraction state machine's submitJob.sync task reports as a
+failure) and prints
 "BATCH_ERROR: " plus the exception; RESULT_URL is never written, so the Go
 side's read of it simply fails, which is how it learns something went
 wrong beyond whatever AWS Batch's own job status already says.

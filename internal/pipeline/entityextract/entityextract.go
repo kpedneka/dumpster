@@ -1,6 +1,5 @@
 // Package entityextract implements the Lambda steps of the entity
-// extraction state machine (statemachine.asl.json in this package), which
-// replaces the worker's EntityHandler:
+// extraction state machine (statemachine.asl.json in this package):
 //
 //  1. Plan: clear the document's entities from any previous run (reversing
 //     their canonical-entity counts first), split its chunks into batches,
@@ -174,7 +173,7 @@ func New(deps Deps, cfg Config) *Handler {
 }
 
 // entitiesRequest and entitiesResponse match the entity extraction Batch
-// job's protocol, the same one internal/entity/awsbatch uses.
+// job's protocol (scripts/batch_entity_job.py).
 type entitiesRequest struct {
 	AllowedTypes []string       `json:"allowed_types"`
 	Chunks       []chunkRequest `json:"chunks"`

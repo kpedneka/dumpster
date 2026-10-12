@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 #
 # AWS Batch job image for PDF region extraction (see
-# scripts/batch_regions_job.py). Moved off the always-on Fly inference
-# service's synchronous /regions call for the same idle-capacity-cost
-# reason ingestion-time embedding moved to Batch -- see
-# internal/manifest/awsbatch's package doc for the full story.
+# scripts/batch_regions_job.py), run by the region_classification state
+# machine's Layout step (internal/pipeline/regionclassify). Moved off the
+# always-on inference service's synchronous /regions call for the same
+# idle-capacity-cost reason ingestion-time embedding moved to Batch.
 #
 # Deliberately its own Dockerfile, not folded into Dockerfile.batch-embed-job:
 # region extraction (pymupdf + pdfplumber) has nothing to do with the
@@ -13,9 +13,8 @@
 # weight for a job with no ML model at all.
 #
 # Build with --platform linux/amd64 explicitly. The AWS Batch job
-# definition this runs against (registered by hand, not Terraform-managed
-# -- see ecs_worker.tf's regions_batch_job_definition variable) has no
-# runtimePlatform set, same as the existing embedding/entity-extraction
+# definition this runs against (terraform/batch.tf's region_extraction)
+# has no runtimePlatform set, same as the existing embedding/entity-extraction
 # job definitions, which defaults to X86_64. A real "Essential container
 # in task exited" / exit code 255 failure resulted from building this on
 # Apple Silicon without the flag -- the exact same architecture-mismatch

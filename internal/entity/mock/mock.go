@@ -1,5 +1,6 @@
-// Package mock provides a test double for entity.Extractor, used everywhere
-// except the real AWS Batch adapter (internal/entity/awsbatch).
+// Package mock provides test doubles for entity.Extractor and
+// entity.BatchExtractor. Nothing in production implements those
+// interfaces any more (see their docs).
 package mock
 
 import (
@@ -50,10 +51,8 @@ func (m *Extractor) Extract(ctx context.Context, chunks []*chunk.Chunk, allowedT
 
 var _ entity.Extractor = (*Extractor)(nil)
 
-// BatchExtractor is a test double for entity.BatchExtractor, used to
-// exercise EntityHandler's concurrent-submission path — a plain Extractor
-// (above) deliberately does not satisfy entity.BatchExtractor, so tests
-// using it exercise EntityHandler's sequential fallback path instead.
+// BatchExtractor is a test double for entity.BatchExtractor. A plain
+// Extractor (above) deliberately does not satisfy entity.BatchExtractor.
 type BatchExtractor struct {
 	*Extractor
 	ExtractBatchesFn func(ctx context.Context, batches [][]*chunk.Chunk, allowedTypes []entity.Type) []entity.BatchResult

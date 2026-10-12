@@ -13,7 +13,7 @@ import (
 // testable without a real Bedrock endpoint -- everything else in this file
 // is a thin, request-shaping wrapper around the AWS SDK's own Converse/
 // ConverseStream calls, which need live AWS to exercise for real (same
-// reasoning internal/entity/awsbatch's real client and internal/objectstore/
+// reasoning internal/awsbatch's real client and internal/objectstore/
 // s3store already use: excluded from the unit coverage gate, not force-
 // tested against a faked wire protocol disproportionate to what it'd prove).
 

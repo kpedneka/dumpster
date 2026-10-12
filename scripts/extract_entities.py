@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Entity extraction logic for the AWS Batch GPU job (see
-scripts/batch_entity_job.py, the actual entrypoint, and
-internal/entity/awsbatch — the only entity.Extractor implementation).
+scripts/batch_entity_job.py, the actual entrypoint, which the
+entity_extraction state machine runs — internal/pipeline/entityextract).
 load_pipeline() and _handle_request() below are what batch_entity_job.py
 calls directly, once per job; this file's own main()/stdin loop further
 down predates that and is not currently invoked by anything.
