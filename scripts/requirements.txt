@@ -21,7 +21,7 @@
 # extract_regions()'s docstring for the full reasoning.
 pymupdf>=1.24,<2
 pdfplumber>=0.11,<1
-Pillow>=10,<12
+Pillow>=12.3,<13
 
 # Dependencies for scripts/inference_service.py: local development's HTTP
 # service for query-time embeddings (/embeddings), replacing the

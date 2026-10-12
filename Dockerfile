@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 # was already its own main package by the time this got built.
 #
 # ECS's cleanup RunTask overrides command to ["/bin/cleanup"].
-FROM alpine:3.20 AS runtime
+FROM alpine:3.24 AS runtime
 RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /bin/api     /bin/api
@@ -40,7 +40,7 @@ COPY --from=builder /bin/cleanup /bin/cleanup
 # (a GLiNER dependency) does not publish musl/Alpine wheels, so installing
 # it there forces pip to compile from source or fail outright.
 FROM python:3.11-slim AS inference
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -49,6 +49,11 @@ WORKDIR /app
 # the cache for this layer — installing torch is the single most expensive
 # step in this build.
 COPY scripts/requirements.txt /app/scripts/requirements.txt
+# The base image's own pip/setuptools/wheel lag behind their security fixes
+# (setuptools vendors its own copies of wheel and jaraco.context), and
+# nothing pins them, so bring them current before installing anything else.
+RUN --mount=type=cache,target=/root/.cache/pip pip install --no-cache-dir --upgrade pip setuptools wheel
+
 # torch (a transitive dependency of sentence-transformers, for local
 # embeddings) defaults to the CUDA-enabled PyPI wheel on Linux, which
 # bundles the full NVIDIA/CUDA runtime (~2.9GB of nvidia-* packages) and
