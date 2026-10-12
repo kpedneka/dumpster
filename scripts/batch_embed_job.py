@@ -6,9 +6,9 @@ baseline CPU quota once burst balance empties (confirmed against Fly's own
 docs), which turned a 47.5s embedding call on a real machine into 13-16+
 minutes in production -- a scheduler-level CPU denial no in-process thread
 tuning could fix. AWS Batch on Fargate gives a genuinely dedicated vCPU
-allocation instead, with no burst-credit model at all. See
-scripts/embed_bench_job.py (the throwaway experiment that established
-this) for the full numbers across several vCPU sizes.
+allocation instead, with no burst-credit model at all. A throwaway
+benchmark job (scripts/embed_bench_job.py, since removed; see git history)
+established this, with numbers across several vCPU sizes.
 
 Same design as scripts/batch_entity_job.py (entity extraction's AWS Batch
 job): this container never gets real object-storage credentials -- the Go

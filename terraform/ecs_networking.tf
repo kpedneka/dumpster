@@ -5,9 +5,8 @@
 # board's cost discussion -- the app's actual database traffic too).
 #
 # Reuses the account's existing default VPC (vpc-b46ec5cd) rather than
-# creating a new one: every AWS Batch compute environment already in this
-# account (dumpster-batch-gpu-pilot, dumpster-embedding-ce,
-# dumpster-embed-bench-ce) runs in it, and splitting api/worker into a
+# creating a new one: every AWS Batch compute environment in this account
+# runs in it, and splitting api/worker into a
 # separate VPC would need peering or shared resources to reach the same
 # Batch queues for no real benefit. That VPC's existing 6 subnets are all
 # public, though (confirmed directly via `aws ec2 describe-subnets` --
