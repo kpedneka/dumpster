@@ -35,7 +35,6 @@
 provider "cloudflare" {}
 
 data "cloudflare_zone" "kpednekar_dev" {
-  count = var.environment == "staging" ? 1 : 0
 
   filter = {
     name = "kpednekar.dev"
@@ -45,11 +44,34 @@ data "cloudflare_zone" "kpednekar_dev" {
 resource "cloudflare_dns_record" "staging" {
   count = var.environment == "staging" ? 1 : 0
 
-  zone_id = data.cloudflare_zone.kpednekar_dev[0].zone_id
+  zone_id = data.cloudflare_zone.kpednekar_dev.zone_id
   name    = var.acm_domain_name
   type    = "CNAME"
   content = aws_cloudfront_distribution.frontend.domain_name
   ttl     = 60    # short -- this value changes every ephemeral staging cycle, unlike a normal long-lived record
   proxied = false # CloudFront is already the CDN/edge here; Cloudflare's own proxy would just add a second, redundant hop
   comment = "Managed by terraform -- repointed automatically on every staging deploy (dns.tf)"
+}
+
+# Production's record, created by hand in Cloudflare before this config
+# managed it, and imported here. It was proxied, putting Cloudflare's edge
+# in front of CloudFront: a second CDN hop, and a protection anyone could
+# skip by calling the CloudFront distribution directly. It's DNS-only now,
+# like staging's, so every request reaches CloudFront and its WAF (waf.tf).
+import {
+  for_each = var.environment == "production" ? { production = 0 } : {}
+  to       = cloudflare_dns_record.production[each.value]
+  id       = "323ca3fe4235597151c21655a53df16f/9541aeb4411822abf2172ad161d44dcf"
+}
+
+resource "cloudflare_dns_record" "production" {
+  count = var.environment == "production" ? 1 : 0
+
+  zone_id = data.cloudflare_zone.kpednekar_dev.zone_id
+  name    = var.acm_domain_name
+  type    = "CNAME"
+  content = aws_cloudfront_distribution.frontend.domain_name
+  ttl     = 300
+  proxied = false
+  comment = "Managed by terraform (dns.tf)"
 }

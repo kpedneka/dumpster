@@ -343,6 +343,37 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     resources = ["arn:aws:s3:::dumpster-*"]
   }
 
+  # waf.tf: each environment's CloudFront web ACL. Web ACL ARNs end in an
+  # AWS-assigned ID, so scoped to this account's dumpster-* ACLs and the
+  # AWS managed rule groups they reference.
+  statement {
+    sid     = "WAFWebACLs"
+    actions = ["wafv2:*"]
+    resources = [
+      "arn:aws:wafv2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:global/webacl/dumpster-*/*",
+      "arn:aws:wafv2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:global/managedruleset/*/*",
+    ]
+  }
+
+  # waf.tf's logging: the aws-waf-logs-* log group (WAF requires that
+  # prefix), the resource policy letting log delivery write to it, and the
+  # delivery itself. Resource policies and log deliveries have no
+  # resource-level scoping.
+  statement {
+    sid       = "WAFLogGroup"
+    actions   = ["logs:*"]
+    resources = ["arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:aws-waf-logs-dumpster-*"]
+  }
+  statement {
+    sid = "WAFLogDelivery"
+    actions = [
+      "logs:PutResourcePolicy", "logs:DescribeResourcePolicies", "logs:DeleteResourcePolicy",
+      "logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery",
+      "logs:DeleteLogDelivery", "logs:ListLogDeliveries",
+    ]
+    resources = ["*"]
+  }
+
   # terraform/modules/pipeline/malware_scan.tf: the GuardDuty Malware
   # Protection plan scanning each environment's uploads bucket. A plan's ARN
   # ends in an AWS-assigned ID, so it's scoped to this account's plans
