@@ -1,13 +1,13 @@
 """Consolidated ML inference service.
 
-Wraps CPU-bound Python capabilities behind one always-on HTTP service, so
-cmd/api and cmd/worker call over the network instead of each embedding its
-own warm Python subprocess (the pattern this replaces — see the System
-Architecture page's Inference Service sub-page for the full design and why
-it changed). Entity extraction is deliberately not one of these — it runs
-as an AWS Batch GPU job (see internal/entity/awsbatch and
-scripts/batch_entity_job.py), the only entity.Extractor implementation;
-this process never loads GLiNER/spacy at all.
+Wraps CPU-bound Python capabilities behind one HTTP service so callers
+don't embed their own warm Python subprocess. Today it's local
+development's inference container (docker-compose), serving query-time
+embeddings to cmd/api; in AWS the same model runs as the API task's
+embed-sidecar. Its /regions endpoint has no caller any more: region
+classification runs as an AWS Batch job (scripts/batch_regions_job.py).
+Entity extraction is not here either — it runs as an AWS Batch GPU job
+(scripts/batch_entity_job.py); this process never loads GLiNER/spacy.
 
 Endpoints:
   POST /regions      — same request/response contract as extract_regions.py's
@@ -127,9 +127,7 @@ async def regions(request: Request):
     # queues this request behind any
     # already-running /regions call rather than letting both run at once —
     # see _REGIONS_SEMAPHORE's comment for why. A queued request just waits;
-    # the caller (internal/manifest/layout, called from a queue job with its
-    # own retry/backoff and stale-job reclaim as backstops) doesn't need any
-    # special handling for that.
+    # a caller doesn't need any special handling for that.
     #
     # extract_regions_isolated, not extract_regions directly: the actual
     # extraction runs in a separate, memory-capped child process (see its

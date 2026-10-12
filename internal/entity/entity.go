@@ -75,7 +75,7 @@ type Repository interface {
 	BulkSetCanonicalEntityID(ctx context.Context, userID uuid.UUID, mentionToCanonical map[uuid.UUID]uuid.UUID) error
 	// ChunkIDsWithEntities returns the set of chunk IDs that currently have
 	// at least one persisted entity for documentID. Used to resume an
-	// extraction job interrupted mid-way (see EntityHandler) without
+	// extraction job interrupted mid-way without
 	// re-processing chunks it already finished — a chunk that legitimately
 	// extracts zero entities is indistinguishable from one not yet
 	// processed, and gets harmlessly re-sent on retry; this is a known,
@@ -88,10 +88,11 @@ type Repository interface {
 // must not mutate or re-derive chunk text/offsets — extraction reads
 // existing chunks, it never re-chunks.
 //
-// The only implementation that talks to a vendor/ML dependency is
-// internal/entity/awsbatch, which submits an AWS Batch GPU job; every
-// other caller depends on this interface so units stay testable in
-// isolation (see internal/entity/mock for the test double).
+// No production code implements or calls Extractor any more: entity
+// extraction runs as the entity_extraction state machine
+// (internal/pipeline/entityextract), which submits AWS Batch GPU jobs
+// directly. Only internal/entity/mock implements it, for tests; it's a
+// candidate for removal.
 type Extractor interface {
 	// Extract returns the entities found across chunks, restricted to the
 	// given allowed entity types. The returned entities' ChunkID/DocumentID/
@@ -112,23 +113,10 @@ type BatchResult struct {
 // implement: submitting several independent batches' extraction work up
 // front, before waiting for any of them, rather than one at a time.
 //
-// Why this matters specifically for internal/entity/awsbatch: each batch
-// is its own AWS Batch job, and a Batch compute environment scaling from
-// zero pays a real, measured cold-start tax (EC2 launch + image pull,
-// ~230s observed) independent of how much actual work the job does.
-// Submitting batches one at a time -- wait for job N, only then submit
-// job N+1 -- gives the compute environment room to scale back down
-// between jobs, so a large document can end up paying that cold-start
-// tax on every single batch even though the underlying compute
-// environment could run several jobs at once. Submitting every batch
-// before waiting on any of them lets AWS Batch's own scheduler see the
-// whole backlog immediately and run as many of them concurrently as the
-// compute environment's capacity allows.
-//
-// Implementations that don't support this (e.g. the in-memory mock used
-// by most tests) are used via the plain Extractor interface in a
-// sequential loop instead -- see EntityHandler.Handle's feature-detection
-// of this interface.
+// Like Extractor, nothing in production uses it any more: the
+// entity_extraction state machine's Map state submits every batch's Batch
+// job up front itself, so a compute environment scaling from zero pays
+// its cold start (~230s observed) once rather than per batch.
 type BatchExtractor interface {
 	Extractor
 	// ExtractBatches runs entity extraction over several independent

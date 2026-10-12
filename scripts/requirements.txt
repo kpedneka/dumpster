@@ -1,7 +1,7 @@
 # spacy/gliner (scripts/extract_entities.py's dependencies) are NOT listed
 # here. extract_entities.py is still live code — it's what
 # scripts/batch_entity_job.py runs inside the AWS Batch GPU job (see
-# internal/entity/awsbatch, the only entity.Extractor implementation) — but
+# internal/pipeline/entityextract) — but
 # that image (Dockerfile.batch-entity-job) installs spacy/gliner/torch
 # directly, not from this file, since it needs the GPU-enabled torch build
 # rather than the CPU-only one the rest of this file pulls in below. Listing
@@ -11,8 +11,10 @@
 # scripts/requirements-batch.txt.
 
 # Dependencies for scripts/extract_regions.py, the PDF region classifier
-# invoked by internal/manifest/layout via subprocess (no VLM layer here —
-# see RegionClassificationHandler's type doc for why). pymupdf is
+# (no VLM layer here — see internal/pipeline/regionclassify's package doc).
+# The inference service's /regions endpoint still uses it locally, but
+# nothing calls that endpoint any more; deployed region classification
+# runs scripts/batch_regions_job.py in AWS Batch. pymupdf is
 # AGPL-3.0/commercial dual-licensed (see LICENSE at the repo root).
 # unstructured[pdf] dropped: it used to cover figure detection and a
 # table-extraction fallback, but shared the same silent-failure mode on

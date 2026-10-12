@@ -1,4 +1,4 @@
-# AWS Batch resources for the worker's two background job types (entity
+# AWS Batch resources for the pipeline state machines' Batch jobs (entity
 # extraction, ingestion-time embedding) plus the job definition PDF/image
 # region extraction submits against the embedding queue -- see the "Bring
 # the existing entity-extraction + embedding Batch jobs under Terraform"
@@ -83,11 +83,11 @@ data "aws_iam_instance_profile" "batch_gpu" {
 # region-extraction Fargate job definitions already use for ECR pull /
 # CloudWatch Logs (confirmed via `aws batch describe-job-definitions`),
 # distinct from this project's own dumpster-<environment>-ecs-execution
-# role (ecs_iam.tf), which covers api/worker/cleanup's ECS *services*, not
+# role (ecs_iam.tf), which covers the api and cleanup ECS tasks, not
 # Batch jobs. Left as-is rather than repointed: no reason these Fargate
 # job containers need this project's Secrets Manager access (they take
 # their real work via S3 scratch objects and command-line args, not env
-# secrets -- see internal/entity/awsbatch, internal/llm/awsbatch).
+# secrets -- see internal/pipeline/*, internal/llm/awsbatch).
 data "aws_iam_role" "ecs_task_execution_default" {
   name = "ecsTaskExecutionRole"
 }
@@ -101,8 +101,7 @@ data "aws_iam_role" "ecs_task_execution_default" {
 # resources with no prior real object to import from. The old shared
 # names are left orphaned in AWS (INACTIVE-able via a future manual
 # cleanup, not urgent -- job definitions cost nothing idle), not deleted
-# by this change: nothing currently depends on them once the worker's
-# env vars below repoint at the new per-environment ones.
+# by this change: nothing depends on them any more.
 
 resource "aws_batch_job_definition" "entity_extraction" {
   name = "${local.name_prefix}-entity-extraction"
@@ -220,9 +219,7 @@ resource "aws_batch_job_queue" "entity_extraction" {
 # free too. Region extraction (below) rides this same per-environment
 # queue rather than getting a dedicated compute environment -- same
 # "not worth a 4th idle environment for a CPU-only, same-profile job
-# type" reasoning ecs_worker.tf's regions variables already used to
-# justify sharing with embedding, just applied per-environment now
-# instead of across all environments at once.
+# type" reasoning, applied per environment.
 
 resource "aws_batch_compute_environment" "embedding" {
   name         = "${local.name_prefix}-embedding-ce"

@@ -1,9 +1,7 @@
-# One ECR repository, not three: cmd/api, cmd/worker, and cmd/cleanup all
-# build into the same "runtime" image (Dockerfile's runtime stage) --
-# confirmed directly, and cmd/cleanup's build step was added to that
-# stage as part of this same change, matching how api/worker already
-# shared it. ECS task definitions differ by container command
-# (/bin/api, /bin/worker, /bin/cleanup), not by image.
+# One ECR repository, not one per binary: cmd/api and cmd/cleanup both
+# build into the same "runtime" image (Dockerfile's runtime stage). ECS
+# task definitions differ by container command (/bin/api, /bin/cleanup),
+# not by image.
 #
 # Looked up by name (data source), not created/managed by this config --
 # same reasoning, and the same real incident class, as ecs_secrets.tf's
@@ -40,12 +38,8 @@ output "ecr_repository_url" {
 }
 
 # The query-embedding sidecar's image (Dockerfile.batch-embed-job's
-# `sidecar` target -- see ecs_api.tf). A separate repo from `runtime`,
-# not a repurposing of ecs_inference.tf's `inference` repo: the
-# standalone inference service is still live and still needed for
-# cmd/worker's /regions calls until a separate, later card folds region
-# classification into the AWS Batch embed job -- this repo exists
-# alongside it, not instead of it, for now.
+# `sidecar` target -- see ecs_api.tf): the API task's query-embedding
+# container. A separate repo from `runtime`.
 data "aws_ecr_repository" "embed_sidecar" {
   name = "${local.name_prefix}-embed-sidecar"
 }

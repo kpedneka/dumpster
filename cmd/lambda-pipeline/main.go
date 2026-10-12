@@ -77,8 +77,7 @@ func main() {
 	docs := docpg.New(txRunner)
 	chunks := chunkpg.New(txRunner)
 	status := statuspg.New(txRunner)
-	// usage_stats has no RLS policy, so it uses a plain TxRunner, as in
-	// cmd/worker.
+	// usage_stats has no RLS policy, so it uses a plain TxRunner.
 	stats := statspg.New(db.NewTxRunner(pool))
 	publisher, err := dispatchaws.New(ctx, cfg, status)
 	if err != nil {

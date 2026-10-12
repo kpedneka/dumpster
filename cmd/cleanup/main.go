@@ -63,9 +63,9 @@ func main() {
 	for _, sweepErr := range result.Errors {
 		logger.Error("sweep: per-session error", "err", sweepErr)
 	}
-	// The usage counter the worker's sweep loop used to record; this daily
-	// task is the only sweep now. usage_stats has no RLS policy, so a plain
-	// TxRunner, as in cmd/lambda-pipeline.
+	// This daily task is the only sweep, so it records the sessions-swept
+	// usage counter. usage_stats has no RLS policy, so a plain TxRunner, as
+	// in cmd/lambda-pipeline.
 	if result.Deleted > 0 {
 		if err := statspg.New(db.NewTxRunner(pool)).RecordSessionsSwept(ctx, result.Deleted); err != nil {
 			logger.Error("sweep: record sessions swept", "err", err)

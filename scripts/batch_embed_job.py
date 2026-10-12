@@ -23,8 +23,7 @@ line across multiple events with no marker that they were ever one line
 -- the Go side's log reassembly (built for the normal one-event-per-line
 case) then produces corrupted, unparseable JSON. Entity extraction's
 response was assumed small enough this would never affect it too, until
-it did -- see internal/entity/awsbatch/awsbatch.go's package doc for that
-story; it's since moved to this exact same S3-output design.
+it did; it's since moved to this exact same S3-output design.
 
 Environment variables:
   TEXTS_URL  — presigned GET URL for the input:

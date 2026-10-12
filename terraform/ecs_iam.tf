@@ -1,12 +1,11 @@
 # IAM for the ECS services: one shared execution role (what ECS itself
 # needs to start a task -- pull the image, write logs, read secrets into
 # env vars) and one shared task role (what the running application code
-# is allowed to call AWS APIs as). Shared across api/worker/cleanup
-# rather than one role per service: all three need the same execution
-# permissions, and only the worker's actual code paths call Batch/Bedrock
-# -- a shared task role is simpler to reason about at this scale than
-# three near-identical roles, and can be split later if that ever stops
-# being true.
+# is allowed to call AWS APIs as). Shared across api and cleanup rather
+# than one role per service: both need the same execution permissions,
+# and a shared task role is simpler to reason about at this scale than
+# near-identical roles, and can be split later if that ever stops being
+# true.
 #
 # Scoped to what the app actually calls today, not preemptively broadened
 # for services not yet migrated (Aurora and Bedrock each get their own IAM
@@ -71,9 +70,11 @@ resource "aws_iam_role" "ecs_task" {
   assume_role_policy = data.aws_iam_policy_document.ecs_task_assume.json
 }
 
-# The worker submits and polls AWS Batch jobs (internal/entity/awsbatch,
-# internal/llm/awsbatch) -- scoped to the job queues/definitions this
-# account actually has, not batch:* broadly.
+# Granted for the decommissioned ECS worker, which submitted and polled
+# Batch jobs itself. Nothing on this role calls Batch any more -- the
+# state machines submit jobs with their own role -- so this and
+# ecs_task_logs_read below are unused; tracked for removal on the dev
+# board ("Remove the ECS task role's unused Batch and log-read grants").
 data "aws_iam_policy_document" "ecs_task_batch" {
   statement {
     actions = [
@@ -91,8 +92,8 @@ resource "aws_iam_role_policy" "ecs_task_batch" {
   policy = data.aws_iam_policy_document.ecs_task_batch.json
 }
 
-# CloudWatch Logs read -- internal/entity/awsbatch.JobLogs() reads a
-# submitted job's own output back to parse its BATCH_RESULT: line.
+# CloudWatch Logs read for Batch job output -- unused, like
+# ecs_task_batch above.
 data "aws_iam_policy_document" "ecs_task_logs_read" {
   statement {
     actions = [

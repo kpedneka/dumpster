@@ -55,7 +55,7 @@ const (
 )
 
 // extractorVersion is recorded on every manifest region. Bump when the
-// classifier stack changes significantly. Matches the worker's value.
+// classifier stack changes significantly.
 const extractorVersion = "v1"
 
 // Definition is the state machine definition, in Amazon States Language,
@@ -245,8 +245,7 @@ func isImage(doc *document.Document) bool {
 	return strings.HasPrefix(doc.ContentType, "image/")
 }
 
-// rawRegion matches scripts/batch_regions_job.py's region JSON, the same
-// shape internal/manifest/awsbatch reads.
+// rawRegion matches scripts/batch_regions_job.py's region JSON.
 type rawRegion struct {
 	RegionType  string     `json:"region_type"`
 	PageNumber  int        `json:"page_number"`

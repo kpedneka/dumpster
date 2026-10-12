@@ -109,7 +109,7 @@ func TestEntity_BulkCreate_Empty(t *testing.T) {
 
 // TestEntity_ExtractorToRepository exercises the Extractor → Repository
 // seam end to end using the mock Extractor and memory Repository test
-// doubles, mirroring how internal/worker.EntityHandler wires the two.
+// doubles.
 func TestEntity_ExtractorToRepository(t *testing.T) {
 	ctx := context.Background()
 	userID, kbID, docID, chunkID := uuid.New(), uuid.New(), uuid.New(), uuid.New()

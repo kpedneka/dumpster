@@ -2,14 +2,11 @@
 # "Migrate object storage: R2 -> S3" dev board card). Two buckets per
 # environment, same split as before: real user documents (durable, IAM-only
 # access) and a transient scratch bucket for AWS Batch jobs' input/output
-# handoff (internal/entity/awsbatch, internal/llm/awsbatch,
-# internal/manifest/awsbatch).
+# handoff (the pipeline state machines' Batch jobs, and
+# internal/llm/awsbatch for cmd/reembed).
 #
-# Terraform-managed here, unlike AWS Batch's own job queues/definitions
-# (deliberately hand-registered -- see ecs_worker.tf's note on
-# var.regions_batch_job_definition): buckets are simple, low-churn resources
-# with none of Batch's tight-loop-registration friction, and this is also
-# the first point in this codebase where the R2 buckets themselves become
+# Terraform-managed here: buckets are simple, low-churn resources, and
+# this was also the first point in this codebase where the R2 buckets themselves become
 # Terraform-managed at all (they never were -- created by hand in the
 # Cloudflare dashboard, per .env.example). Moving to AWS S3 is exactly the
 # right moment to stop doing that by hand too.
@@ -130,11 +127,11 @@ resource "aws_s3_bucket_public_access_block" "scratch" {
   restrict_public_buckets = true
 }
 
-# Scratch objects are already explicitly deleted by the Go code that writes
-# them (internal/manifest/awsbatch and friends defer a delete via
-# context.WithoutCancel once a job completes) -- this is a backstop for the
+# Scratch objects are already explicitly deleted by the pipeline once a
+# run finishes (internal/pipeline/embedtail's Delete step, and
+# internal/llm/awsbatch for cmd/reembed) -- this is a backstop for the
 # same reason the documents bucket's rule is: if that cleanup ever fails to
-# run (a crashed worker, an unhandled error), objects don't accumulate
+# run (a failed execution, an unhandled error), objects don't accumulate
 # forever. A shorter window than documents (1 day, not 2): nothing here is
 # ever meant to be read again once its Batch job finishes.
 resource "aws_s3_bucket_lifecycle_configuration" "scratch" {
@@ -155,11 +152,9 @@ resource "aws_s3_bucket_lifecycle_configuration" "scratch" {
 # per-GB charge) and directly removes S3 from the NAT instance's traffic --
 # real motivation named on the Infrastructure page's Cost Comparison
 # section ("S3 has a free Gateway Endpoint"). Associated with the private
-# route table only: that's what api/worker's tasks actually use (see
-# ecs_networking.tf) and the only place NAT cost is being paid at all --
-# AWS Batch's own compute environment runs in the default VPC's public
-# subnets with a direct internet route already, so it has nothing to gain
-# here.
+# route table, which every workload uses: the API and cleanup tasks, AWS
+# Batch (including ECR image layers, served from S3) and the pipeline
+# Lambdas (see ecs_networking.tf).
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = data.aws_vpc.default.id
   service_name      = "com.amazonaws.${var.aws_region}.s3"
@@ -201,8 +196,7 @@ data "aws_iam_policy_document" "ecs_task_s3" {
   # AccessDenied on GetObject specifically citing missing ListBucket, not
   # missing GetObject -- confirmed against real IAM error text, not
   # assumed from documentation. Every object-level action worked fine
-  # (uploads succeeded); only reads through the worker's ingestion path
-  # tripped this.
+  # (uploads succeeded); only reads on the ingestion path tripped this.
   statement {
     actions = ["s3:ListBucket"]
     resources = [

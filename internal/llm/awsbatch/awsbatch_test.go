@@ -29,7 +29,7 @@ func testConfig() Config {
 // marked terminal) since Embed() reads the result only after
 // waitForCompletion returns. The job's result key isn't known until
 // Embed() generates it internally, so this can't be set up before
-// calling Embed() the way entity/awsbatch's NextJobID()-based tests can.
+// calling Embed().
 func runEmbedWithResult(t *testing.T, e *Embedder, batchClient *batchmock.Client, store *objectstoremock.Store, texts []string, result embedResponse) ([][]float32, error) {
 	t.Helper()
 	type outcome struct {

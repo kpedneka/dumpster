@@ -1,6 +1,6 @@
 // Package docindex implements the Lambda steps of the document indexing
-// state machine (statemachine.asl.json in this package), which replaces
-// the worker's DocumentHandler:
+// state machine (statemachine.asl.json in this package), which indexes
+// plain-text documents:
 //
 //  1. Prepare: split the document into chunks, persist them without
 //     embeddings, publish entity extraction (which only needs chunk text,
