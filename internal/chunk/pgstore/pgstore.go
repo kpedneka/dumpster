@@ -50,9 +50,9 @@ const chunkBulkCreateRowsPerStatement = 2000
 // (measured ~45ms/row against a real remote Postgres from a naive per-row
 // Exec loop, a genuine per-round-trip cost, not connection warm-up).
 // Chunks hit this same pattern too, and land squarely on a path entities
-// don't: this is the very last step of document indexing
-// (regionhandler.go), run after both /regions and /embeddings complete
-// and directly gating when a document flips to StatusIndexed -- the
+// don't: chunk persistence sits on the indexing state machines' path
+// (internal/pipeline/docindex, regionclassify), which directly gates when
+// a document flips to StatusIndexed -- the
 // user-facing "ready to search" signal, unlike entity extraction. For a
 // 2103-chunk document that's roughly another 1.5 minutes of pure insert
 // overhead previously baked silently into every large document's

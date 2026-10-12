@@ -11,10 +11,9 @@
 # scripts/requirements-batch.txt.
 
 # Dependencies for scripts/extract_regions.py, the PDF region classifier
-# (no VLM layer here — see internal/pipeline/regionclassify's package doc).
-# The inference service's /regions endpoint still uses it locally, but
-# nothing calls that endpoint any more; deployed region classification
-# runs scripts/batch_regions_job.py in AWS Batch. pymupdf is
+# (no VLM layer here — see internal/pipeline/regionclassify's package doc),
+# which the AWS Batch region job runs (its image, Dockerfile.batch-regions-job,
+# installs these itself) — listed here for its local tests. pymupdf is
 # AGPL-3.0/commercial dual-licensed (see LICENSE at the repo root).
 # unstructured[pdf] dropped: it used to cover figure detection and a
 # table-extraction fallback, but shared the same silent-failure mode on
@@ -24,9 +23,8 @@ pymupdf>=1.24,<2
 pdfplumber>=0.11,<1
 Pillow>=10,<12
 
-# Dependencies for scripts/inference_service.py: the consolidated,
-# always-on HTTP service wrapping extract_regions.py's pipeline logic plus
-# local embeddings behind /regions and /embeddings, replacing the
+# Dependencies for scripts/inference_service.py: local development's HTTP
+# service for query-time embeddings (/embeddings), replacing the
 # per-Go-process subprocess sidecar pattern this project used before it.
 # sentence-transformers pulls in CPU torch (see the pinned index-url install
 # in Dockerfile's `inference` target) — needed for local embeddings, not

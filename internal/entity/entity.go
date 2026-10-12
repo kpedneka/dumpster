@@ -10,8 +10,6 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
-
-	"github.com/kunalpednekar/dumpster/internal/chunk"
 )
 
 // ErrNotFound is returned by Repository methods when the requested record
@@ -81,48 +79,4 @@ type Repository interface {
 	// processed, and gets harmlessly re-sent on retry; this is a known,
 	// accepted imprecision, not a correctness bug.
 	ChunkIDsWithEntities(ctx context.Context, userID, documentID uuid.UUID) (map[uuid.UUID]bool, error)
-}
-
-// Extractor runs entity extraction over a batch of chunks and returns the
-// entities found, scoped to the provided allowed types. Implementations
-// must not mutate or re-derive chunk text/offsets — extraction reads
-// existing chunks, it never re-chunks.
-//
-// No production code implements or calls Extractor any more: entity
-// extraction runs as the entity_extraction state machine
-// (internal/pipeline/entityextract), which submits AWS Batch GPU jobs
-// directly. Only internal/entity/mock implements it, for tests; it's a
-// candidate for removal.
-type Extractor interface {
-	// Extract returns the entities found across chunks, restricted to the
-	// given allowed entity types. The returned entities' ChunkID/DocumentID/
-	// KBID/UserID fields are populated from the corresponding input chunk;
-	// callers do not need to backfill them.
-	Extract(ctx context.Context, chunks []*chunk.Chunk, allowedTypes []Type) ([]*Entity, error)
-}
-
-// BatchResult is one batch's outcome from BatchExtractor.ExtractBatches,
-// keeping a batch's entities and error paired together so a caller can
-// tell which of several concurrently-run batches succeeded.
-type BatchResult struct {
-	Entities []*Entity
-	Err      error
-}
-
-// BatchExtractor is an optional capability an Extractor may additionally
-// implement: submitting several independent batches' extraction work up
-// front, before waiting for any of them, rather than one at a time.
-//
-// Like Extractor, nothing in production uses it any more: the
-// entity_extraction state machine's Map state submits every batch's Batch
-// job up front itself, so a compute environment scaling from zero pays
-// its cold start (~230s observed) once rather than per batch.
-type BatchExtractor interface {
-	Extractor
-	// ExtractBatches runs entity extraction over several independent
-	// batches, submitting all of them before waiting on any, and returns
-	// one BatchResult per batch, in the same order as batches. One batch
-	// failing does not prevent the others from completing or being
-	// reported successfully -- callers inspect each result independently.
-	ExtractBatches(ctx context.Context, batches [][]*chunk.Chunk, allowedTypes []Type) []BatchResult
 }

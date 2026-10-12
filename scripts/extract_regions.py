@@ -25,8 +25,6 @@ region_type semantics:
 import base64
 import io
 import json
-import multiprocessing
-import os
 import resource
 import sys
 import time
@@ -200,116 +198,6 @@ def _peak_rss_kb():
     """
     raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return raw // 1024 if sys.platform == "darwin" else raw
-
-
-# How much address space a single extract_regions() call may use before
-# it's treated as a failure, and how long extract_regions_isolated() waits
-# before giving up on a call entirely. File size on disk is not a reliable
-# predictor of this: a 32MB scan-heavy PDF can be cheap, while a much
-# smaller text/table-dense one can dwarf what a same-sized "typical"
-# document costs — pdfplumber's memory use tracks page count and table
-# density, not KB on disk. So rather than trying to predict a safe upload
-# size (impossible without running the extraction), extract_regions_isolated()
-# below contains the failure instead: a document that blows past this limit
-# fails on its own, in its own process, without taking the shared,
-# always-on inference service down with it (the actual production/local
-# incidents this fixes: two large PDFs processed concurrently, and
-# separately a single large one alone, both OOM-killed the whole process —
-# silently taking every other in-flight request, for every other user,
-# down with them).
-#
-# Default (1024MB) is set against real measurements, not a guess: the
-# dominant cost used to be pdfplumber never releasing a page's parsed
-# geometry for the life of the extraction (see page.flush_cache() below),
-# so peak memory grew with a document's cumulative page count/complexity
-# rather than staying roughly constant. With that fixed, two real
-# documents — a 412-page PDF and a 1345-page one that used to exceed 3.8GB
-# and get killed before finishing — both now peak at 500-600MB end to end.
-# 1024MB leaves real margin above that (not exactly-observed-peak) for
-# genuine unknowns this small a sample can't rule out — a single
-# pathologically dense page, a corrupted content stream, etc. Tune via env
-# var per deployment as more real documents are observed.
-_REGIONS_MEMORY_LIMIT_BYTES = int(os.environ.get("REGIONS_MEMORY_LIMIT_MB", "1024")) * 1024 * 1024
-_REGIONS_TIMEOUT_SECONDS = int(os.environ.get("REGIONS_TIMEOUT_SECONDS", "300"))
-
-
-def _isolated_worker(pdf_bytes, conn):
-    """Entry point for the child process extract_regions_isolated() spawns.
-    Deliberately kept in this module (not inference_service.py): the
-    "spawn" start method re-imports whichever module defines this function
-    in the fresh child interpreter, so keeping it here means that import
-    pulls in only this file's own lazy pdfplumber/pymupdf dependencies, not
-    FastAPI/pydantic/the warm GLiNER+embedding models/etc — the whole point
-    is for this child to be cheap and load nothing beyond what this one
-    call actually needs.
-    """
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (_REGIONS_MEMORY_LIMIT_BYTES, _REGIONS_MEMORY_LIMIT_BYTES))
-    except (ValueError, OSError):
-        # Best-effort. Notably not reliably enforced on macOS (local dev);
-        # this only needs to hold where it matters, which is the Linux
-        # production runtime.
-        pass
-
-    try:
-        regions = extract_regions(pdf_bytes)
-        conn.send(("ok", {"regions": regions, "peak_rss_kb": _peak_rss_kb()}))
-    except MemoryError:
-        limit_mb = _REGIONS_MEMORY_LIMIT_BYTES // (1024 * 1024)
-        conn.send(("error", f"region extraction exceeded the {limit_mb}MB memory limit"))
-    except Exception as exc:  # noqa: BLE001 - anything else in the child must still reach the parent as a clean error, never a hang
-        conn.send(("error", str(exc)))
-    finally:
-        conn.close()
-
-
-def extract_regions_isolated(pdf_bytes):
-    """Runs extract_regions() in a separate, memory-capped child process
-    and returns {"regions": [...], "peak_rss_kb": N} — peak_rss_kb here is
-    the child's own peak, i.e. this document's actual extraction cost,
-    cleanly separated from the parent's always-on model-loading baseline
-    (a more accurate number than the parent process could ever report for
-    this, as a side benefit of the isolation itself).
-
-    Raises RuntimeError if the child hit the memory limit above, raised
-    its own exception, timed out, or was killed outright (e.g. by the
-    container's own OOM killer, if the limit above wasn't tight enough to
-    trigger the child's own catchable MemoryError first) — any of these is
-    a normal, expected failure mode for a single pathological document,
-    not a bug; the caller (inference_service.py's /regions handler) turns
-    this into a clean error response.
-
-    Blocking — like extract_regions() itself always required, callers must
-    dispatch this via run_in_threadpool rather than awaiting it directly.
-    """
-    ctx = multiprocessing.get_context("spawn")
-    parent_conn, child_conn = ctx.Pipe(duplex=False)
-    proc = ctx.Process(target=_isolated_worker, args=(pdf_bytes, child_conn))
-    proc.start()
-    child_conn.close()  # this end belongs to the child; drop the parent's copy of it
-
-    try:
-        if not parent_conn.poll(timeout=_REGIONS_TIMEOUT_SECONDS):
-            proc.terminate()
-            proc.join()
-            raise RuntimeError(f"region extraction timed out after {_REGIONS_TIMEOUT_SECONDS}s")
-        status, payload = parent_conn.recv()
-    except EOFError:
-        # The child's end of the pipe closed without sending anything —
-        # it was killed outright (e.g. the container's OOM killer, or a
-        # signal) rather than hitting its own catchable MemoryError.
-        proc.join()
-        raise RuntimeError(
-            f"region extraction subprocess exited without a result (exit code {proc.exitcode}), "
-            "likely killed for exceeding memory"
-        ) from None
-    finally:
-        parent_conn.close()
-
-    proc.join()
-    if status == "error":
-        raise RuntimeError(payload)
-    return payload
 
 
 def main():
