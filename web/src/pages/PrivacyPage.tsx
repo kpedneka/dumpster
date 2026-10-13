@@ -2,24 +2,27 @@
 // IdleTimeout/HardCap constants exactly — if those change, update this page
 // in the same PR rather than letting it silently drift out of date.
 
-// Consumer-facing policy pages, not the API/business terms that technically
-// govern OpenAI's and Anthropic's API usage — linked here as the practical,
-// readable reference, consistent with this page's plain-language framing.
+// Consumer-facing policy pages, not the service terms that technically
+// govern each provider's handling of this app's data — linked here as the
+// practical, readable reference, consistent with this page's plain-language
+// framing. Bedrock links to its data-protection page instead of the general
+// AWS policy because that's where AWS states prompts aren't shared with
+// model providers, which is the question a reader of this list actually has.
 const THIRD_PARTIES = [
   {
-    name: 'OpenAI',
-    href: 'https://openai.com/policies/row-privacy-policy/',
-    role: 'generates embeddings for uploaded document text',
+    name: 'Amazon Web Services',
+    href: 'https://aws.amazon.com/privacy/',
+    role:
+      'hosts the app; S3 stores uploaded files, which are scanned for malware before processing; ' +
+      'embeddings are computed on AWS servers this app runs, with an open-source model, ' +
+      'rather than sent to an outside embeddings provider',
   },
   {
-    name: 'Anthropic',
-    href: 'https://privacy.anthropic.com/en/',
-    role: 'generates search answers from retrieved chunks',
-  },
-  {
-    name: 'Cloudflare',
-    href: 'https://www.cloudflare.com/privacypolicy/',
-    role: 'R2 stores uploaded files',
+    name: 'Amazon Bedrock',
+    href: 'https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html',
+    role:
+      "generates search answers from retrieved chunks using Anthropic's Claude models, run " +
+      'inside AWS — prompts and answers are not shared with Anthropic',
   },
   {
     name: 'Neon',
@@ -44,6 +47,11 @@ export function PrivacyPage() {
           anonymous session id used to keep your knowledge bases separate from everyone else's.
           There is no email or password anywhere in the system — a session is identified only by
           a random id stored in a browser cookie.
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          Your IP address is used for rate limiting, in a short-lived counter that is cleared
+          automatically, and appears in the web firewall's request logs, which are kept for 30
+          days to investigate abuse.
         </p>
       </section>
 
