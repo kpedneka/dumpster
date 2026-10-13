@@ -31,22 +31,35 @@ describe('PrivacyPage', () => {
     expect(screen.getByText(/hard delete, not deactivation/i)).toBeInTheDocument()
   })
 
+  it('states that IP addresses are used only for rate limiting and firewall logs', () => {
+    renderPrivacyPage()
+    expect(screen.getByText(/ip address/i)).toBeInTheDocument()
+    expect(screen.getByText(/rate limiting/i)).toBeInTheDocument()
+    expect(screen.getByText(/30 days/i)).toBeInTheDocument()
+  })
+
   it('lists the third parties data passes through', () => {
     renderPrivacyPage()
-    expect(screen.getByText(/openai/i)).toBeInTheDocument()
-    expect(screen.getByText(/anthropic/i)).toBeInTheDocument()
-    expect(screen.getByText(/cloudflare/i)).toBeInTheDocument()
-    expect(screen.getByText(/r2 stores uploaded files/i)).toBeInTheDocument()
-    expect(screen.getByText(/neon/i)).toBeInTheDocument()
+    expect(screen.getByText(/s3 stores uploaded files/i)).toBeInTheDocument()
+    expect(screen.getByText(/open-source model/i)).toBeInTheDocument()
+    expect(screen.getByText(/anthropic's claude models/i)).toBeInTheDocument()
+    expect(screen.getByText(/hosts the postgres database/i)).toBeInTheDocument()
+  })
+
+  it('no longer lists providers the app has stopped sending data to', () => {
+    renderPrivacyPage()
+    expect(screen.queryByText(/openai/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/cloudflare/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/\br2\b/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Anthropic' })).not.toBeInTheDocument()
   })
 
   it('links each third party to its own privacy policy, opened in a new tab', () => {
     renderPrivacyPage()
 
     const expectations: [name: string, href: string][] = [
-      ['OpenAI', 'https://openai.com/policies/row-privacy-policy/'],
-      ['Anthropic', 'https://privacy.anthropic.com/en/'],
-      ['Cloudflare', 'https://www.cloudflare.com/privacypolicy/'],
+      ['Amazon Web Services', 'https://aws.amazon.com/privacy/'],
+      ['Amazon Bedrock', 'https://docs.aws.amazon.com/bedrock/latest/userguide/data-protection.html'],
       ['Neon', 'https://neon.com/privacy-policy'],
     ]
 
