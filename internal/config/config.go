@@ -165,16 +165,14 @@ type Config struct {
 	DocumentIndexingStateMachineARN     string
 	EntityExtractionStateMachineARN     string
 	RegionClassificationStateMachineARN string
-	EdgeExtractionQueueURL              string
-	CanonicalizationQueueURL            string
 	EdgeExtractionStateMachineARN       string
 	CanonicalizationStateMachineARN     string
 
-	// MalwareScanTimeoutQueueURL is the SQS queue each upload sends its
-	// malware scan's timeout message to (internal/malwarescan). The queue's
-	// own delivery delay is the timeout; the scan-result Lambda fails a
-	// scan still pending when the message arrives. Required by cmd/api.
-	MalwareScanTimeoutQueueURL string
+	// MalwareScanTimeoutStateMachineARN is the state machine each upload
+	// starts to time out its malware scan (internal/malwarescan): it waits,
+	// then the scan-result Lambda fails a scan that's still pending.
+	// Required by cmd/api.
+	MalwareScanTimeoutStateMachineARN string
 }
 
 func Load() *Config {
@@ -243,11 +241,9 @@ func Load() *Config {
 		DocumentIndexingStateMachineARN:     getEnv("DOCUMENT_INDEXING_STATE_MACHINE_ARN", ""),
 		EntityExtractionStateMachineARN:     getEnv("ENTITY_EXTRACTION_STATE_MACHINE_ARN", ""),
 		RegionClassificationStateMachineARN: getEnv("REGION_CLASSIFICATION_STATE_MACHINE_ARN", ""),
-		EdgeExtractionQueueURL:              getEnv("EDGE_EXTRACTION_QUEUE_URL", ""),
-		CanonicalizationQueueURL:            getEnv("CANONICALIZATION_QUEUE_URL", ""),
 		EdgeExtractionStateMachineARN:       getEnv("EDGE_EXTRACTION_STATE_MACHINE_ARN", ""),
 		CanonicalizationStateMachineARN:     getEnv("CANONICALIZATION_STATE_MACHINE_ARN", ""),
-		MalwareScanTimeoutQueueURL:          getEnv("MALWARE_SCAN_TIMEOUT_QUEUE_URL", ""),
+		MalwareScanTimeoutStateMachineARN:   getEnv("MALWARE_SCAN_TIMEOUT_STATE_MACHINE_ARN", ""),
 	}
 }
 
