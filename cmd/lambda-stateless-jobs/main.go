@@ -1,9 +1,9 @@
 // Command lambda-stateless-jobs is the Lambda entrypoint for the two
 // queue.JobType stages that are pure local Go computation with no AWS
 // Batch hop: edge extraction and canonicalization. It wires
-// internal/worker's EdgeHandler and CanonicalizationHandler and dispatches
-// SQS events to them via internal/worker/lambda.Dispatcher — see that
-// package's doc for the delivery and retry rules. Deliberately thin: no
+// internal/worker's EdgeHandler and CanonicalizationHandler and runs their
+// state machine steps via internal/worker/lambda.StepHandler -- see that
+// package's doc for the retry and failure rules. Deliberately thin: no
 // logic of its own beyond wiring. Deployed by terraform/modules/pipeline
 // (stateless.tf).
 package main
@@ -32,11 +32,6 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/worker"
 	worklambda "github.com/kunalpednekar/dumpster/internal/worker/lambda"
 )
-
-// queueMaxReceiveCount must match both queues' redrive policy
-// (maxReceiveCount in terraform/modules/pipeline/queues.tf), so the dispatcher knows
-// which delivery is the last one before a message goes to its DLQ.
-const queueMaxReceiveCount = 3
 
 func main() {
 	cfg := config.Load()
@@ -74,11 +69,10 @@ func main() {
 		WithAliasJudge(aliasJudge).
 		WithCrossLink(crosslinkRepo, crosslinkExtractor, 0)
 
-	dispatcher := worklambda.NewDispatcher().
-		RegisterHandler(queue.JobTypeEdgeExtraction, edgeHandler).
-		RegisterHandler(queue.JobTypeCanonicalization, canonicalizationHandler).
-		WithStatus(statuspg.New(txRunner), queueMaxReceiveCount)
+	steps := worklambda.NewStepHandler(statuspg.New(txRunner)).
+		Register(queue.JobTypeEdgeExtraction, edgeHandler).
+		Register(queue.JobTypeCanonicalization, canonicalizationHandler)
 
 	slog.SetDefault(logger)
-	lambda.Start(dispatcher.HandleSQSEvent)
+	lambda.Start(steps.HandleStep)
 }

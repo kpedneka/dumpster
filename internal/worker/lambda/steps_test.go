@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -15,6 +16,33 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	worklambda "github.com/kunalpednekar/dumpster/internal/worker/lambda"
 )
+
+// fakeHandler records the jobs it runs and fails, or fails with handleErr.
+type fakeHandler struct {
+	mu          sync.Mutex
+	handleErr   error
+	handledJobs []*queue.Job
+	failedJobs  []*queue.Job
+	// onHandle, when set, runs inside Handle, so a test can observe state
+	// while the job is running.
+	onHandle func()
+}
+
+func (h *fakeHandler) Handle(_ context.Context, job *queue.Job) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.handledJobs = append(h.handledJobs, job)
+	if h.onHandle != nil {
+		h.onHandle()
+	}
+	return h.handleErr
+}
+
+func (h *fakeHandler) OnFailed(_ context.Context, job *queue.Job) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.failedJobs = append(h.failedJobs, job)
+}
 
 // stepFixture is one edge-extraction job, enqueued as attempt 1 the way
 // the publisher records it, with a StepHandler that tracks its status.
@@ -220,5 +248,63 @@ func TestMalformedEvent_Fails(t *testing.T) {
 	f := newStepFixture(t)
 	if _, err := f.steps.HandleStep(f.ctx, json.RawMessage(`{"step":`)); err == nil {
 		t.Error("err = nil, want a decode error")
+	}
+}
+
+// failingStatus fails one status write with err.
+type failingStatus struct {
+	failOn string
+	err    error
+}
+
+func (s *failingStatus) fail(op string) error {
+	if s.failOn == op {
+		return s.err
+	}
+	return nil
+}
+
+func (s *failingStatus) MarkProcessing(context.Context, jobstatus.Key, int) error {
+	return s.fail("processing")
+}
+
+func (s *failingStatus) MarkSucceeded(context.Context, jobstatus.Key, int) error {
+	return s.fail("succeeded")
+}
+
+func (s *failingStatus) MarkFailed(context.Context, jobstatus.Key, int, string) error {
+	return s.fail("failed")
+}
+
+// A failed status write must be retried, not lost: otherwise a job could
+// sit "processing" forever, or a failure go unrecorded.
+func TestStatusWriteFailures_AreRetried(t *testing.T) {
+	cases := []struct{ failOn, step string }{
+		{"processing", worklambda.StepRun},
+		{"succeeded", worklambda.StepRun},
+		{"failed", worklambda.StepRecordFailure},
+	}
+	for _, tc := range cases {
+		t.Run(tc.failOn, func(t *testing.T) {
+			dbDown := errors.New("connection refused")
+			handler := &fakeHandler{}
+			steps := worklambda.NewStepHandler(&failingStatus{failOn: tc.failOn, err: dbDown}).
+				Register(queue.JobTypeEdgeExtraction, handler)
+			raw, _ := json.Marshal(map[string]any{"step": tc.step, "run": map[string]any{
+				"type": queue.JobTypeEdgeExtraction, "document_id": uuid.New(), "user_id": uuid.New(), "attempt": 1,
+				"error": pipeline.StepError{Error: "States.TaskFailed", Cause: "boom"},
+			}})
+
+			_, err := steps.HandleStep(context.Background(), raw)
+			if _, ok := err.(*pipeline.TransientError); !ok {
+				t.Fatalf("err = %T(%v), want a top-level *pipeline.TransientError", err, err)
+			}
+			if !errors.Is(err, dbDown) {
+				t.Errorf("err = %v, want it to wrap %v", err, dbDown)
+			}
+			if tc.failOn == "failed" && len(handler.failedJobs) != 0 {
+				t.Error("OnFailed ran although the failure wasn't recorded")
+			}
+		})
 	}
 }
