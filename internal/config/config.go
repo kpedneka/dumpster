@@ -245,6 +245,8 @@ func Load() *Config {
 		RegionClassificationStateMachineARN: getEnv("REGION_CLASSIFICATION_STATE_MACHINE_ARN", ""),
 		EdgeExtractionQueueURL:              getEnv("EDGE_EXTRACTION_QUEUE_URL", ""),
 		CanonicalizationQueueURL:            getEnv("CANONICALIZATION_QUEUE_URL", ""),
+		EdgeExtractionStateMachineARN:       getEnv("EDGE_EXTRACTION_STATE_MACHINE_ARN", ""),
+		CanonicalizationStateMachineARN:     getEnv("CANONICALIZATION_STATE_MACHINE_ARN", ""),
 		MalwareScanTimeoutQueueURL:          getEnv("MALWARE_SCAN_TIMEOUT_QUEUE_URL", ""),
 	}
 }
