@@ -158,3 +158,12 @@ func (s *StepHandler) recordFailure(ctx context.Context, handler worker.Handler,
 	log.Printf("worker/lambda: %s for document %s failed permanently (attempt %d): %s", in.Type, in.DocumentID, in.Attempt, in.Error.Reason())
 	return nil
 }
+
+// Definition is the state machine definition (Amazon States Language)
+// that edge extraction and canonicalization each deploy, with ${name}
+// placeholders for DefinitionVars that Terraform fills with templatefile().
+var Definition string
+
+// DefinitionVars are the placeholders in Definition: the stateless-jobs
+// Lambda.
+var DefinitionVars = []string{"lambda_arn"}
