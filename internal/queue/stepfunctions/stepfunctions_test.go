@@ -19,6 +19,8 @@ func testConfig() stepfunctions.Config {
 		DocumentIndexingStateMachineARN:     "arn:aws:states:us-east-1:123456789012:stateMachine:document-indexing",
 		EntityExtractionStateMachineARN:     "arn:aws:states:us-east-1:123456789012:stateMachine:entity-extraction",
 		RegionClassificationStateMachineARN: "arn:aws:states:us-east-1:123456789012:stateMachine:region-classification",
+		EdgeExtractionStateMachineARN:       "arn:aws:states:us-east-1:123456789012:stateMachine:edge-extraction",
+		CanonicalizationStateMachineARN:     "arn:aws:states:us-east-1:123456789012:stateMachine:canonicalization",
 	}
 }
 
@@ -28,6 +30,8 @@ func TestDispatch_StartsNamedExecutionOnTheJobTypesStateMachine(t *testing.T) {
 		queue.JobTypeDocumentIndexing:     cfg.DocumentIndexingStateMachineARN,
 		queue.JobTypeEntityExtraction:     cfg.EntityExtractionStateMachineARN,
 		queue.JobTypeRegionClassification: cfg.RegionClassificationStateMachineARN,
+		queue.JobTypeEdgeExtraction:       cfg.EdgeExtractionStateMachineARN,
+		queue.JobTypeCanonicalization:     cfg.CanonicalizationStateMachineARN,
 	}
 	for jobType, wantARN := range cases {
 		t.Run(string(jobType), func(t *testing.T) {
@@ -113,7 +117,7 @@ func TestDispatch_UnsupportedJobType_StartsNothing(t *testing.T) {
 	starter := stepfunctions.New(client, testConfig())
 
 	err := starter.Dispatch(context.Background(), queue.JobRun{
-		Type: queue.JobTypeEdgeExtraction, DocumentID: uuid.New(), UserID: uuid.New(), Attempt: 1,
+		Type: queue.JobTypeMalwareScan, DocumentID: uuid.New(), UserID: uuid.New(), Attempt: 1,
 	})
 	if err == nil {
 		t.Error("Dispatch err = nil, want an error for a job type with no state machine")

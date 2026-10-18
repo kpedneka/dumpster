@@ -12,13 +12,11 @@ import (
 	"github.com/kunalpednekar/dumpster/internal/jobstatus/memory"
 	"github.com/kunalpednekar/dumpster/internal/queue"
 	"github.com/kunalpednekar/dumpster/internal/queue/dispatch"
-	"github.com/kunalpednekar/dumpster/internal/queue/sqs"
 	"github.com/kunalpednekar/dumpster/internal/queue/stepfunctions"
 )
 
 var (
 	_ queue.Publisher       = (*dispatch.Publisher)(nil)
-	_ dispatch.Target       = (*sqs.Store)(nil)
 	_ dispatch.Target       = (*stepfunctions.Starter)(nil)
 	_ dispatch.StatusWriter = (*memory.Store)(nil)
 	_ dispatch.StatusWriter = jobstatus.Writer(nil)
@@ -49,14 +47,14 @@ func (r *recordingTarget) Runs() []queue.JobRun {
 
 type fixture struct {
 	status        *memory.Store
-	sqs, sfn      *recordingTarget
+	target        *recordingTarget
 	publisher     *dispatch.Publisher
 	userID, docID uuid.UUID
 }
 
 func newFixture() *fixture {
-	f := &fixture{status: memory.New(), sqs: &recordingTarget{}, sfn: &recordingTarget{}, userID: uuid.New(), docID: uuid.New()}
-	f.publisher = dispatch.New(f.status, f.sqs, f.sfn)
+	f := &fixture{status: memory.New(), target: &recordingTarget{}, userID: uuid.New(), docID: uuid.New()}
+	f.publisher = dispatch.New(f.status, f.target)
 	return f
 }
 
@@ -69,28 +67,27 @@ func (f *fixture) active(t *testing.T) []queue.JobStatus {
 	return got[f.docID]
 }
 
-func TestPublish_RoutesEachJobTypeAndRecordsAttemptOne(t *testing.T) {
+func TestPublish_DispatchesEveryJobTypeToTheTargetAndRecordsAttemptOne(t *testing.T) {
 	cases := []struct {
 		name    string
 		publish func(f *fixture) error
 		jobType queue.JobType
-		viaSFN  bool
 	}{
 		{"document uploaded", func(f *fixture) error {
 			return f.publisher.PublishDocumentUploaded(context.Background(), queue.DocumentUploaded{DocumentID: f.docID, UserID: f.userID})
-		}, queue.JobTypeDocumentIndexing, true},
+		}, queue.JobTypeDocumentIndexing},
 		{"entity extraction", func(f *fixture) error {
 			return f.publisher.PublishEntityExtraction(context.Background(), queue.EntityExtractionRequested{DocumentID: f.docID, UserID: f.userID})
-		}, queue.JobTypeEntityExtraction, true},
+		}, queue.JobTypeEntityExtraction},
 		{"region classification", func(f *fixture) error {
 			return f.publisher.PublishRegionClassification(context.Background(), queue.RegionClassificationRequested{DocumentID: f.docID, UserID: f.userID})
-		}, queue.JobTypeRegionClassification, true},
+		}, queue.JobTypeRegionClassification},
 		{"edge extraction", func(f *fixture) error {
 			return f.publisher.PublishEdgeExtraction(context.Background(), queue.EdgeExtractionRequested{DocumentID: f.docID, UserID: f.userID})
-		}, queue.JobTypeEdgeExtraction, false},
+		}, queue.JobTypeEdgeExtraction},
 		{"canonicalization", func(f *fixture) error {
 			return f.publisher.PublishCanonicalization(context.Background(), queue.CanonicalizationRequested{DocumentID: f.docID, UserID: f.userID})
-		}, queue.JobTypeCanonicalization, false},
+		}, queue.JobTypeCanonicalization},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,16 +96,9 @@ func TestPublish_RoutesEachJobTypeAndRecordsAttemptOne(t *testing.T) {
 				t.Fatalf("publish: %v", err)
 			}
 
-			used, unused := f.sqs, f.sfn
-			if tc.viaSFN {
-				used, unused = f.sfn, f.sqs
-			}
 			want := queue.JobRun{Type: tc.jobType, DocumentID: f.docID, UserID: f.userID, Attempt: 1}
-			if runs := used.Runs(); len(runs) != 1 || runs[0] != want {
-				t.Errorf("runs on expected target = %+v, want [%+v]", runs, want)
-			}
-			if runs := unused.Runs(); len(runs) != 0 {
-				t.Errorf("runs on the other target = %+v, want none", runs)
+			if runs := f.target.Runs(); len(runs) != 1 || runs[0] != want {
+				t.Errorf("runs = %+v, want [%+v]", runs, want)
 			}
 			if active := f.active(t); len(active) != 1 || active[0].Type != tc.jobType || active[0].Status != "pending" {
 				t.Errorf("status = %+v, want one pending %s job", active, tc.jobType)
@@ -125,7 +115,7 @@ func TestPublish_WhileActive_DoesNotDispatchAgain(t *testing.T) {
 			t.Fatalf("publish %d: %v", i, err)
 		}
 	}
-	if runs := f.sfn.Runs(); len(runs) != 1 {
+	if runs := f.target.Runs(); len(runs) != 1 {
 		t.Errorf("runs = %+v, want exactly one", runs)
 	}
 }
@@ -146,7 +136,7 @@ func TestPublish_AfterFinished_DispatchesTheNextAttempt(t *testing.T) {
 		t.Fatalf("second publish: %v", err)
 	}
 
-	runs := f.sfn.Runs()
+	runs := f.target.Runs()
 	if len(runs) != 2 || runs[1].Attempt != 2 {
 		t.Errorf("runs = %+v, want a second run with Attempt 2", runs)
 	}
@@ -156,7 +146,7 @@ func TestPublish_DispatchFailure_MarksTheAttemptFailedSoItCanBeRetried(t *testin
 	f := newFixture()
 	ctx := context.Background()
 	boom := errors.New("start execution: throttled")
-	f.sfn.err = boom
+	f.target.err = boom
 	evt := queue.RegionClassificationRequested{DocumentID: f.docID, UserID: f.userID}
 
 	if err := f.publisher.PublishRegionClassification(ctx, evt); !errors.Is(err, boom) {
@@ -166,11 +156,11 @@ func TestPublish_DispatchFailure_MarksTheAttemptFailedSoItCanBeRetried(t *testin
 		t.Fatalf("status = %+v, want the failed attempt to no longer be active", active)
 	}
 
-	f.sfn.err = nil
+	f.target.err = nil
 	if err := f.publisher.PublishRegionClassification(ctx, evt); err != nil {
 		t.Fatalf("retry publish: %v", err)
 	}
-	if runs := f.sfn.Runs(); len(runs) != 1 || runs[0].Attempt != 2 {
+	if runs := f.target.Runs(); len(runs) != 1 || runs[0].Attempt != 2 {
 		t.Errorf("runs = %+v, want one run with Attempt 2", runs)
 	}
 }
@@ -193,22 +183,21 @@ func (s *failingStatus) MarkFailed(context.Context, jobstatus.Key, int, string) 
 
 func TestPublish_EnqueueFailure_IsReturnedWithoutDispatching(t *testing.T) {
 	dbDown := errors.New("database unavailable")
-	sqsT, sfnT := &recordingTarget{}, &recordingTarget{}
-	p := dispatch.New(&failingStatus{enqueueErr: dbDown}, sqsT, sfnT)
+	target := &recordingTarget{}
+	p := dispatch.New(&failingStatus{enqueueErr: dbDown}, target)
 
 	err := p.PublishEdgeExtraction(context.Background(), queue.EdgeExtractionRequested{DocumentID: uuid.New(), UserID: uuid.New()})
 	if !errors.Is(err, dbDown) {
 		t.Errorf("err = %v, want it to wrap %v", err, dbDown)
 	}
-	if n := len(sqsT.Runs()) + len(sfnT.Runs()); n != 0 {
+	if n := len(target.Runs()); n != 0 {
 		t.Errorf("dispatched %d runs, want none", n)
 	}
 }
 
 func TestPublish_DispatchAndMarkFailedBothFail_ReturnsBothErrors(t *testing.T) {
-	sendErr, markErr := errors.New("sqs unavailable"), errors.New("database unavailable")
-	sqsT := &recordingTarget{err: sendErr}
-	p := dispatch.New(&failingStatus{markFailedErr: markErr}, sqsT, &recordingTarget{})
+	sendErr, markErr := errors.New("step functions unavailable"), errors.New("database unavailable")
+	p := dispatch.New(&failingStatus{markFailedErr: markErr}, &recordingTarget{err: sendErr})
 
 	err := p.PublishCanonicalization(context.Background(), queue.CanonicalizationRequested{DocumentID: uuid.New(), UserID: uuid.New()})
 	if !errors.Is(err, sendErr) || !errors.Is(err, markErr) {

@@ -45,7 +45,7 @@ variable "bedrock_model_arns" {
 variable "lambda_environment" {
   type        = map(string)
   sensitive   = true
-  description = "Environment for the pipeline Lambda (database URL, S3 buckets, entity types, ...). The state machine ARNs and queue URLs it publishes to are added by this module."
+  description = "Environment for the pipeline Lambda (database URL, S3 buckets, entity types, ...). The state machine ARNs it publishes to are added by this module."
 }
 
 variable "uploads_bucket_arn" {
@@ -87,11 +87,11 @@ variable "malware_scan_lambda_zip_hash" {
 variable "malware_scan_timeout_seconds" {
   type        = number
   default     = 300
-  description = "How long an upload waits for its malware scan before it's failed: the timeout queue's delivery delay. At most 900 (SQS's limit)."
+  description = "How long an upload waits for its malware scan before it's failed: the timeout state machine's Wait. Five minutes, against scans that finish in seconds, for uploads capped at 32 MiB (raise it if a real scan ever comes close)."
 
   validation {
-    condition     = var.malware_scan_timeout_seconds > 0 && var.malware_scan_timeout_seconds <= 900
-    error_message = "SQS delivery delays range from 1 to 900 seconds."
+    condition     = var.malware_scan_timeout_seconds > 0
+    error_message = "The malware scan timeout must be positive."
   }
 }
 

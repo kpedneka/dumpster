@@ -83,8 +83,8 @@ func TestLoad_pipelineTargetsFromEnv(t *testing.T) {
 		"DOCUMENT_INDEXING_STATE_MACHINE_ARN":     "arn:aws:states:us-east-1:1:stateMachine:doc",
 		"ENTITY_EXTRACTION_STATE_MACHINE_ARN":     "arn:aws:states:us-east-1:1:stateMachine:entity",
 		"REGION_CLASSIFICATION_STATE_MACHINE_ARN": "arn:aws:states:us-east-1:1:stateMachine:region",
-		"EDGE_EXTRACTION_QUEUE_URL":               "https://sqs.us-east-1.amazonaws.com/1/edge",
-		"CANONICALIZATION_QUEUE_URL":              "https://sqs.us-east-1.amazonaws.com/1/canon",
+		"EDGE_EXTRACTION_STATE_MACHINE_ARN":       "arn:aws:states:us-east-1:1:stateMachine:edge",
+		"CANONICALIZATION_STATE_MACHINE_ARN":      "arn:aws:states:us-east-1:1:stateMachine:canon",
 	}
 	for k, v := range want {
 		t.Setenv(k, v)
@@ -94,8 +94,8 @@ func TestLoad_pipelineTargetsFromEnv(t *testing.T) {
 		"DOCUMENT_INDEXING_STATE_MACHINE_ARN":     c.DocumentIndexingStateMachineARN,
 		"ENTITY_EXTRACTION_STATE_MACHINE_ARN":     c.EntityExtractionStateMachineARN,
 		"REGION_CLASSIFICATION_STATE_MACHINE_ARN": c.RegionClassificationStateMachineARN,
-		"EDGE_EXTRACTION_QUEUE_URL":               c.EdgeExtractionQueueURL,
-		"CANONICALIZATION_QUEUE_URL":              c.CanonicalizationQueueURL,
+		"EDGE_EXTRACTION_STATE_MACHINE_ARN":       c.EdgeExtractionStateMachineARN,
+		"CANONICALIZATION_STATE_MACHINE_ARN":      c.CanonicalizationStateMachineARN,
 	}
 	for k, v := range want {
 		if got[k] != v {

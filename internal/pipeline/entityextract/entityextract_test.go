@@ -34,15 +34,24 @@ type recordingPublisher struct {
 	queue.Publisher
 	edges, canon int
 	err          error
+	// onPublish, when set, runs on every publish, so a test can observe
+	// state at that moment.
+	onPublish func()
 }
 
 func (p *recordingPublisher) PublishEdgeExtraction(context.Context, queue.EdgeExtractionRequested) error {
 	p.edges++
+	if p.onPublish != nil {
+		p.onPublish()
+	}
 	return p.err
 }
 
 func (p *recordingPublisher) PublishCanonicalization(context.Context, queue.CanonicalizationRequested) error {
 	p.canon++
+	if p.onPublish != nil {
+		p.onPublish()
+	}
 	return p.err
 }
 
@@ -394,6 +403,43 @@ func TestFinalize_PublishesDownstreamMarksSucceededAndCleansUp(t *testing.T) {
 	for _, b := range p.Batches {
 		if f.exists(b.InputKey) || f.exists(b.ResultKey) {
 			t.Errorf("batch %d staged objects not cleaned up", b.Index)
+		}
+	}
+}
+
+// The document list shows "Fully indexed" once no job is active, so
+// entity extraction must still be active when it publishes edge
+// extraction and canonicalization: marking itself succeeded first would
+// leave a moment with nothing active, and the enrichment features would
+// read as ready before they are.
+func TestFinalize_PublishesDownstreamBeforeMarkingSucceeded(t *testing.T) {
+	f := newFixture(t, 3)
+	p := f.plan(1)
+	for _, b := range p.Batches {
+		f.writeResult(b)
+	}
+	var activeAtPublish [][]queue.JobStatus
+	f.publisher.onPublish = func() {
+		got, _ := f.status.ActiveJobsForDocuments(f.ctx, f.key.UserID, []uuid.UUID{f.key.DocumentID})
+		activeAtPublish = append(activeAtPublish, got[f.key.DocumentID])
+	}
+
+	in := f.input(1)
+	in.Plan = &p
+	if err := f.handler.Finalize(context.Background(), in); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+
+	if len(activeAtPublish) != 2 {
+		t.Fatalf("publishes = %d, want 2", len(activeAtPublish))
+	}
+	for i, active := range activeAtPublish {
+		stillActive := false
+		for _, j := range active {
+			stillActive = stillActive || j.Type == queue.JobTypeEntityExtraction
+		}
+		if !stillActive {
+			t.Errorf("publish %d: entity extraction already finished (active = %+v), want it active until both are published", i+1, active)
 		}
 	}
 }

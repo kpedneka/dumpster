@@ -18,7 +18,7 @@ type realClient struct {
 
 // NewClient builds a Client using the standard AWS credential chain (env
 // vars for local dev, or the ECS task role/Lambda execution role in every
-// real deployment), matching internal/queue/sqs.NewClient.
+// real deployment).
 func NewClient(ctx context.Context, region string) (Client, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {

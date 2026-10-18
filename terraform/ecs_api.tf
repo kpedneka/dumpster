@@ -93,15 +93,15 @@ resource "aws_ecs_task_definition" "api" {
         { name = "RATE_LIMIT_REQUESTS", value = tostring(var.rate_limit_requests) },
         { name = "MAX_COMMUNITY_GRAPH_ENTITIES", value = "5000" },
         # Where uploads and retries publish jobs (internal/queue/dispatch):
-        # the pipeline's state machines and its two Lambda queues. The task
-        # role's StartExecution/SendMessage grant is in pipeline.tf.
+        # the pipeline's state machines. The task role's StartExecution
+        # grant is in pipeline.tf.
         { name = "DOCUMENT_INDEXING_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["document_indexing"] },
         { name = "ENTITY_EXTRACTION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["entity_extraction"] },
         { name = "REGION_CLASSIFICATION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["region_classification"] },
-        { name = "EDGE_EXTRACTION_QUEUE_URL", value = module.pipeline.job_queue_urls["edge_extraction"] },
-        { name = "CANONICALIZATION_QUEUE_URL", value = module.pipeline.job_queue_urls["canonicalization"] },
-        # Every upload sends its malware scan's timeout message here.
-        { name = "MALWARE_SCAN_TIMEOUT_QUEUE_URL", value = module.pipeline.malware_scan_timeout_queue_url },
+        { name = "EDGE_EXTRACTION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["edge_extraction"] },
+        { name = "CANONICALIZATION_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["canonicalization"] },
+        # Every upload starts its malware scan's timeout here.
+        { name = "MALWARE_SCAN_TIMEOUT_STATE_MACHINE_ARN", value = module.pipeline.state_machine_arns["malware_scan_timeout"] },
       ])
       secrets = concat(local.shared_secrets, [
         { name = "DATABASE_URL_POOLED", valueFrom = data.aws_secretsmanager_secret.runtime["database-url-pooled"].arn },

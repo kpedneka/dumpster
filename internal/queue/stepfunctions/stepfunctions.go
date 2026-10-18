@@ -1,8 +1,11 @@
-// Package stepfunctions starts Step Functions executions for the job types
-// that run on AWS Batch: document indexing, entity extraction and region
-// classification. The publisher starts each execution directly, with no
-// SQS queue or starter Lambda in front. A Standard execution is already a
-// durable unit of work, and the Batch job queue already buffers compute.
+// Package stepfunctions starts a Step Functions execution for every job
+// type: document indexing, entity extraction and region classification
+// (which run on AWS Batch), and edge extraction and canonicalization
+// (which run on the stateless-jobs Lambda). The publisher starts each
+// execution directly, with no queue or starter Lambda in front: a Standard
+// execution is already a durable unit of work, and its Retry and Catch
+// replace a queue's redelivery and dead-letter queue. Nothing polls, so an
+// idle pipeline costs nothing.
 //
 // Each execution is named {job_type}-{document_id}-{attempt}. Step
 // Functions rejects a second execution with a name that's already in use
@@ -36,13 +39,14 @@ type Client interface {
 	StartExecution(ctx context.Context, stateMachineARN, name, input string) error
 }
 
-// Config maps each Batch-backed job type to its state machine. Named
-// fields rather than a map, so a missing one is visible where Config is
-// built.
+// Config maps each job type to its state machine. Named fields rather
+// than a map, so a missing one is visible where Config is built.
 type Config struct {
 	DocumentIndexingStateMachineARN     string
 	EntityExtractionStateMachineARN     string
 	RegionClassificationStateMachineARN string
+	EdgeExtractionStateMachineARN       string
+	CanonicalizationStateMachineARN     string
 }
 
 // Starter starts one execution per job run.
@@ -99,6 +103,10 @@ func (s *Starter) stateMachineFor(jobType queue.JobType) (string, error) {
 		arn = s.cfg.EntityExtractionStateMachineARN
 	case queue.JobTypeRegionClassification:
 		arn = s.cfg.RegionClassificationStateMachineARN
+	case queue.JobTypeEdgeExtraction:
+		arn = s.cfg.EdgeExtractionStateMachineARN
+	case queue.JobTypeCanonicalization:
+		arn = s.cfg.CanonicalizationStateMachineARN
 	default:
 		return "", fmt.Errorf("stepfunctions: no state machine for job type %q", jobType)
 	}

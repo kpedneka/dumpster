@@ -24,7 +24,7 @@ import (
 	manifestpg "github.com/kunalpednekar/dumpster/internal/manifest/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/objectstore/s3store"
 	"github.com/kunalpednekar/dumpster/internal/queue/dispatch/dispatchaws"
-	sqsqueue "github.com/kunalpednekar/dumpster/internal/queue/sqs"
+	"github.com/kunalpednekar/dumpster/internal/queue/stepfunctions"
 	ratelimitpg "github.com/kunalpednekar/dumpster/internal/ratelimit/pgstore"
 	retrievalpg "github.com/kunalpednekar/dumpster/internal/retrieval/pgstore"
 	"github.com/kunalpednekar/dumpster/internal/rls"
@@ -112,15 +112,15 @@ func main() {
 		os.Exit(1)
 	}
 	// Every upload is scanned for malware before it's processed: the API
-	// records the pending scan and sends its timeout message, and the
-	// scan-result Lambda (cmd/lambda-malware-scan) takes it from there.
-	if cfg.MalwareScanTimeoutQueueURL == "" {
-		logger.Error("MALWARE_SCAN_TIMEOUT_QUEUE_URL is not set")
+	// records the pending scan and starts its timeout, and the scan-result
+	// Lambda (cmd/lambda-malware-scan) takes it from there.
+	if cfg.MalwareScanTimeoutStateMachineARN == "" {
+		logger.Error("MALWARE_SCAN_TIMEOUT_STATE_MACHINE_ARN is not set")
 		os.Exit(1)
 	}
-	timeoutSender, err := sqsqueue.NewClient(context.Background(), cfg.AWSRegion)
+	timeoutStarter, err := stepfunctions.NewClient(context.Background(), cfg.AWSRegion)
 	if err != nil {
-		logger.Error("malware scan timeout queue setup failed", "err", err)
+		logger.Error("malware scan timeout setup failed", "err", err)
 		os.Exit(1)
 	}
 	deps := server.Deps{
@@ -128,7 +128,7 @@ func main() {
 		Docs:                      docpg.New(txRunner),
 		Objects:                   obj,
 		Publisher:                 publisher,
-		Scans:                     malwarescan.NewScans(jobStatus, timeoutSender, cfg.MalwareScanTimeoutQueueURL),
+		Scans:                     malwarescan.NewScans(jobStatus, timeoutStarter, cfg.MalwareScanTimeoutStateMachineARN),
 		JobStatusReader:           jobStatus,
 		Manifest:                  manifestpg.New(txRunner),
 		Canonical:                 canonicalpg.New(txRunner),

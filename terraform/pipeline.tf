@@ -1,10 +1,6 @@
-# The event-driven ingestion pipeline (terraform/modules/pipeline): the
-# document indexing, entity extraction and region classification state
-# machines and the Lambda behind them, plus the edge extraction and
-# canonicalization queues and the stateless-jobs Lambda that consumes them.
-#
-# Deployed but idle until the publish-path cutover: nothing publishes jobs
-# into it until cmd/api uses internal/queue/dispatch.
+# The event-driven ingestion pipeline (terraform/modules/pipeline): a
+# state machine per job type and the Lambdas behind them. cmd/api
+# publishes jobs into it through internal/queue/dispatch.
 #
 # The CI/deploy pipeline builds every ../build/lambda-*/bootstrap binary
 # before any tofu operation (staging.yml) -- archive_file is evaluated on
@@ -111,19 +107,8 @@ module "pipeline" {
   }
 }
 
-# These lived at the root (queue_sqs.tf, lambda_stateless_jobs.tf) before
-# the pipeline module took them over. Staging's state has the queues from
-# a targeted apply; nothing else existed yet in any environment.
-moved {
-  from = aws_sqs_queue.job
-  to   = module.pipeline.aws_sqs_queue.job
-}
-
-moved {
-  from = aws_sqs_queue.job_dlq
-  to   = module.pipeline.aws_sqs_queue.job_dlq
-}
-
+# These lived at the root (lambda_stateless_jobs.tf) before the pipeline
+# module took them over.
 moved {
   from = aws_lambda_function.stateless_jobs
   to   = module.pipeline.aws_lambda_function.stateless
@@ -144,41 +129,15 @@ moved {
   to   = module.pipeline.aws_iam_role_policy_attachment.stateless_basic_execution
 }
 
-moved {
-  from = aws_lambda_event_source_mapping.edge_extraction
-  to   = module.pipeline.aws_lambda_event_source_mapping.stateless["edge_extraction"]
-}
-
-moved {
-  from = aws_lambda_event_source_mapping.canonicalization
-  to   = module.pipeline.aws_lambda_event_source_mapping.stateless["canonicalization"]
-}
-
-output "job_queue_urls" {
-  value       = module.pipeline.job_queue_urls
-  description = "SQS queue URL per Lambda job type (edge_extraction, canonicalization)."
-}
-
-# cmd/api publishes through internal/queue/dispatch after cutover: it
-# starts document indexing and region classification executions on upload,
-# and entity extraction on a retry. Granted now so the cutover is a code
-# and config change only.
+# cmd/api publishes through internal/queue/dispatch: it starts document
+# indexing and region classification executions on upload, any job type's
+# on a retry, and each upload's malware scan timeout
+# (internal/malwarescan). All of them are state machines.
 data "aws_iam_policy_document" "ecs_task_publish" {
   statement {
     sid       = "StartPipelineExecutions"
     actions   = ["states:StartExecution"]
     resources = values(module.pipeline.state_machine_arns)
-  }
-  statement {
-    sid       = "SendToLambdaQueues"
-    actions   = ["sqs:SendMessage"]
-    resources = values(module.pipeline.job_queue_arns)
-  }
-  # Each upload's malware scan timeout message (internal/malwarescan).
-  statement {
-    sid       = "SendMalwareScanTimeouts"
-    actions   = ["sqs:SendMessage"]
-    resources = [module.pipeline.malware_scan_timeout_queue_arn]
   }
 }
 

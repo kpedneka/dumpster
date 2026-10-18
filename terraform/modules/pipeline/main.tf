@@ -1,18 +1,23 @@
 # The event-driven ingestion pipeline, everything that runs a job once it's
 # published:
-#   - three Step Functions Standard state machines -- document indexing,
-#     entity extraction, region classification -- whose definitions are the
-#     same .asl.json files the Go tests check against the handlers
-#     (internal/pipeline/*/statemachine.asl.json), and the one Lambda behind
-#     them (cmd/lambda-pipeline), in this file;
-#   - the edge extraction and canonicalization queues (queues.tf) and the
-#     stateless-jobs Lambda that consumes them (stateless.tf).
+#   - a Step Functions Standard state machine per job type, whose
+#     definitions are the same .asl.json files the Go tests check against
+#     the handlers: document indexing, entity extraction and region
+#     classification (internal/pipeline/*/statemachine.asl.json) run on the
+#     pipeline Lambda (cmd/lambda-pipeline), in this file; edge extraction
+#     and canonicalization (internal/worker/lambda/statemachine.asl.json)
+#     run on the stateless-jobs Lambda (stateless.tf); the malware scan
+#     timeout (internal/malwarescan/timeout.asl.json) runs on the malware
+#     scan Lambda (malware_scan.tf).
+# Nothing polls: every job is a state machine execution the publisher
+# starts, so an idle pipeline makes no requests at all.
 # Used by the main stack (staging, production) and the pipeline-only dev
 # stack (terraform/dev), so every environment runs exactly the same thing.
 #
-# The Lambda publishes follow-on jobs to these state machines, and the state
-# machines invoke the Lambda. Referencing each other's resources would be a
-# cycle, so the state machine ARNs are built from their names instead.
+# The Lambdas publish jobs to these state machines, and the state machines
+# invoke the Lambdas. Referencing each other's resources would be a cycle,
+# so both the state machine ARNs and the Lambda ARNs they invoke are built
+# from their names instead.
 
 locals {
   state_machines = {
@@ -42,12 +47,31 @@ locals {
         embed_job_definition  = var.batch.embed_job_definition_name
       }
     }
+    edge_extraction = {
+      name       = "${var.name_prefix}-edge-extraction"
+      definition = "${path.module}/../../../internal/worker/lambda/statemachine.asl.json"
+      vars       = { lambda_arn = local.stateless_function_arn }
+    }
+    canonicalization = {
+      name       = "${var.name_prefix}-canonicalization"
+      definition = "${path.module}/../../../internal/worker/lambda/statemachine.asl.json"
+      vars       = { lambda_arn = local.stateless_function_arn }
+    }
+    malware_scan_timeout = {
+      name       = "${var.name_prefix}-malware-scan-timeout"
+      definition = "${path.module}/../../../internal/malwarescan/timeout.asl.json"
+      vars = {
+        lambda_arn      = local.malware_scan_function_arn
+        timeout_seconds = var.malware_scan_timeout_seconds
+      }
+    }
   }
   state_machine_arns = {
     for k, sm in local.state_machines :
     k => "arn:aws:states:${var.aws_region}:${var.account_id}:stateMachine:${sm.name}"
   }
   function_name = "${var.name_prefix}-pipeline"
+  function_arn  = "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:${local.function_name}"
 }
 
 # --- Lambda ---
@@ -105,11 +129,6 @@ data "aws_iam_policy_document" "lambda" {
     actions   = ["states:StartExecution"]
     resources = values(local.state_machine_arns)
   }
-  statement {
-    sid       = "PublishToQueues"
-    actions   = ["sqs:SendMessage"]
-    resources = [for q in aws_sqs_queue.job : q.arn]
-  }
 }
 
 resource "aws_iam_role_policy" "lambda" {
@@ -125,8 +144,8 @@ locals {
     DOCUMENT_INDEXING_STATE_MACHINE_ARN     = local.state_machine_arns.document_indexing
     ENTITY_EXTRACTION_STATE_MACHINE_ARN     = local.state_machine_arns.entity_extraction
     REGION_CLASSIFICATION_STATE_MACHINE_ARN = local.state_machine_arns.region_classification
-    EDGE_EXTRACTION_QUEUE_URL               = aws_sqs_queue.job["edge_extraction"].url
-    CANONICALIZATION_QUEUE_URL              = aws_sqs_queue.job["canonicalization"].url
+    EDGE_EXTRACTION_STATE_MACHINE_ARN       = local.state_machine_arns.edge_extraction
+    CANONICALIZATION_STATE_MACHINE_ARN      = local.state_machine_arns.canonicalization
   }
 }
 
@@ -185,9 +204,12 @@ resource "aws_iam_role" "states" {
 # Functions manages itself, StepFunctionsGetEventsForBatchJobsRule.
 data "aws_iam_policy_document" "states" {
   statement {
-    sid       = "InvokePipelineLambda"
-    actions   = ["lambda:InvokeFunction"]
-    resources = [aws_lambda_function.pipeline.arn, "${aws_lambda_function.pipeline.arn}:*"]
+    sid     = "InvokeLambdas"
+    actions = ["lambda:InvokeFunction"]
+    resources = flatten([
+      for arn in [aws_lambda_function.pipeline.arn, aws_lambda_function.stateless.arn, aws_lambda_function.malware_scan.arn] :
+      [arn, "${arn}:*"]
+    ])
   }
   statement {
     sid     = "SubmitBatchJobs"
@@ -224,9 +246,8 @@ resource "aws_sfn_state_machine" "this" {
   name     = each.value.name
   type     = "STANDARD"
   role_arn = aws_iam_role.states.arn
-  definition = templatefile(each.value.definition, merge(each.value.vars, {
-    lambda_arn = aws_lambda_function.pipeline.arn
-  }))
+  # The pipeline Lambda unless the state machine's vars name another.
+  definition = templatefile(each.value.definition, merge({ lambda_arn = local.function_arn }, each.value.vars))
 
   depends_on = [aws_iam_role_policy.states]
 }
