@@ -1,9 +1,8 @@
 # cleanup: no ECS service (it runs to completion and exits, not
-# long-running) -- EventBridge Scheduler triggers an ECS RunTask daily,
-# same image as api/worker with the command overridden to /bin/cleanup.
-# Matches the original infra plan's decided shape exactly: EventBridge
-# Scheduler (not the older EventBridge Rules) for timezone-aware cron,
-# retry policy, and a dead-letter queue.
+# long-running) -- EventBridge Scheduler triggers an ECS RunTask every
+# 15 minutes, same image as api/worker with the command overridden to
+# /bin/cleanup. EventBridge Scheduler (not the older EventBridge Rules)
+# for its retry policy and dead-letter queue.
 
 resource "aws_ecs_task_definition" "cleanup" {
   family                   = "${local.name_prefix}-cleanup"
@@ -41,7 +40,7 @@ resource "aws_ecs_task_definition" "cleanup" {
   ])
 }
 
-# --- EventBridge Scheduler: daily trigger, ECS RunTask target ---
+# --- EventBridge Scheduler: 15-minute trigger, ECS RunTask target ---
 
 data "aws_iam_policy_document" "scheduler_assume" {
   statement {
@@ -80,15 +79,18 @@ resource "aws_sqs_queue" "cleanup_dlq" {
 }
 
 resource "aws_scheduler_schedule" "cleanup" {
-  name       = "${local.name_prefix}-cleanup-daily"
+  name       = "${local.name_prefix}-cleanup"
   group_name = "default"
 
-  # Timezone-aware, unlike the older EventBridge Rules (UTC-only) --
-  # pinning to a fixed local hour keeps the day-6/day-7 TTL windows
-  # predictable regardless of DST, matching the original infra plan's
-  # reasoning.
-  schedule_expression          = "cron(0 9 * * ? *)"
-  schedule_expression_timezone = "America/New_York"
+  # The privacy page promises a session is deleted after 6 hours of
+  # inactivity or 24 hours after creation. The API stops serving an
+  # expired session immediately, but its rows and uploaded files only
+  # leave storage when this sweep runs -- so the interval is the most a
+  # session's data can outlive that promise. It was once daily, which let
+  # expired data sit in storage for up to a day. 15 minutes also matches
+  # account.WarningLeadTime, so no session can go from "not yet due a
+  # warning" to "expired" between two runs.
+  schedule_expression = "rate(15 minutes)"
 
   flexible_time_window {
     mode = "OFF"
@@ -108,8 +110,10 @@ resource "aws_scheduler_schedule" "cleanup" {
     }
 
     retry_policy {
-      maximum_retry_attempts       = 3
-      maximum_event_age_in_seconds = 3600
+      maximum_retry_attempts = 3
+      # No older than the interval: past that, the next scheduled run
+      # covers the same sessions, so a late retry would only overlap it.
+      maximum_event_age_in_seconds = 900
     }
 
     dead_letter_config {

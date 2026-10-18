@@ -1,8 +1,9 @@
 // cmd/cleanup runs the demo account TTL sweep once and exits: it marks
-// sessions entering their day-6 window as warned and hard-deletes sessions
-// past their day-7 TTL. It's meant to be invoked once per run by an external
-// scheduler (cron, a Kubernetes CronJob, etc.) — wiring up that trigger is
-// its own infrastructure concern and deliberately not done here.
+// sessions within account.WarningLeadTime of expiry as warned and
+// hard-deletes sessions past their 6-hour idle timeout or 24-hour hard cap.
+// It's invoked once per run by an external scheduler -- EventBridge
+// Scheduler every 15 minutes in the deployed environments
+// (terraform/ecs_cleanup.tf).
 package main
 
 import (
@@ -63,7 +64,7 @@ func main() {
 	for _, sweepErr := range result.Errors {
 		logger.Error("sweep: per-session error", "err", sweepErr)
 	}
-	// This daily task is the only sweep, so it records the sessions-swept
+	// This scheduled task is the only sweep, so it records the sessions-swept
 	// usage counter. usage_stats has no RLS policy, so a plain TxRunner, as
 	// in cmd/lambda-pipeline.
 	if result.Deleted > 0 {
