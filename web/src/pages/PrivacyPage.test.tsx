@@ -22,8 +22,15 @@ describe('PrivacyPage', () => {
 
   it('states the exact retention durations from the sweep constants', () => {
     renderPrivacyPage()
-    expect(screen.getByText(/6 hours/i)).toBeInTheDocument()
+    expect(screen.getByText(/deleted after 6 hours of inactivity/i)).toBeInTheDocument()
     expect(screen.getByText(/24 hours/i)).toBeInTheDocument()
+  })
+
+  it("discloses how long deleted rows stay recoverable in the database provider's history", () => {
+    renderPrivacyPage()
+    expect(
+      screen.getByText(/recoverable from the database provider's restore history for up to 6 hours/i),
+    ).toBeInTheDocument()
   })
 
   it('states that deletion is a hard delete, explicitly contrasted with deactivation', () => {
