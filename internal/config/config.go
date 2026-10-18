@@ -167,6 +167,8 @@ type Config struct {
 	RegionClassificationStateMachineARN string
 	EdgeExtractionQueueURL              string
 	CanonicalizationQueueURL            string
+	EdgeExtractionStateMachineARN       string
+	CanonicalizationStateMachineARN     string
 
 	// MalwareScanTimeoutQueueURL is the SQS queue each upload sends its
 	// malware scan's timeout message to (internal/malwarescan). The queue's

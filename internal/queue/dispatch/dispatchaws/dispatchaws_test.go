@@ -16,8 +16,8 @@ func fullConfig() *config.Config {
 		DocumentIndexingStateMachineARN:     "arn:aws:states:us-east-1:1:stateMachine:doc",
 		EntityExtractionStateMachineARN:     "arn:aws:states:us-east-1:1:stateMachine:entity",
 		RegionClassificationStateMachineARN: "arn:aws:states:us-east-1:1:stateMachine:region",
-		EdgeExtractionQueueURL:              "https://sqs.us-east-1.amazonaws.com/1/edge",
-		CanonicalizationQueueURL:            "https://sqs.us-east-1.amazonaws.com/1/canon",
+		EdgeExtractionStateMachineARN:       "arn:aws:states:us-east-1:1:stateMachine:edge",
+		CanonicalizationStateMachineARN:     "arn:aws:states:us-east-1:1:stateMachine:canon",
 	}
 }
 
@@ -36,18 +36,18 @@ func TestNew_FullConfig_BuildsAPublisher(t *testing.T) {
 func TestNew_MissingTargets_FailsNamingEachEnvVar(t *testing.T) {
 	cfg := fullConfig()
 	cfg.EntityExtractionStateMachineARN = ""
-	cfg.CanonicalizationQueueURL = ""
+	cfg.CanonicalizationStateMachineARN = ""
 
 	_, err := dispatchaws.New(context.Background(), cfg, statusmem.New())
 	if err == nil {
 		t.Fatal("New err = nil, want an error for missing targets")
 	}
-	for _, name := range []string{"ENTITY_EXTRACTION_STATE_MACHINE_ARN", "CANONICALIZATION_QUEUE_URL"} {
+	for _, name := range []string{"ENTITY_EXTRACTION_STATE_MACHINE_ARN", "CANONICALIZATION_STATE_MACHINE_ARN"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("error %q does not name %s", err, name)
 		}
 	}
-	for _, name := range []string{"DOCUMENT_INDEXING_STATE_MACHINE_ARN", "EDGE_EXTRACTION_QUEUE_URL"} {
+	for _, name := range []string{"DOCUMENT_INDEXING_STATE_MACHINE_ARN", "EDGE_EXTRACTION_STATE_MACHINE_ARN"} {
 		if strings.Contains(err.Error(), name) {
 			t.Errorf("error %q names %s, which is set", err, name)
 		}

@@ -43,6 +43,8 @@ type Config struct {
 	DocumentIndexingStateMachineARN     string
 	EntityExtractionStateMachineARN     string
 	RegionClassificationStateMachineARN string
+	EdgeExtractionStateMachineARN       string
+	CanonicalizationStateMachineARN     string
 }
 
 // Starter starts one execution per job run.
