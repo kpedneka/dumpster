@@ -1,0 +1,66 @@
+{
+  "Comment": "Runs one edge extraction or canonicalization job on the stateless-jobs Lambda (cmd/lambda-stateless-jobs). Deployed once per job type. Started by internal/queue/dispatch with input {type, document_id, user_id, attempt}; the Lambda steps are internal/worker/lambda.StepHandler.",
+  "StartAt": "Run",
+  "States": {
+    "Run": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "run",
+        "run.$": "$"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "TransientError"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 3
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.error",
+          "Next": "RecordFailure"
+        }
+      ],
+      "End": true
+    },
+    "RecordFailure": {
+      "Type": "Task",
+      "Resource": "${lambda_arn}",
+      "Parameters": {
+        "step": "record_failure",
+        "run.$": "$"
+      },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException",
+            "TransientError"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Failed"
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "StatelessJobFailed",
+      "Cause": "The failure is recorded in document_job_status."
+    }
+  }
+}

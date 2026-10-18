@@ -18,6 +18,7 @@ package lambda
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -161,7 +162,10 @@ func (s *StepHandler) recordFailure(ctx context.Context, handler worker.Handler,
 
 // Definition is the state machine definition (Amazon States Language)
 // that edge extraction and canonicalization each deploy, with ${name}
-// placeholders for DefinitionVars that Terraform fills with templatefile().
+// placeholders for DefinitionVars that Terraform fills with templatefile()
+// on this same file (terraform/modules/pipeline).
+//
+//go:embed statemachine.asl.json
 var Definition string
 
 // DefinitionVars are the placeholders in Definition: the stateless-jobs
