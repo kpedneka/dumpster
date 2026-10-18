@@ -72,6 +72,11 @@ export function PrivacyPage() {
           storage and the session's database rows are deleted outright. Nothing is kept in a
           disabled or archived state after a session expires.
         </p>
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          Deleted database rows remain recoverable from the database provider's restore history for
+          up to 6 hours, which exists for disaster recovery only, before they are permanently gone.
+          No other database backups are kept.
+        </p>
       </section>
 
       <section>
