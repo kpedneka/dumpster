@@ -611,6 +611,44 @@ func TestDocList_IndexedDocument_NoActiveJob_ShowsComplete(t *testing.T) {
 	}
 }
 
+// An indexed document is searchable, but its enrichment (communities,
+// themes, multi-hop) isn't ready until edge extraction and
+// canonicalization finish too, so it must not show as complete while
+// either is still pending.
+func TestDocList_IndexedDocument_PendingEnrichment_IsNotComplete(t *testing.T) {
+	for _, jobType := range []queue.JobType{queue.JobTypeEdgeExtraction, queue.JobTypeCanonicalization} {
+		t.Run(string(jobType), func(t *testing.T) {
+			deps, kbRepo, docRepo, _, _ := defaultDeps()
+			userID := uuid.New()
+			kb, _ := kbRepo.Create(context.TODO(), userID, "kb1")
+			doc, _ := docRepo.Create(context.TODO(), &document.Document{
+				KBID: kb.ID, UserID: userID, Filename: "a.txt",
+				S3Key: "k1", ContentType: "text/plain", Status: document.StatusIndexed,
+			})
+			deps.JobStatusReader = &fakeJobStatusReader{statuses: map[uuid.UUID][]queue.JobStatus{
+				doc.ID: {{Type: jobType, Status: "pending"}},
+			}}
+			router := NewRouter(deps)
+
+			req := authedRequest(t, deps, http.MethodGet, "/kbs/"+kb.ID.String()+"/documents", nil, userID)
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+
+			var page documentPageResponse
+			if err := json.NewDecoder(w.Body).Decode(&page); err != nil {
+				t.Fatal(err)
+			}
+			progress := page.Items[0].Progress
+			if progress == nil {
+				t.Fatal("expected Progress to be set for an indexed document")
+			}
+			if len(progress.ActiveStages) != 1 || progress.ActiveStages[0] != "entities" {
+				t.Errorf("ActiveStages: got %v, want [entities] while %s is pending", progress.ActiveStages, jobType)
+			}
+		})
+	}
+}
+
 func TestDocList_OmitsProgress_ForFailedDocument(t *testing.T) {
 	deps, kbRepo, docRepo, _, _ := defaultDeps()
 	userID := uuid.New()
