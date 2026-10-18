@@ -1,10 +1,11 @@
 # cmd/lambda-stateless-jobs: edge extraction and canonicalization, pure Go
-# computation with no Batch hop, triggered by their SQS queues through
-# event source mappings. internal/worker/lambda.Dispatcher records each
-# job's progress in document_job_status.
+# computation with no Batch hop. Each job type's state machine (main.tf)
+# invokes it; internal/worker/lambda.StepHandler records each job's
+# progress in document_job_status.
 
 locals {
   stateless_function_name = "${var.name_prefix}-stateless-jobs"
+  stateless_function_arn  = "arn:aws:lambda:${var.aws_region}:${var.account_id}:function:${local.stateless_function_name}"
   # A DB write plus, for canonicalization, a couple of synchronous LLM
   # calls (alias judge, cross-link).
   stateless_timeout_seconds = 60
@@ -33,12 +34,6 @@ resource "aws_iam_role_policy_attachment" "stateless_vpc_access" {
 }
 
 data "aws_iam_policy_document" "stateless" {
-  statement {
-    sid       = "ConsumeQueues"
-    actions   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
-    resources = [for q in aws_sqs_queue.job : q.arn]
-  }
-
   dynamic "statement" {
     for_each = length(var.bedrock_model_arns) > 0 ? [1] : []
     content {
@@ -87,13 +82,4 @@ resource "aws_lambda_function" "stateless" {
   }
 
   depends_on = [aws_cloudwatch_log_group.stateless, aws_iam_role_policy_attachment.stateless_basic_execution, aws_iam_role_policy_attachment.stateless_vpc_access]
-}
-
-# ReportBatchItemFailures matches the dispatcher's per-record
-# BatchItemFailures, so one failed record doesn't redeliver the whole batch.
-resource "aws_lambda_event_source_mapping" "stateless" {
-  for_each                = aws_sqs_queue.job
-  event_source_arn        = each.value.arn
-  function_name           = aws_lambda_function.stateless.arn
-  function_response_types = ["ReportBatchItemFailures"]
 }

@@ -241,11 +241,6 @@ data "aws_iam_policy_document" "local_publish" {
     resources = values(module.pipeline.state_machine_arns)
   }
   statement {
-    sid       = "SendToLambdaQueues"
-    actions   = ["sqs:SendMessage"]
-    resources = concat(values(module.pipeline.job_queue_arns), [module.pipeline.malware_scan_timeout_queue_arn])
-  }
-  statement {
     sid       = "UploadsObjects"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = ["${aws_s3_bucket.uploads.arn}/*"]
